@@ -1,0 +1,30 @@
+{
+  "name": "my-m3u",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:tizen": "vite build --outDir tizen/dist",
+    "inspect:m3u": "node --env-file=.env scripts/inspect-m3u.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "fake-indexeddb": "^6.2.2",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.2.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "vite": "^7.3.6"
+  }
+}

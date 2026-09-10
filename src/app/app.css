@@ -1,0 +1,38 @@
+:root { background: #080a10; color: #f4f7ff; font-family: Inter, system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.screen { min-height: 100vh; max-width: 1440px; margin: auto; padding: 7vh 8vw; }
+.eyebrow { color: #81b6ff; font-size: .8rem; font-weight: 700; letter-spacing: .16em; }
+h1 { font-size: clamp(2rem, 5vw, 4.5rem); margin: .15em 0 .8em; }
+form { max-width: 720px; display: grid; gap: .8rem; }
+label, h2 { font-weight: 650; }
+input, button, select { border: 0; border-radius: .55rem; font: inherit; padding: 1rem; }
+input { background: #181c28; color: inherit; }
+button { background: #82b7ff; color: #061426; cursor: pointer; font-weight: 750; width: fit-content; }
+button:disabled { cursor: default; opacity: .45; }
+.hint { color: #aeb8ca; line-height: 1.45; }
+.error { color: #ff9b9b; }
+.groups { display: grid; gap: 1rem; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.tile { align-items: start; background: #151925; color: #f4f7ff; display: flex; flex-direction: column; gap: .55rem; min-height: 7.5rem; text-align: left; width: 100%; }
+.tile strong { font-size: 1.05rem; line-height: 1.25; }
+.tile span { color: #aeb8ca; font-size: .85rem; }
+.tile.focused, .tile:focus-visible { background: #294e7d; box-shadow: 0 0 0 4px #82b7ff; outline: 0; }
+.catalogue-heading { align-items: center; display: flex; gap: 1rem; justify-content: space-between; }
+.catalogue-heading h2 { margin: 0; }
+.sort-control { align-items: center; display: flex; gap: .5rem; }
+.sort-control select { background: #181c28; color: inherit; padding: .7rem; }
+.pagination { display: flex; gap: 1rem; margin-top: 1.5rem; }
+.player { background: #000; display: block; margin-top: 1.5rem; max-height: 72vh; width: 100%; }
+.subtitles { margin-top: 2rem; max-width: 900px; }
+.subtitles h3 { margin-bottom: .5rem; }
+.subtitles label { display: block; margin-bottom: .5rem; }
+.subtitle-actions { display: flex; gap: .75rem; }
+.subtitle-actions input { flex: 1; }
+.subtitle-actions button { white-space: nowrap; }
+.subtitle-results { display: grid; gap: .5rem; margin-top: 1rem; }
+.subtitle-results article { background: #151925; border-radius: .55rem; display: grid; gap: .35rem; padding: .8rem 1rem; }
+.subtitle-results span { color: #aeb8ca; font-size: .85rem; }
+@media (max-width: 800px) {
+  .screen { padding: 5vh 5vw; }
+  .groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

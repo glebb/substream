@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" version="0.1.0" viewmodes="fullscreen" id="com.local.mym3u">
+  <tizen:application id="mym3u.MyM3u" package="mym3u" required_version="5.5" />
+  <content src="dist/index.html" />
+  <name>My M3U</name>
+  <access origin="*" subdomains="true" />
+  <tizen:privilege name="http://tizen.org/privilege/internet" />
+  <tizen:privilege name="http://tizen.org/privilege/download" />
+  <tizen:privilege name="http://tizen.org/privilege/filesystem.read" />
+  <tizen:privilege name="http://tizen.org/privilege/filesystem.write" />
+  <tizen:privilege name="http://tizen.org/privilege/unlimitedstorage" />
+  <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice" />
+</widget>
