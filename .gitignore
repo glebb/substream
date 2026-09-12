@@ -4,6 +4,9 @@
 node_modules/
 dist/
 tizen/dist/
+tizen/Debug/
+tizen/.tizen-rds/
+tizen/**/*.wgt
 coverage/
 .DS_Store
 *.log

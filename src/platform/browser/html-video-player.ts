@@ -1,4 +1,7 @@
-export class HtmlVideoPlayer {
+import type { MediaPlayer, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import { srtToWebVtt } from "../../core/subtitles/srt-to-vtt.ts";
+
+export class HtmlVideoPlayer implements MediaPlayer {
   private subtitleObjectUrl: string | undefined;
 
   constructor(private readonly video: HTMLVideoElement) {}
@@ -11,6 +14,34 @@ export class HtmlVideoPlayer {
     });
   }
 
+  play(): void {
+    void this.video.play().catch(() => {
+      // A user gesture may be required before playback is allowed.
+    });
+  }
+
+  pause(): void {
+    this.video.pause();
+  }
+
+  restart(): void {
+    this.video.currentTime = 0;
+    this.play();
+  }
+
+  skip(seconds: number): void {
+    if (!Number.isFinite(this.video.duration)) return;
+    this.video.currentTime = Math.max(0, Math.min(this.video.duration, this.video.currentTime + seconds));
+  }
+
+  setDisplayMode(mode: VideoDisplayMode): void {
+    this.video.style.objectFit = mode === "fill" ? "cover" : "contain";
+  }
+
+  resize(): void {
+    // HTML video follows its CSS layout automatically.
+  }
+
   destroy(): void {
     this.video.pause();
     this.video.removeAttribute("src");
@@ -18,10 +49,10 @@ export class HtmlVideoPlayer {
     if (this.subtitleObjectUrl) URL.revokeObjectURL(this.subtitleObjectUrl);
   }
 
-  setSubtitle(webVtt: string, label: string, language: string): void {
+  async setSubtitle(subtitleText: string, label: string, language: string): Promise<SubtitleAttachment> {
     if (this.subtitleObjectUrl) URL.revokeObjectURL(this.subtitleObjectUrl);
     this.video.querySelectorAll("track").forEach((track) => track.remove());
-    this.subtitleObjectUrl = URL.createObjectURL(new Blob([webVtt], { type: "text/vtt" }));
+    this.subtitleObjectUrl = URL.createObjectURL(new Blob([srtToWebVtt(subtitleText)], { type: "text/vtt" }));
     const track = document.createElement("track");
     track.default = true;
     track.kind = "subtitles";
@@ -29,5 +60,6 @@ export class HtmlVideoPlayer {
     track.srclang = language;
     track.src = this.subtitleObjectUrl;
     this.video.append(track);
+    return { enabled: true };
   }
 }

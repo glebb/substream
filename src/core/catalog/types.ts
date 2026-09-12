@@ -13,6 +13,8 @@ export interface VodCatalogItem {
   addedAt: number;
   streamUrl: string;
   sourceLine: number;
+  /** Present only for an Xtream series container; episodes are fetched lazily. */
+  providerSeriesId?: number;
 }
 
 export interface VodCatalog {

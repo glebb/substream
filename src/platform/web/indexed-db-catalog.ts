@@ -2,7 +2,7 @@ import type { CatalogImportSummary, VodCatalogItem, VodContentType } from "../..
 import { normalizeTitle, searchTerms } from "../../core/catalog/index.ts";
 
 const DATABASE_NAME = "my-m3u-catalog";
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
 const ITEMS_STORE = "vod-items";
 const META_STORE = "catalog-meta";
 const GROUPS_STORE = "vod-groups";
@@ -20,6 +20,8 @@ export interface VodGroup {
   name: string;
   count: number;
   contentType: VodContentType | "mixed";
+  providerCategoryId?: string;
+  providerContentType?: "movie" | "series";
 }
 
 export type VodSort = "title" | "playlist" | "year";
@@ -54,13 +56,17 @@ export class IndexedDbCatalogStore {
       const items = database.objectStoreNames.contains(ITEMS_STORE)
         ? request.transaction!.objectStore(ITEMS_STORE)
         : database.createObjectStore(ITEMS_STORE, { keyPath: "id" });
-      if (!items.indexNames.contains("by-group")) items.createIndex("by-group", "group", { unique: false });
+      // Keep import-time indexes to the three catalogue views currently exposed
+      // by the TV UI. In particular, do not build a multi-entry full-text index
+      // for every title during a 200k+ item import.
       if (!items.indexNames.contains("by-group-title")) items.createIndex("by-group-title", ["group", "searchTitle", "id"], { unique: false });
-      if (!items.indexNames.contains("by-group-added")) items.createIndex("by-group-added", ["group", "addedAt", "id"], { unique: false });
       if (!items.indexNames.contains("by-group-source")) items.createIndex("by-group-source", ["group", "sourceLine", "id"], { unique: false });
       if (!items.indexNames.contains("by-group-year")) items.createIndex("by-group-year", ["group", "year", "id"], { unique: false });
-      if (!items.indexNames.contains("by-content-type")) items.createIndex("by-content-type", "contentType", { unique: false });
-      if (!items.indexNames.contains("by-search-term")) items.createIndex("by-search-term", "searchTerms", { multiEntry: true, unique: false });
+      if (event.oldVersion < 5) {
+        for (const indexName of ["by-group", "by-group-added", "by-content-type", "by-search-term"]) {
+          if (items.indexNames.contains(indexName)) items.deleteIndex(indexName);
+        }
+      }
       if (!database.objectStoreNames.contains(META_STORE)) database.createObjectStore(META_STORE, { keyPath: "key" });
       if (!database.objectStoreNames.contains(GROUPS_STORE)) database.createObjectStore(GROUPS_STORE, { keyPath: "name" });
       if (event.oldVersion < 2 && database.objectStoreNames.contains(META_STORE)) {
@@ -153,6 +159,21 @@ export class IndexedDbCatalogStore {
     });
   }
 
+  async replaceProviderGroups(groups: readonly VodGroup[]): Promise<void> {
+    await this.begin();
+    const transaction = this.database.transaction(GROUPS_STORE, "readwrite");
+    const store = transaction.objectStore(GROUPS_STORE);
+    for (const group of groups) store.put(group);
+    await transactionDone(transaction);
+    await this.writeMetadata({
+      key: "current",
+      status: "ready",
+      importedAt: Date.now(),
+      itemCount: 0,
+      groupCount: groups.length,
+    });
+  }
+
   async fail(): Promise<void> {
     const previous = await this.metadata();
     await this.writeMetadata({ ...previous, status: "failed" });
@@ -200,16 +221,14 @@ export class IndexedDbCatalogStore {
     if (terms.length === 0) return [];
 
     const transaction = this.database.transaction(ITEMS_STORE, "readonly");
-    const index = transaction.objectStore(ITEMS_STORE).index("by-search-term");
     const results = new Map<string, VodCatalogItem>();
-    const range = IDBKeyRange.bound(terms[0] ?? "", `${terms[0]}\uffff`, false, false);
-    const request = index.openCursor(range);
+    const request = transaction.objectStore(ITEMS_STORE).openCursor();
 
     await new Promise<void>((resolve, reject) => {
       request.onerror = () => reject(request.error ?? new Error("IndexedDB search failed"));
       request.onsuccess = () => {
         const cursor = request.result;
-        if (!cursor || results.size >= limit * 3) return resolve();
+        if (!cursor || results.size >= limit) return resolve();
         const item = cursor.value as VodCatalogItem;
         if (terms.every((term) => item.searchTerms.some((candidate) => candidate.startsWith(term)))) {
           results.set(item.id, item);
@@ -218,7 +237,7 @@ export class IndexedDbCatalogStore {
       };
     });
     await transactionDone(transaction);
-    return [...results.values()].sort((left, right) => left.title.localeCompare(right.title)).slice(0, limit);
+    return [...results.values()].sort((left, right) => left.title.localeCompare(right.title));
   }
 
   close(): void {

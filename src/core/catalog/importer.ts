@@ -25,6 +25,7 @@ export interface CatalogImportSink {
 
 export interface CatalogImportOptions {
   batchSize?: number;
+  progressInterval?: number;
   onProgress?: (progress: Pick<CatalogImportSummary, "processedEntries" | "importedItems">) => void;
 }
 
@@ -35,6 +36,7 @@ export async function importM3uChunks(
 ): Promise<CatalogImportSummary> {
   const parser = new IncrementalM3uParser();
   const batchSize = Math.max(1, options.batchSize ?? 500);
+  const progressInterval = Math.max(1, options.progressInterval ?? 5_000);
   const batch: VodCatalogItem[] = [];
   const groups = new Map<string, { count: number; contentTypes: Set<VodContentType> }>();
   let processedEntries = 0;
@@ -52,13 +54,17 @@ export async function importM3uChunks(
     for (const entry of entries) {
       processedEntries += 1;
       const item = createVodCatalogItem(entry, importStartedAt);
-      if (!item) continue;
+      if (!item) {
+        if (processedEntries % progressInterval === 0) options.onProgress?.({ processedEntries, importedItems });
+        continue;
+      }
       batch.push(item);
       const group = groups.get(item.group) ?? { count: 0, contentTypes: new Set<VodContentType>() };
       group.count += 1;
       group.contentTypes.add(item.contentType);
       groups.set(item.group, group);
       if (batch.length >= batchSize) await flush();
+      else if (processedEntries % progressInterval === 0) options.onProgress?.({ processedEntries, importedItems });
     }
   };
 

@@ -5,8 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:personal": "PERSONAL_BUILD=1 vite",
     "build": "vite build",
+    "build:personal": "PERSONAL_BUILD=1 vite build",
     "build:tizen": "vite build --outDir tizen/dist",
+    "build:tizen:personal": "PERSONAL_BUILD=1 vite build --outDir tizen/dist",
     "inspect:m3u": "node --env-file=.env scripts/inspect-m3u.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -17,6 +20,7 @@
     "@types/node": "^24.3.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-legacy": "^7.2.1",
     "fake-indexeddb": "^6.2.2",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"

@@ -9,6 +9,8 @@ label, h2 { font-weight: 650; }
 input, button, select { border: 0; border-radius: .55rem; font: inherit; padding: 1rem; }
 input { background: #181c28; color: inherit; }
 button { background: #82b7ff; color: #061426; cursor: pointer; font-weight: 750; width: fit-content; }
+input:focus, input:focus-visible, button:focus, button:focus-visible, select:focus, select:focus-visible { box-shadow: 0 0 0 4px #ffd54a; outline: 0; }
+.remote-focused { background: #ffd54a; box-shadow: 0 0 0 5px #fff2a8, 0 0 0 9px #ffd54a; color: #080a10; outline: 0; transform: scale(1.04); }
 button:disabled { cursor: default; opacity: .45; }
 .hint { color: #aeb8ca; line-height: 1.45; }
 .error { color: #ff9b9b; }
@@ -16,13 +18,30 @@ button:disabled { cursor: default; opacity: .45; }
 .tile { align-items: start; background: #151925; color: #f4f7ff; display: flex; flex-direction: column; gap: .55rem; min-height: 7.5rem; text-align: left; width: 100%; }
 .tile strong { font-size: 1.05rem; line-height: 1.25; }
 .tile span { color: #aeb8ca; font-size: .85rem; }
-.tile.focused, .tile:focus-visible { background: #294e7d; box-shadow: 0 0 0 4px #82b7ff; outline: 0; }
+.tile.focused, .tile:focus, .tile:focus-visible { background: #294e7d; box-shadow: 0 0 0 6px #ffd54a; outline: 0; transform: scale(1.015); }
+.tile.remote-focused { background: #ffd54a; box-shadow: 0 0 0 5px #fff2a8, 0 0 0 9px #ffd54a; color: #080a10; transform: scale(1.025); }
+.tile.remote-focused span { color: #243142; }
 .catalogue-heading { align-items: center; display: flex; gap: 1rem; justify-content: space-between; }
 .catalogue-heading h2 { margin: 0; }
 .sort-control { align-items: center; display: flex; gap: .5rem; }
 .sort-control select { background: #181c28; color: inherit; padding: .7rem; }
 .pagination { display: flex; gap: 1rem; margin-top: 1.5rem; }
-.player { background: #000; display: block; margin-top: 1.5rem; max-height: 72vh; width: 100%; }
+.player-screen { min-width: 0; }
+.player-heading { align-items: flex-start; display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; }
+.player-title { min-width: 0; }
+.player-title h2 { font-size: clamp(1.5rem, 3.5vw, 3rem); line-height: 1.13; margin: 0; overflow-wrap: anywhere; }
+.player-title .hint { margin: .35rem 0 0; }
+.player-stage { margin-top: 1.25rem; position: relative; }
+.player { background: #000; display: block; margin: 0; width: 100%; }
+/* Chromium 47 does not support aspect-ratio; give AVPlay a real display rect. */
+.tizen-player { height: 60vh; max-height: 720px; min-height: 22rem; }
+.subtitle-overlay { background: rgba(0, 0, 0, .78); bottom: 6%; color: #fff; font-size: clamp(1.1rem, 2.4vw, 2.3rem); font-weight: 700; left: 8%; line-height: 1.35; margin: 0; padding: .3em .55em; pointer-events: none; position: absolute; right: 8%; text-align: center; white-space: pre-line; z-index: 3; }
+.player-controls { align-items: center; display: flex; flex-wrap: wrap; gap: .8rem; margin-top: 1rem; }
+.playback-status { background: #1c273a; border: 1px solid #405a7d; border-radius: 999px; color: #dbe9ff; font-size: .9rem; font-weight: 800; margin-left: .8rem; min-width: 7rem; padding: .65rem 1rem; text-align: center; }
+.player-screen.is-fullscreen { background: #000; inset: 0; position: fixed; z-index: 20; }
+.player-screen.is-fullscreen .player-heading, .player-screen.is-fullscreen .player-controls, .player-screen.is-fullscreen .subtitles { display: none; }
+.player-screen.is-fullscreen .player-stage { height: 100vh; inset: 0; margin: 0; position: fixed; width: 100vw; }
+.player-screen.is-fullscreen .player { height: 100%; max-height: none; min-height: 0; width: 100%; }
 .subtitles { margin-top: 2rem; max-width: 900px; }
 .subtitles h3 { margin-bottom: .5rem; }
 .subtitles label { display: block; margin-bottom: .5rem; }
@@ -35,4 +54,5 @@ button:disabled { cursor: default; opacity: .45; }
 @media (max-width: 800px) {
   .screen { padding: 5vh 5vw; }
   .groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tizen-player { min-height: 14rem; }
 }
