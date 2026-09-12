@@ -32,11 +32,7 @@ The project is a standalone-oriented Samsung Tizen IPTV VOD player with a TypeSc
 
 ## Next phases
 
-1. Add AVPlay resume position.
-2. Add full-text catalogue search and filters for groups, movies/series, language, and year.
-3. Cache downloaded subtitle files in app storage; add language preference, release scoring, and automatic subtitle selection.
-4. Implement TV-native M3U download-to-storage and chunked import using Tizen download/filesystem APIs, including refresh and delete flows.
-5. Package, sign, deploy, and test on a Samsung TV or Tizen emulator.
+The implementation-ready feature backlog is maintained in [roadmap.md](roadmap.md). The next priority is playback progress/resume, followed by seamless bundled/stored configuration and automatic subtitle selection.
 
 ## Known constraints
 
