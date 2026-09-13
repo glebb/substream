@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadSubtitleTimingOffset, saveSubtitleTimingOffset } from "./subtitle-timing-config.ts";
+import { clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimingOffset } from "./subtitle-timing-config.ts";
 
 function memoryStorage(): Storage & { data: Map<string, string> } {
   const data = new Map<string, string>();
@@ -31,5 +31,12 @@ describe("subtitle timing persistence", () => {
     storage.setItem("my-m3u.subtitle-timing-offsets", "not json");
     expect(loadSubtitleTimingOffset("vod_abc", storage)).toBe(0);
     expect(saveSubtitleTimingOffset("vod_abc", -0.5, null)).toBe(-0.5);
+  });
+
+  it("clears every saved title offset", () => {
+    const storage = memoryStorage();
+    saveSubtitleTimingOffset("vod_abc", 1, storage);
+    clearSubtitleTimingOffsets(storage);
+    expect(loadSubtitleTimingOffset("vod_abc", storage)).toBe(0);
   });
 });

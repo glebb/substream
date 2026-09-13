@@ -12,6 +12,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private subtitleEnabled = true;
   private subtitleTrack: HTMLTrackElement | undefined;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
+  private pendingSeekSeconds: number | null = null;
   private readonly eventListeners: Array<[string, EventListener]>;
 
   constructor(private readonly video: HTMLVideoElement) {
@@ -22,6 +23,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
       ["pause", () => { if (!this.video.ended) this.emit("paused"); }],
       ["ended", () => this.emit("ended")],
       ["error", () => this.emit("error")],
+      ["loadedmetadata", () => this.applyPendingSeek()],
       ["timeupdate", () => this.emitProgress()],
       ["durationchange", () => this.emitProgress()],
     ];
@@ -41,6 +43,18 @@ export class HtmlVideoPlayer implements MediaPlayer {
     } catch {
       this.emit("error");
     }
+  }
+
+  seekTo(seconds: number): void {
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    this.pendingSeekSeconds = seconds;
+    this.applyPendingSeek();
+  }
+
+  getVideoResolution(): string | null {
+    return this.video.videoWidth > 0 && this.video.videoHeight > 0
+      ? `${this.video.videoWidth} × ${this.video.videoHeight}`
+      : null;
   }
 
   play(): void {
@@ -99,6 +113,17 @@ export class HtmlVideoPlayer implements MediaPlayer {
     const currentTimeSeconds = this.video.currentTime;
     if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || !Number.isFinite(currentTimeSeconds)) return;
     this.eventHandlers?.onProgress?.({ currentTimeSeconds, durationSeconds });
+  }
+
+  private applyPendingSeek(): void {
+    if (this.pendingSeekSeconds === null || this.video.readyState < 1) return;
+    const seconds = this.pendingSeekSeconds;
+    this.pendingSeekSeconds = null;
+    try {
+      this.video.currentTime = Math.min(seconds, Number.isFinite(this.video.duration) ? this.video.duration : seconds);
+    } catch {
+      // Some browser streams do not permit seeking until a seekable range exists.
+    }
   }
 
   async setSubtitle(subtitleText: string, label: string, language: string): Promise<SubtitleAttachment> {

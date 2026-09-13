@@ -6,17 +6,17 @@ This roadmap describes the next user-facing improvements for the Samsung Tizen V
 
 - [x] Show video progress: elapsed time, duration, and a seek/progress bar when AVPlay provides duration and current-time events.
 - [x] Show buffering state and a visible buffer indicator when the adapter reports it.
-- [ ] Persist playback progress per title and offer **Resume** or **Start over**.
-- [ ] Add a **Continue watching** section, ordered by most recently played unfinished titles, with an explicit option to remove an item from history.
+- [x] Persist playback progress per title and offer **Resume** or **Start over**.
+- [x] Add a **Continue watching** section, ordered by most recently played unfinished titles, with an explicit option to remove an item from history.
 - [x] Prepopulate the M3U URL whenever it is bundled in a personal build or already stored locally. Do not show the setup form until the user explicitly chooses **Change playlist**.
-- [ ] Add a safe settings/reset screen: change playlist URL, clear the local VOD catalogue, clear saved OpenSubtitles settings, and reset all local app data. Reset actions must require confirmation and never reveal stored secrets.
+- [x] Add a safe settings/reset screen: change playlist URL, clear the local VOD catalogue, clear saved OpenSubtitles settings, and reset all local app data. Reset actions must require confirmation and never reveal stored secrets.
 - [x] Prepopulate the OpenSubtitles API key when it is bundled or stored locally. Do not request it on the player screen unless it is missing or the user chooses **Change subtitle settings**.
 - [x] Automatically search for subtitles when playback begins, using the title, year, season, and episode already resolved by the catalogue.
 - [x] Automatically choose the best subtitle when the confidence is high; otherwise show a compact selection list without interrupting playback.
 - [x] Add possibility to disable/enable subtitles.
 - [x] Combine play/pause button.
 - [x] Change the behavior on the playback screen. Only skip past/forward, if the video area is "selected". Otherwise left right buttons should move the selection just like up and down. In full screen the skipping should work always with left right.
-- [ ] Pressing the key i or info button from remote should display basic information about the video (like resolution). Another press hides the info.
+- [x] Pressing the key i or info button from remote should display basic information about the video (like resolution). Another press hides the info.
 
 ## Phase 2: Subtitle experience
 

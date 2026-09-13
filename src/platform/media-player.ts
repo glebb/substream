@@ -20,6 +20,10 @@ export interface MediaPlayerEventHandlers {
 export interface MediaPlayer {
   setEventHandlers(handlers: MediaPlayerEventHandlers | null): void;
   load(streamUrl: string): void;
+  /** Seeks to an absolute playhead position, including while the stream is preparing. */
+  seekTo?(seconds: number): void;
+  /** Returns source dimensions only; adapters must not expose stream metadata or URLs. */
+  getVideoResolution?(): string | null;
   play(): void;
   pause(): void;
   restart(): void;

@@ -57,6 +57,21 @@ describe("HtmlVideoPlayer", () => {
     player.destroy();
   });
 
+  it("resumes at a saved position after metadata loads and exposes only video dimensions", () => {
+    const { video, dispatch } = fakeVideo();
+    const media = video as unknown as { readyState: number; videoWidth: number; videoHeight: number; currentTime: number };
+    media.readyState = 1;
+    media.videoWidth = 1920;
+    media.videoHeight = 1080;
+    const player = new HtmlVideoPlayer(video);
+
+    player.seekTo(84);
+    dispatch("loadedmetadata");
+    expect(video.currentTime).toBe(84);
+    expect(player.getVideoResolution()).toBe("1920 × 1080");
+    player.destroy();
+  });
+
   it("contains synchronous load failures and reports a playback error", () => {
     const { video } = fakeVideo(() => { throw new Error("private signed stream URL"); });
     const player = new HtmlVideoPlayer(video);

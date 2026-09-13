@@ -24,6 +24,8 @@ describe("TizenAvPlayPlayer", () => {
     const setDisplayRect = vi.fn();
     const setDisplayMethod = vi.fn();
     const setBufferingParam = vi.fn();
+    const seekTo = vi.fn((milliseconds: number, onSuccess?: () => void) => onSuccess?.());
+    const getCurrentStreamInfo = vi.fn(() => [{ type: "VIDEO", extra_info: "{\"Width\":\"1920\",\"Height\":\"1080\"}" }]);
     let listener: {
       oncurrentplaytime?(milliseconds: number): void;
       onbufferingstart?(): void;
@@ -32,7 +34,7 @@ describe("TizenAvPlayPlayer", () => {
     } | undefined;
     const setListener = vi.fn((nextListener: NonNullable<typeof listener>) => { listener = nextListener; });
     const getDuration = vi.fn(() => 125_000);
-    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: { open, prepareAsync, play, pause, jumpForward, jumpBackward, stop, close, getDuration, setDisplayRect, setDisplayMethod, setBufferingParam, setListener } };
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: { open, prepareAsync, play, pause, jumpForward, jumpBackward, stop, close, getDuration, setDisplayRect, setDisplayMethod, setBufferingParam, setListener, seekTo, getCurrentStreamInfo } };
     const container = { getBoundingClientRect: () => ({ left: 10.2, top: 20.7, width: 1280, height: 720 }) } as unknown as HTMLElement;
 
     const onSubtitleCue = vi.fn();
@@ -42,6 +44,9 @@ describe("TizenAvPlayPlayer", () => {
     player.setEventHandlers({ onStateChange: (state) => states.push(state), onProgress: (value) => progress.push(value) });
     expect(isTizenAvPlayAvailable()).toBe(true);
     player.load("https://example.invalid/stream.mkv");
+    player.seekTo(84);
+    expect(seekTo).toHaveBeenCalledWith(84_000, expect.any(Function), expect.any(Function));
+    expect(player.getVideoResolution()).toBe("1920 × 1080");
     player.pause();
     player.play();
     player.restart();

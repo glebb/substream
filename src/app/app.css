@@ -4,6 +4,8 @@ body { margin: 0; }
 .screen { min-height: 100vh; max-width: 1440px; margin: auto; padding: 7vh 8vw; }
 .eyebrow { color: #81b6ff; font-size: .8rem; font-weight: 700; letter-spacing: .16em; }
 h1 { font-size: clamp(2rem, 5vw, 4.5rem); margin: .15em 0 .8em; }
+.app-header { align-items: center; display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; }
+.app-header h1 { margin-bottom: .8em; }
 form { max-width: 720px; display: grid; gap: .8rem; }
 label, h2 { font-weight: 650; }
 input, button, select { border: 0; border-radius: .55rem; font: inherit; padding: 1rem; }
@@ -33,6 +35,8 @@ button:disabled { cursor: default; opacity: .45; }
 .player-title .hint { margin: .35rem 0 0; }
 .player-stage { margin-top: 1.25rem; position: relative; }
 .player-stage.video-area-focused { outline: 4px solid #ffd54a; outline-offset: 4px; }
+.video-info-overlay { background: rgba(0, 0, 0, .82); border: 1px solid rgba(219, 233, 255, .45); border-radius: .5rem; color: #fff; display: grid; gap: .3rem; max-width: 20rem; padding: .8rem 1rem; pointer-events: none; position: absolute; right: 1rem; top: 1rem; z-index: 7; }
+.video-info-overlay span { color: #dbe9ff; font-variant-numeric: tabular-nums; }
 .player { background: #000; display: block; margin: 0; width: 100%; }
 .playback-progress { align-items: center; color: #dbe9ff; display: flex; font-variant-numeric: tabular-nums; gap: .75rem; margin-top: .5rem; }
 .playback-progress progress { accent-color: #82b7ff; flex: 1; height: .75rem; }
@@ -62,6 +66,13 @@ button:disabled { cursor: default; opacity: .45; }
 .subtitle-timing-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: .65rem; }
 .subtitle-timing-actions button { min-width: 6rem; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin: .5rem 0 1rem; }
+.settings-screen, .resume-choice { max-width: 760px; }
+.settings-screen h2, .resume-choice h2 { margin-top: 0; }
+.confirmation-panel { background: #151925; border: 1px solid #43516a; border-radius: .7rem; margin-top: 1rem; padding: 1.2rem; }
+.danger-button { background: #ffaaaa; }
+.section-heading { font-size: 1.5rem; margin: 2rem 0 .8rem; }
+.continue-grid { margin-bottom: 2rem; }
+.remove-history { background: #242331; border: 1px solid #735b65; color: #f4e6ea; }
 .setup-recovery { max-width: 720px; }
 .subtitle-results { display: grid; gap: .5rem; margin-top: 1rem; }
 .subtitle-results article { background: #151925; border-radius: .55rem; display: grid; gap: .35rem; padding: .8rem 1rem; }

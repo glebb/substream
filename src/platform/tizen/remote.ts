@@ -1,4 +1,4 @@
-const TV_INPUT_PRIVILEGE_KEYS = ["MediaPlayPause", "MediaPlay", "MediaPause", "MediaRewind", "MediaFastForward"];
+const TV_INPUT_PRIVILEGE_KEYS = ["MediaPlayPause", "MediaPlay", "MediaPause", "MediaRewind", "MediaFastForward", "Info"];
 
 interface TizenInputDevice {
   registerKeyBatch(keys: string[], onSuccess?: () => void, onError?: (error: unknown) => void): void;
@@ -22,17 +22,24 @@ export function registerTizenPlaybackKeys(): void {
 }
 
 export function isBackKey(event: KeyboardEvent): boolean {
-  return event.key === "Escape" || event.key === "BrowserBack" || event.keyCode === 10009;
+  return normalizedRemoteKey(event) === "Back";
 }
 
 /** Older Samsung web engines use Left/Right/Up/Down and keyCode values. */
 export function normalizedRemoteKey(event: KeyboardEvent): string {
+  const key = event.key ?? "";
+  const code = event.code ?? "";
+  const backNames = new Set(["escape", "browserback", "back", "xf86back", "goback"]);
+  if (backNames.has(key.toLowerCase()) || backNames.has(code.toLowerCase())
+    || event.keyCode === 10009 || event.which === 10009) return "Back";
+
   const legacyKeys: Record<number, string> = {
     13: "Enter",
     37: "ArrowLeft",
     38: "ArrowUp",
     39: "ArrowRight",
     40: "ArrowDown",
+    457: "Info",
     19: "MediaPause",
     412: "MediaRewind",
     415: "MediaPlay",
@@ -47,6 +54,9 @@ export function normalizedRemoteKey(event: KeyboardEvent): string {
     Return: "Enter",
     XF86AudioPlay: "MediaPlayPause",
     XF86AudioPause: "MediaPause",
+    Info: "Info",
   };
-  return namedKeys[event.key] ?? legacyKeys[event.keyCode] ?? event.key;
+  const legacyKeyCode = event.keyCode || event.which;
+  return namedKeys[key] ?? namedKeys[code]
+    ?? (key.toLowerCase() === "i" || code === "KeyI" ? "Info" : legacyKeys[legacyKeyCode] ?? (key || code));
 }

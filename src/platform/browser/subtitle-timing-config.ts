@@ -7,6 +7,7 @@ const MAX_TITLE_ID_LENGTH = 256;
 interface KeyValueStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem(key: string): void;
 }
 
 function browserStorage(): KeyValueStorage | null {
@@ -61,4 +62,12 @@ export function saveSubtitleTimingOffset(
     // Playback timing remains adjustable for this session when storage is unavailable.
   }
   return normalized;
+}
+
+export function clearSubtitleTimingOffsets(storage: KeyValueStorage | null = browserStorage()): void {
+  try {
+    storage?.removeItem(STORAGE_KEY);
+  } catch {
+    // Reset can still clear the other app stores if local storage is unavailable.
+  }
 }

@@ -18,6 +18,16 @@ describe("XtreamClient", () => {
     expect(XtreamClient.fromPlaylistUrl("https://example.test/list.m3u")).toBeNull();
   });
 
+  it("rebuilds provider stream URLs from safe identifiers and rejects invalid IDs", () => {
+    const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=pass");
+    if (!client) throw new Error("Expected Xtream client");
+    expect(client.streamUrlFor("series", "42", "mkv")).toBe("https://iptv.example/series/user/pass/42.mkv");
+    expect(() => client.streamUrlFor("movie", "42/other", "mkv")).toThrow("Invalid provider stream identifier");
+    expect(client.sourceFingerprint()).toMatch(/^vod_[a-z0-9]+$/);
+    expect(client.sourceFingerprint()).toBe(XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=other&password=different")?.sourceFingerprint());
+    expect(client.sourceFingerprint()).not.toBe(XtreamClient.fromPlaylistUrl("https://different.example/get.php?username=user&password=pass")?.sourceFingerprint());
+  });
+
   it("loads movie and series categories without downloading streams", async () => {
     const request = vi.fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [{ category_id: "1", category_name: "Nordic" }] })

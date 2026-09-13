@@ -106,6 +106,21 @@ describe("IndexedDbCatalogStore", () => {
     expect(groups.map((group) => group.name)).toEqual(["Movies: Same name", "Movies: Same name"]);
   });
 
+  it("looks up saved title IDs and clears catalogue records without deleting the database", async () => {
+    store = await IndexedDbCatalogStore.open();
+    const [item] = buildVodCatalog(entries).items;
+    if (!item) throw new Error("Missing fixture item");
+    await store.replaceAll([item]);
+
+    await expect(store.byIds([item.id, "missing"])).resolves.toEqual([
+      expect.objectContaining({ id: item.id, title: item.title, streamUrl: item.streamUrl }),
+    ]);
+    await store.clearCatalog();
+    await expect(store.metadata()).resolves.toMatchObject({ status: "empty", itemCount: 0, groupCount: 0, unknownCount: 0 });
+    await expect(store.groups()).resolves.toEqual([]);
+    await expect(store.byIds([item.id])).resolves.toEqual([]);
+  });
+
   it("returns the global first alphabetical search matches before enforcing its bound", async () => {
     store = await IndexedDbCatalogStore.open();
     const [template] = buildVodCatalog(entries).items;

@@ -11,7 +11,9 @@ interface AvPlayApi {
   jumpBackward(milliseconds: number, onSuccess?: () => void, onError?: (error: unknown) => void): void;
   stop(): void;
   close(): void;
+  seekTo?(milliseconds: number, onSuccess?: () => void, onError?: (error: unknown) => void): void;
   getDuration?(): number;
+  getCurrentStreamInfo?(): Array<{ type?: string; extra_info?: string }>;
   setBufferingParam?(bufferingType: "PLAYER_BUFFER_FOR_PLAY" | "PLAYER_BUFFER_FOR_RESUME", parameter: "PLAYER_BUFFER_SIZE_IN_SECOND", value: number): void;
   setDisplayRect(left: number, top: number, width: number, height: number): void;
   setDisplayMethod(mode: "PLAYER_DISPLAY_MODE_LETTER_BOX" | "PLAYER_DISPLAY_MODE_FULL_SCREEN" | "PLAYER_DISPLAY_MODE_AUTO_ASPECT_RATIO"): void;
@@ -52,6 +54,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private paused = false;
   private jumpInFlight = false;
   private queuedJumpMilliseconds = 0;
+  private isPrepared = false;
+  private pendingSeekMilliseconds: number | null = null;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
 
   constructor(
@@ -93,7 +97,26 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       });
       player.prepareAsync(
         () => {
-          if (this.isCurrent(generation)) this.play();
+          if (!this.isCurrent(generation)) return;
+          this.isPrepared = true;
+          const pendingSeek = this.pendingSeekMilliseconds;
+          this.pendingSeekMilliseconds = null;
+          if (pendingSeek !== null && pendingSeek > 0) {
+            if (player.seekTo) {
+              try {
+                player.seekTo(pendingSeek, () => { if (this.isCurrent(generation)) this.play(); }, () => { if (this.isCurrent(generation)) this.play(); });
+                return;
+              } catch {
+                // Fall back to a relative jump if this firmware rejects seeking before play.
+              }
+            }
+            this.play();
+            if (this.isCurrent(generation) && pendingSeek > this.currentPlayheadMilliseconds) {
+              this.startJump(generation, pendingSeek - this.currentPlayheadMilliseconds);
+            }
+            return;
+          }
+          this.play();
         },
         () => this.fail(generation),
       );
@@ -133,6 +156,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     if (!this.opened || !player) return;
     try {
       const generation = this.generation;
+      this.isPrepared = false;
+      this.pendingSeekMilliseconds = null;
       this.emit("loading");
       player.stop();
       this.setDisplayRect(player);
@@ -153,6 +178,57 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       return;
     }
     this.startJump(this.generation, deltaMilliseconds);
+  }
+
+  seekTo(seconds: number): void {
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    const targetMilliseconds = Math.round(seconds * 1_000);
+    const player = avplay();
+    if (!this.opened || !player || !this.isPrepared) {
+      this.pendingSeekMilliseconds = targetMilliseconds;
+      return;
+    }
+    try {
+      if (player.seekTo) {
+        player.seekTo(targetMilliseconds, () => undefined, () => undefined);
+      } else {
+        const delta = targetMilliseconds - this.currentPlayheadMilliseconds;
+        if (delta > 0) this.startJump(this.generation, delta);
+      }
+    } catch {
+      // Resume is best effort on firmware whose stream does not support seeking.
+    }
+  }
+
+  getVideoResolution(): string | null {
+    const player = avplay();
+    if (!this.opened || !player?.getCurrentStreamInfo) return null;
+    try {
+      for (const stream of player.getCurrentStreamInfo()) {
+        if (stream.type?.toLowerCase() !== "video" || !stream.extra_info) continue;
+        let width: number;
+        let height: number;
+        try {
+          const details: unknown = JSON.parse(stream.extra_info);
+          if (!details || typeof details !== "object") continue;
+          const values = details as Record<string, unknown>;
+          width = Number(values.Width ?? values.width);
+          height = Number(values.Height ?? values.height);
+        } catch {
+          // Some older firmware returns object-like text that is not strict JSON.
+          const widthValue = stream.extra_info.match(/(?:"?Width"?)\s*:\s*"?(\d+)/i)?.[1];
+          const heightValue = stream.extra_info.match(/(?:"?Height"?)\s*:\s*"?(\d+)/i)?.[1];
+          width = Number(widthValue);
+          height = Number(heightValue);
+        }
+        if (Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0) {
+          return `${width} × ${height}`;
+        }
+      }
+    } catch {
+      // Firmware can reject stream-info queries before a video track is ready.
+    }
+    return null;
   }
 
   setDisplayMode(mode: VideoDisplayMode): void {
@@ -296,6 +372,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.subtitlesEnabled = true;
     this.currentPlayheadMilliseconds = 0;
     this.paused = false;
+    this.isPrepared = false;
+    this.pendingSeekMilliseconds = null;
     if (!this.opened) return;
     const player = avplay();
     this.opened = false;

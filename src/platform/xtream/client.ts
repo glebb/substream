@@ -1,4 +1,4 @@
-import { normalizeTitle, searchTerms, type VodCatalogItem } from "../../core/catalog/index.ts";
+import { normalizeTitle, searchTerms, stableId, type VodCatalogItem } from "../../core/catalog/index.ts";
 
 type Request = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
@@ -131,6 +131,16 @@ export class XtreamClient {
         streamUrl: this.streamUrl("series", id, record.container_extension),
       }];
     });
+  }
+
+  streamUrlFor(kind: "movie" | "series", id: string, extension?: string): string {
+    if (!/^\d{1,20}$/.test(id)) throw new Error("Invalid provider stream identifier");
+    return this.streamUrl(kind, id, extension);
+  }
+
+  /** Stable server/path fingerprint that deliberately excludes playlist credentials. */
+  sourceFingerprint(): string {
+    return stableId(this.connection.apiUrl.origin + this.connection.apiUrl.pathname);
   }
 
   private async get<T>(action: string, parameters: Record<string, string> = {}): Promise<T> {

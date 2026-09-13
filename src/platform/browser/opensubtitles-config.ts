@@ -17,3 +17,11 @@ export function saveOpenSubtitlesApiKey(apiKey: string): void {
     // A key remains usable for the current session if persistence is denied.
   }
 }
+
+export function clearSavedOpenSubtitlesSettings(): void {
+  try {
+    globalThis.localStorage?.removeItem(KEY);
+  } catch {
+    // Reset can still clear the other app stores if local storage is unavailable.
+  }
+}

@@ -17,3 +17,11 @@ export function savePlaylistUrl(url: string): void {
     // Storage can be disabled by browser policy. Importing still works for this session.
   }
 }
+
+export function clearSavedPlaylistUrl(): void {
+  try {
+    globalThis.localStorage?.removeItem(PLAYLIST_URL_KEY);
+  } catch {
+    // Reset can still clear the other app stores if local storage is unavailable.
+  }
+}

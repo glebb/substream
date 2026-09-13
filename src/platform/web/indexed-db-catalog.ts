@@ -423,6 +423,34 @@ export class IndexedDbCatalogStore {
     return this.byGroupPage(group, 0, limit);
   }
 
+  async byIds(ids: readonly string[]): Promise<VodCatalogItem[]> {
+    const uniqueIds = [...new Set(ids)].filter((id) => typeof id === "string" && id.length > 0 && id.length <= 256);
+    if (uniqueIds.length === 0) return [];
+    const generation = await this.activeGeneration();
+    const transaction = this.database.transaction(ITEMS_STORE, "readonly");
+    const items = transaction.objectStore(ITEMS_STORE);
+    const results = await Promise.all(uniqueIds.map((id) => requestResult(items.get([generation, id]))));
+    await transactionDone(transaction);
+    return results.filter((item): item is VodCatalogItem => item !== undefined) as VodCatalogItem[];
+  }
+
+  async clearCatalog(): Promise<void> {
+    const transaction = this.database.transaction([ITEMS_STORE, GROUPS_STORE, UNKNOWN_STORE, META_STORE], "readwrite");
+    transaction.objectStore(ITEMS_STORE).clear();
+    transaction.objectStore(GROUPS_STORE).clear();
+    transaction.objectStore(UNKNOWN_STORE).clear();
+    transaction.objectStore(META_STORE).put({
+      key: METADATA_KEY,
+      status: "empty",
+      importedAt: null,
+      itemCount: 0,
+      groupCount: 0,
+      unknownCount: 0,
+    } satisfies CatalogMetadata);
+    await transactionDone(transaction);
+    this.pendingGeneration = undefined;
+  }
+
   async byGroupPage(group: string, offset = 0, limit = 100, sort: VodSort = "title"): Promise<VodCatalogItem[]> {
     const generation = await this.activeGeneration();
     const transaction = this.database.transaction(ITEMS_STORE, "readonly");
