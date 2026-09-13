@@ -1186,7 +1186,7 @@ export function App() {
   </form>;
 
   return <main className="screen">
-    <header className="app-header"><div><p className="eyebrow">MY M3U</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
+    <header className="app-header"><div><p className="eyebrow">SUBSTREAM</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
       {state === "ready" && !selectedTitle && !showPlaylistForm && !showSettings && <button type="button" ref={settingsOpenButtonRef} onClick={openSettings}>Settings</button>}
     </header>
     {state !== "ready" && showPlaylistForm && playlistSetupForm}

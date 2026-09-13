@@ -1,6 +1,6 @@
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
 
-const STORAGE_KEY = "my-m3u.subtitle-timing-offsets";
+const STORAGE_KEY = "substream.subtitle-timing-offsets";
 const MAX_SAVED_TITLES = 500;
 const MAX_TITLE_ID_LENGTH = 256;
 

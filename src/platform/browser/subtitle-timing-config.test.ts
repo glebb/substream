@@ -28,7 +28,7 @@ describe("subtitle timing persistence", () => {
 
   it("returns zero for invalid saved data and unavailable storage", () => {
     const storage = memoryStorage();
-    storage.setItem("my-m3u.subtitle-timing-offsets", "not json");
+    storage.setItem("substream.subtitle-timing-offsets", "not json");
     expect(loadSubtitleTimingOffset("vod_abc", storage)).toBe(0);
     expect(saveSubtitleTimingOffset("vod_abc", -0.5, null)).toBe(-0.5);
   });

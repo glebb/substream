@@ -1,6 +1,6 @@
 # Project guide
 
-My M3U is a Samsung Tizen IPTV VOD player. The shared TypeScript catalogue and subtitle logic lives in `src/core`; browser and Tizen behavior is implemented by platform adapters.
+Substream is a Samsung Tizen IPTV VOD player with OpenSubtitles-powered subtitle discovery. The shared TypeScript catalogue and subtitle logic lives in `src/core`; browser and Tizen behavior is implemented by platform adapters.
 
 ## Everyday commands
 

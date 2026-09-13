@@ -1,4 +1,4 @@
-const CATALOG_CLEARED_KEY = "my-m3u.catalog-cleared";
+const CATALOG_CLEARED_KEY = "substream.catalog-cleared";
 
 export function wasCatalogCleared(): boolean {
   try {

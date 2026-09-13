@@ -1,6 +1,6 @@
 import { packageDefaults } from "../package-defaults.ts";
 
-const PLAYLIST_URL_KEY = "my-m3u.playlist-url";
+const PLAYLIST_URL_KEY = "substream.playlist-url";
 
 export function loadPlaylistUrl(): string {
   try {

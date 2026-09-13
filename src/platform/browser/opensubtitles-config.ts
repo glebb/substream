@@ -1,6 +1,6 @@
 import { packageDefaults } from "../package-defaults.ts";
 
-const KEY = "my-m3u.opensubtitles-api-key";
+const KEY = "substream.opensubtitles-api-key";
 
 export function loadOpenSubtitlesApiKey(): string {
   try {

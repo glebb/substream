@@ -9,7 +9,7 @@ api_version: "10.0"
 build_type: Debug
 
 # Output name for application
-output_name: MyM3u
+output_name: Substream
 
 # Output path for build
 output_path: ""
@@ -27,10 +27,13 @@ trust_anchor: []
 
 # list of files in web project (.html,.css etc) and resources
 files:
-  - dist/assets/index-CO__pRRF.js
-  - dist/assets/index-BQKUeDWm.css
-  - dist/assets/index-legacy-DYBIZkhm.js
-  - dist/assets/polyfills-legacy-BWOh7nOc.js
+  - icon.png
+  - dist/branding/substream-icon.png
+  - dist/branding/substream-splash.png
+  - dist/assets/index-BwiZgHv8.js
+  - dist/assets/index-CuEYLhs-.css
+  - dist/assets/index-legacy-D86fWWz2.js
+  - dist/assets/polyfills-legacy-CsAIWU2M.js
   - dist/index.html
 
 # list of files to exclude based on the matched patterns

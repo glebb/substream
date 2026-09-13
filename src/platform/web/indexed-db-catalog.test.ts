@@ -81,7 +81,7 @@ describe("IndexedDbCatalogStore", () => {
     store?.close();
     store = undefined;
     await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.deleteDatabase("my-m3u-catalog");
+      const request = indexedDB.deleteDatabase("substream-catalog");
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
       request.onblocked = () => reject(new Error("Test database deletion was blocked"));
@@ -181,13 +181,13 @@ describe("IndexedDbCatalogStore", () => {
     store?.close();
     store = undefined;
     await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.deleteDatabase("my-m3u-catalog");
+      const request = indexedDB.deleteDatabase("substream-catalog");
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
       request.onblocked = () => reject(new Error("Test database deletion was blocked"));
     });
     await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.open("my-m3u-catalog", 5);
+      const request = indexedDB.open("substream-catalog", 5);
       request.onupgradeneeded = () => {
         const database = request.result;
         const items = database.createObjectStore("vod-items", { keyPath: "id" });
@@ -233,13 +233,13 @@ describe("IndexedDbCatalogStore", () => {
     store?.close();
     store = undefined;
     await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.deleteDatabase("my-m3u-catalog");
+      const request = indexedDB.deleteDatabase("substream-catalog");
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
       request.onblocked = () => reject(new Error("Test database deletion was blocked"));
     });
     const blocker = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("my-m3u-catalog", 5);
+      const request = indexedDB.open("substream-catalog", 5);
       request.onupgradeneeded = () => {
         const database = request.result;
         const items = database.createObjectStore("vod-items", { keyPath: "id" });
@@ -261,20 +261,20 @@ describe("IndexedDbCatalogStore", () => {
 
     // Wait for the originally blocked request's late success handler to run.
     const currentVersionConnection = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("my-m3u-catalog", 7);
+      const request = indexedDB.open("substream-catalog", 7);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
     currentVersionConnection.close();
     const nextVersionConnection = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("my-m3u-catalog", 8);
+      const request = indexedDB.open("substream-catalog", 8);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
       request.onblocked = () => reject(new Error("A late catalog connection remained open"));
     });
     nextVersionConnection.close();
     await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.deleteDatabase("my-m3u-catalog");
+      const request = indexedDB.deleteDatabase("substream-catalog");
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
       request.onblocked = () => reject(new Error("Test database cleanup was blocked"));

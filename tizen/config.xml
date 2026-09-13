@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" version="0.1.0" viewmodes="fullscreen" id="http://local.mym3u/MyM3u">
-  <tizen:application id="M3uTvApp01.MyM3u" package="M3uTvApp01" required_version="3.0" />
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" version="0.1.0" viewmodes="fullscreen" id="http://local.substream/Substream">
+  <tizen:application id="Substream0.Substream" package="Substream0" required_version="3.0" />
+  <icon src="icon.png" />
   <content src="dist/index.html" />
-  <name>My M3U</name>
+  <name>Substream</name>
   <access origin="*" subdomains="true" />
   <tizen:privilege name="http://tizen.org/privilege/internet" />
   <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice" />

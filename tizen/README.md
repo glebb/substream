@@ -3,12 +3,12 @@
 This folder packages a prebuilt web app for Samsung Tizen TV.
 
 - Actual Tizen package artifact: `Debug/tizen.wgt`
-- Application ID: `M3uTvApp01.MyM3u`
-- Package ID: `M3uTvApp01`
+- Application ID: `Substream0.Substream`
+- Package ID: `Substream0`
 - Entry manifest: `config.xml`
 - Web payload: `dist/`
 
-The root-level `My M3U.wgt` file is not part of the normal workflow and has been removed. Use `Debug/tizen.wgt` as the package you install on the TV.
+The root-level `Substream.wgt` file is not part of the normal workflow and has been removed. Use `Debug/tizen.wgt` as the package you install on the TV.
 
 ## One-time setup
 
@@ -119,7 +119,7 @@ Optional checks:
 
 ```sh
 "$SDB" capability
-"$SDB" shell 0 vd_applist | grep -A4 -B1 'M3uTvApp01.MyM3u'
+"$SDB" shell 0 vd_applist | grep -A4 -B1 'Substream0.Substream'
 ```
 
 ### 2. Build the Tizen package
@@ -160,17 +160,17 @@ Use the TV remote to open the installed app manually after install completes.
 Use the application ID, not the package ID:
 
 ```sh
-"$TZ" uninstall --package-id=M3uTvApp01.MyM3u --serial="$TV_SERIAL"
+"$TZ" uninstall --package-id=Substream0.Substream --serial="$TV_SERIAL"
 ```
 
 Expected output includes:
 
 ```text
-app_id[M3uTvApp01.MyM3u] uninstall completed
+app_id[Substream0.Substream] uninstall completed
 cmd_ret:0
 ```
 
-Using `M3uTvApp01` for uninstall does not work on this TV.
+Using `Substream0` for uninstall does not work on this TV.
 
 ## VS Code workflow
 
@@ -228,7 +228,7 @@ The second option installs the app, but on this TV the final remote launch step 
 Open the integrated terminal in this folder and run:
 
 ```sh
-"$TZ" uninstall --package-id=M3uTvApp01.MyM3u --serial="$TV_SERIAL"
+"$TZ" uninstall --package-id=Substream0.Substream --serial="$TV_SERIAL"
 ```
 
 ## Previously observed behavior on this TV
@@ -236,7 +236,7 @@ Open the integrated terminal in this folder and run:
 These are deployment notes from earlier UE75MU8005 testing, not a substitute for the smoke check in [the project verification guide](../docs/verification.md). Revalidate them after SDK, firmware, or app changes.
 
 - Install works from the command line using `tz install`.
-- Uninstall works from the command line using the application ID `M3uTvApp01.MyM3u`.
+- Uninstall works from the command line using the application ID `Substream0.Substream`.
 - The app launches correctly when started manually from the TV UI.
 - Remote launch currently fails on this Samsung TV from both the older WASM extension path and direct CLI launch.
 - The first catalogue import can take time because hundreds of thousands of VOD records are persisted to TV IndexedDB. The Tizen path batches 2,000 records, stages a new catalogue generation before promotion, and maintains indexed browse/search views; the import screen reports safe connection, reader, parser, and write progress. Record the last visible stage/counters if it stops.

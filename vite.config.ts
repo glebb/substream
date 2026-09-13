@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
     // Values are only embedded by the explicit personal-TV command. Never use
     // VITE_ variables for them: that would expose them in every browser build.
     define: {
-      __MY_M3U_PACKAGE_DEFAULTS__: JSON.stringify(packageDefaults),
+      __SUBSTREAM_PACKAGE_DEFAULTS__: JSON.stringify(packageDefaults),
     },
     // UE75MU8005 is a 2017 TV running Tizen 3.0 (Chromium M47), which has
     // no ES-module support. Emit a SystemJS-compatible legacy bundle and
@@ -37,7 +37,7 @@ export default defineConfig(({ mode }) => {
           configure: (proxy) => {
             proxy.on("proxyReq", (request) => {
               request.setHeader("Api-Key", apiKey);
-              request.setHeader("User-Agent", "my-m3u v0.1.0");
+              request.setHeader("User-Agent", "substream v0.1.0");
             });
           },
           rewrite: (path) => path.replace(/^\/opensubtitles-api/, ""),

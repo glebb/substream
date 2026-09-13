@@ -29,8 +29,8 @@ describe("playback progress persistence", () => {
     savePlaybackProgress({ ...historyItem("title-a", 20), providerId: "42", providerKind: "movie", providerExtension: "mkv" }, storage);
 
     expect(loadPlaybackHistory(storage)[0]?.updatedAt).toBe(20);
-    expect(storage.getItem("my-m3u.playback-progress")).not.toContain("streamUrl");
-    expect(storage.getItem("my-m3u.playback-progress")).not.toContain("http");
+    expect(storage.getItem("substream.playback-progress")).not.toContain("streamUrl");
+    expect(storage.getItem("substream.playback-progress")).not.toContain("http");
     removePlaybackProgress("title-a", storage);
     expect(loadPlaybackHistory(storage)).toEqual([]);
   });

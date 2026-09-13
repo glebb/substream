@@ -1,4 +1,4 @@
-const STORAGE_KEY = "my-m3u.playback-progress";
+const STORAGE_KEY = "substream.playback-progress";
 const MAX_SAVED_TITLES = 500;
 const MAX_TITLE_ID_LENGTH = 256;
 

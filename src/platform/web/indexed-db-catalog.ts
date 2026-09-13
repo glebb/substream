@@ -3,7 +3,7 @@ import type { M3uEntry } from "../../core/m3u/types.ts";
 import type { CatalogImportSummary, UnknownCatalogEntry, VodCatalogItem, VodContentType } from "../../core/catalog/index.ts";
 import { normalizeTitle, searchTerms } from "../../core/catalog/index.ts";
 
-const DATABASE_NAME = "my-m3u-catalog";
+const DATABASE_NAME = "substream-catalog";
 const DATABASE_VERSION = 7;
 const LEGACY_ITEMS_STORE = "vod-items";
 const LEGACY_UNKNOWN_STORE = "unknown-entries";

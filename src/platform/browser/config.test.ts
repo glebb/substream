@@ -27,8 +27,8 @@ describe("browser configuration storage", () => {
 
   it("prefers locally saved configuration over bundled defaults", () => {
     const values = new Map([
-      ["my-m3u.playlist-url", "https://local.example.invalid/playlist"],
-      ["my-m3u.opensubtitles-api-key", "local-test-key"],
+      ["substream.playlist-url", "https://local.example.invalid/playlist"],
+      ["substream.opensubtitles-api-key", "local-test-key"],
     ]);
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
@@ -72,8 +72,8 @@ describe("browser configuration storage", () => {
     clearSavedPlaylistUrl();
     clearSavedOpenSubtitlesSettings();
     clearCatalogClearedMarker();
-    expect(values.has("my-m3u.playlist-url")).toBe(false);
-    expect(values.has("my-m3u.opensubtitles-api-key")).toBe(false);
+    expect(values.has("substream.playlist-url")).toBe(false);
+    expect(values.has("substream.opensubtitles-api-key")).toBe(false);
     expect(wasCatalogCleared()).toBe(false);
     expect(values.get("unrelated.preference")).toBe("keep");
   });

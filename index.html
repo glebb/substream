@@ -3,10 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My M3U</title>
+    <title>Substream</title>
+    <style>
+      html, body, #root { background: #050b19; height: 100%; margin: 0; }
+      #launch-splash { align-items: center; background: linear-gradient(rgba(4, 10, 25, .18), rgba(4, 10, 25, .25)), url("./branding/substream-splash.png") center / cover no-repeat; box-sizing: border-box; color: #f8f4ed; display: flex; flex-direction: column; font-family: Arial, sans-serif; height: 100%; justify-content: center; text-align: center; }
+      #launch-splash img { border-radius: 18%; box-shadow: 0 14px 46px rgba(0, 0, 0, .48); height: 126px; margin-bottom: 24px; width: 126px; }
+      #launch-splash strong { font-size: 46px; font-weight: 700; letter-spacing: .02em; }
+      #launch-splash span { color: #c9efff; font-size: 18px; letter-spacing: .08em; margin-top: 12px; text-transform: uppercase; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="launch-splash" role="status" aria-label="Loading Substream">
+        <img src="./branding/substream-icon.png" alt="" />
+        <strong>Substream</strong>
+        <span>Subtitles for your stream</span>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
