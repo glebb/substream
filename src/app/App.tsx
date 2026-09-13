@@ -10,7 +10,9 @@ import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avp
 import { loadOpenSubtitlesApiKey, saveOpenSubtitlesApiKey } from "../platform/browser/opensubtitles-config.ts";
 import { OpenSubtitlesClient, OpenSubtitlesRequestError, type SubtitleResult } from "../platform/opensubtitles/client.ts";
 import { rankSubtitleResults } from "../core/subtitles/rank.ts";
+import { adjustSubtitleOffsetSeconds } from "../core/subtitles/timing.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
+import { loadSubtitleTimingOffset, saveSubtitleTimingOffset } from "../platform/browser/subtitle-timing-config.ts";
 import { BrowseRequestGate, browsePageCount, sortAndPageBrowseItems } from "./browse.ts";
 import "./app.css";
 
@@ -29,7 +31,13 @@ function formatPlaybackTime(seconds: number): string {
     : `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 }
 
+function formatSubtitleTimingOffset(seconds: number): string {
+  if (seconds === 0) return "0.0 s (in sync)";
+  return `${seconds > 0 ? "+" : ""}${seconds.toFixed(1)} s (${seconds > 0 ? "later" : "earlier"})`;
+}
+
 export function App() {
+  const subtitleTimingAvailable = isTizenAvPlayAvailable();
   const [state, setState] = useState<ScreenState>("loading");
   const [startupStatus, setStartupStatus] = useState("Opening catalogue…");
   const [playlistUrl, setPlaylistUrl] = useState(loadPlaylistUrl);
@@ -38,7 +46,7 @@ export function App() {
   const [activeGroup, setActiveGroup] = useState<VodGroup | null>(null);
   const [titles, setTitles] = useState<VodCatalogItem[]>([]);
   const [page, setPage] = useState(0);
-  const [sort, setSort] = useState<VodSort>("title");
+  const [sort, setSort] = useState<VodSort>("playlist");
   const [browseMode, setBrowseMode] = useState<BrowseMode>("local");
   const [browseCount, setBrowseCount] = useState(0);
   const [focusIndex, setFocusIndex] = useState(0);
@@ -56,6 +64,8 @@ export function App() {
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[]>([]);
   const [subtitleStatus, setSubtitleStatus] = useState("");
   const [visibleSubtitle, setVisibleSubtitle] = useState("");
+  const [isSubtitleAttached, setIsSubtitleAttached] = useState(false);
+  const [subtitleTimingOffsetSeconds, setSubtitleTimingOffsetSeconds] = useState(0);
   const [subtitleFontSize, setSubtitleFontSize] = useState(2.3);
   const [catalogStatus, setCatalogStatus] = useState("");
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -75,6 +85,10 @@ export function App() {
   const playerAspectButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSmallerButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleLargerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subtitleTimingMinusTwoButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subtitleTimingMinusHalfButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subtitleTimingPlusHalfButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subtitleTimingPlusTwoButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleKeyInputRef = useRef<HTMLInputElement | null>(null);
   const findSubtitlesButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSettingsButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -109,6 +123,12 @@ export function App() {
     playerAspectButtonRef.current,
     subtitleSmallerButtonRef.current,
     subtitleLargerButtonRef.current,
+    ...(subtitleTimingAvailable ? [
+      subtitleTimingMinusTwoButtonRef.current,
+      subtitleTimingMinusHalfButtonRef.current,
+      subtitleTimingPlusHalfButtonRef.current,
+      subtitleTimingPlusTwoButtonRef.current,
+    ] : []),
     (showSubtitleSettings || !openSubtitlesApiKey.trim()) ? subtitleKeyInputRef.current : null,
     findSubtitlesButtonRef.current,
     showSubtitleSettings ? subtitleSaveButtonRef.current : subtitleSettingsButtonRef.current,
@@ -219,12 +239,14 @@ export function App() {
     if (!title.providerSeriesId) {
       browseRequestRef.current.invalidate();
       setPlayerFocusIndex(0);
-      setPlayerFullscreen(false);
+      setPlayerFullscreen(true);
       setVideoDisplayMode("auto");
       setPlaybackStatus("Loading…");
       setPlaybackProgress(null);
       setIsPlaybackPaused(false);
       setVisibleSubtitle("");
+      setIsSubtitleAttached(false);
+      setSubtitleTimingOffsetSeconds(loadSubtitleTimingOffset(title.id));
       setSubtitleFontSize(2.3);
       setSelectedTitle(title);
       return;
@@ -471,11 +493,15 @@ export function App() {
     setSubtitleStatus("");
     if (!selectedTitle) return;
     setIsSkipFeedbackVisible(false);
+    setIsSubtitleAttached(false);
+    const initialSubtitleOffset = loadSubtitleTimingOffset(selectedTitle.id);
+    setSubtitleTimingOffsetSeconds(initialSubtitleOffset);
     const player = isTizenAvPlayAvailable() && avPlayContainerRef.current
       ? new TizenAvPlayPlayer(avPlayContainerRef.current, setVisibleSubtitle)
       : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
     if (!player) return;
     playerRef.current = player;
+    player.setSubtitleTimingOffset?.(initialSubtitleOffset);
     player.setEventHandlers({
       onStateChange: (playbackState) => {
         const status: Record<typeof playbackState, string> = {
@@ -615,6 +641,7 @@ export function App() {
       setSubtitleStatus(attachment.enabled
         ? "Subtitle enabled: " + subtitle.language.toUpperCase()
         : "Subtitle downloaded, but the TV could not attach it. " + (attachment.reason ?? "Try another subtitle."));
+      setIsSubtitleAttached(attachment.enabled);
       if (attachment.enabled) {
         setPlayerFocusIndex(1);
         window.requestAnimationFrame(() => playerStageRef.current?.scrollIntoView({ block: "start", inline: "nearest" }));
@@ -647,6 +674,16 @@ export function App() {
       }, 1_800);
     }
     playerRef.current?.skip(seconds);
+  };
+
+  const adjustSubtitleTiming = (deltaSeconds: number) => {
+    if (!selectedTitle) return;
+    const offset = saveSubtitleTimingOffset(
+      selectedTitle.id,
+      adjustSubtitleOffsetSeconds(subtitleTimingOffsetSeconds, deltaSeconds),
+    );
+    setSubtitleTimingOffsetSeconds(offset);
+    playerRef.current?.setSubtitleTimingOffset?.(offset);
   };
 
   const cycleVideoDisplayMode = () => {
@@ -757,7 +794,7 @@ export function App() {
 
   const hasSubtitleKey = Boolean(openSubtitlesApiKey.trim());
   const subtitleKeyVisible = showSubtitleSettings || !hasSubtitleKey;
-  const findSubtitleFocusIndex = subtitleKeyVisible ? 9 : 8;
+  const findSubtitleFocusIndex = 8 + (subtitleTimingAvailable ? 4 : 0) + (subtitleKeyVisible ? 1 : 0);
   const subtitleSettingsFocusIndex = findSubtitleFocusIndex + 1;
   const firstSubtitleFocusIndex = subtitleSettingsFocusIndex + 1 + (subtitleKeyVisible && hasSubtitleKey ? 1 : 0);
 
@@ -802,6 +839,7 @@ export function App() {
             : <video className="player" autoPlay ref={videoRef} />}
           {playerFullscreen && isPlaybackBuffering && <div className="buffering-overlay" role="status" aria-live="polite">Buffering…</div>}
           {visibleSubtitle && <p className="subtitle-overlay" aria-live="off" style={{ fontSize: subtitleFontSize + "rem" }}>{visibleSubtitle}</p>}
+          {subtitleTimingAvailable && isSubtitleAttached && <div className="subtitle-offset-overlay" aria-live="polite">Subtitle offset {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</div>}
         </div>
         {playbackProgress && (!playerFullscreen || playbackStatus === "Paused" || isSkipFeedbackVisible) && <div className="playback-progress" aria-label="Playback progress">
           <span>{formatPlaybackTime(playbackProgress.currentTimeSeconds)}</span>
@@ -820,6 +858,16 @@ export function App() {
         </div>
         <section className="subtitles">
           <h3>Subtitles</h3>
+          {subtitleTimingAvailable && <div className="subtitle-timing" aria-label="Subtitle timing controls">
+            <p><strong>Current offset: {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</strong></p>
+            <p className="hint">Positive values show subtitles later; negative values show them earlier. Saved for this title on this device.</p>
+            <div className="subtitle-timing-actions">
+              <button className={playerFocusIndex === 8 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-2)} ref={subtitleTimingMinusTwoButtonRef}>−2 s</button>
+              <button className={playerFocusIndex === 9 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-0.5)} ref={subtitleTimingMinusHalfButtonRef}>−0.5 s</button>
+              <button className={playerFocusIndex === 10 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(0.5)} ref={subtitleTimingPlusHalfButtonRef}>+0.5 s</button>
+              <button className={playerFocusIndex === 11 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(2)} ref={subtitleTimingPlusTwoButtonRef}>+2 s</button>
+            </div>
+          </div>}
           {subtitleKeyVisible && <>
             <label htmlFor="opensubtitles-api-key">OpenSubtitles API key</label>
             <div className="subtitle-actions">

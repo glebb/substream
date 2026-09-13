@@ -31,4 +31,6 @@ export interface MediaPlayer {
   resize(): void;
   destroy(): void;
   setSubtitle(subtitleText: string, label: string, language: string): Promise<SubtitleAttachment>;
+  /** Available when subtitles are rendered by the app overlay rather than a native browser track. */
+  setSubtitleTimingOffset?(offsetSeconds: number): void;
 }

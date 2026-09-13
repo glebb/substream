@@ -195,6 +195,33 @@ describe("TizenAvPlayPlayer", () => {
     expect(jumps).toHaveLength(1);
   });
 
+  it("shifts app-rendered cue windows for signed subtitle offsets and updates immediately", async () => {
+    let listener: { oncurrentplaytime?(milliseconds: number): void } | undefined;
+    const playerApi = {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+      setListener: vi.fn((next: NonNullable<typeof listener>) => { listener = next; }),
+    };
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: playerApi };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const onSubtitleCue = vi.fn();
+    const player = new TizenAvPlayPlayer(container, onSubtitleCue);
+    player.load("https://example.invalid/stream.mkv");
+    player.setSubtitleTimingOffset(1);
+    listener?.oncurrentplaytime?.(1_500);
+    await player.setSubtitle("1\n00:00:01,000 --> 00:00:02,000\nHello", "English", "en");
+
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+    listener?.oncurrentplaytime?.(2_500);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("Hello");
+    player.setSubtitleTimingOffset(-0.5);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+    listener?.oncurrentplaytime?.(750);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("Hello");
+    player.destroy();
+  });
+
   it("reports synchronous open and prepare failures instead of throwing", () => {
     const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
     const states: string[] = [];

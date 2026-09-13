@@ -1,5 +1,6 @@
 import type { MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { parseSrtCues, type SubtitleCue } from "../../core/subtitles/srt-cues.ts";
+import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
 
 interface AvPlayApi {
   open(url: string): void;
@@ -44,6 +45,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private displayMode: VideoDisplayMode = "auto";
   private subtitleCues: SubtitleCue[] = [];
   private visibleCue = "";
+  private subtitleOffsetMilliseconds = 0;
+  private currentPlayheadMilliseconds = 0;
   private generation = 0;
   private paused = false;
   private jumpInFlight = false;
@@ -78,6 +81,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       player.setListener?.({
         oncurrentplaytime: (milliseconds) => {
           if (!this.isCurrent(generation)) return;
+          this.currentPlayheadMilliseconds = milliseconds;
           this.updateSubtitle(milliseconds);
           this.emitProgress(milliseconds, player);
         },
@@ -202,13 +206,20 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.subtitleCues = parseSrtCues(subtitleText);
     this.visibleCue = "";
     this.onSubtitleCue("");
+    this.updateSubtitle(this.currentPlayheadMilliseconds);
     return this.subtitleCues.length > 0
       ? { enabled: true }
       : { enabled: false, reason: "The selected subtitle has no usable SRT cues." };
   }
 
+  setSubtitleTimingOffset(offsetSeconds: number): void {
+    this.subtitleOffsetMilliseconds = normalizeSubtitleOffsetSeconds(offsetSeconds) * 1_000;
+    this.updateSubtitle(this.currentPlayheadMilliseconds);
+  }
+
   private updateSubtitle(milliseconds: number): void {
-    const cue = this.subtitleCues.find((candidate) => milliseconds >= candidate.startMs && milliseconds < candidate.endMs);
+    const cue = this.subtitleCues.find((candidate) => milliseconds >= candidate.startMs + this.subtitleOffsetMilliseconds
+      && milliseconds < candidate.endMs + this.subtitleOffsetMilliseconds);
     const text = cue?.text ?? "";
     if (text === this.visibleCue) return;
     this.visibleCue = text;
@@ -271,6 +282,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.onSubtitleCue("");
     this.subtitleCues = [];
     this.visibleCue = "";
+    this.subtitleOffsetMilliseconds = 0;
+    this.currentPlayheadMilliseconds = 0;
     this.paused = false;
     if (!this.opened) return;
     const player = avplay();

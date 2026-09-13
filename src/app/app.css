@@ -38,6 +38,7 @@ button:disabled { cursor: default; opacity: .45; }
 /* Chromium 47 does not support aspect-ratio; give AVPlay a real display rect. */
 .tizen-player { height: 60vh; max-height: 720px; min-height: 22rem; }
 .subtitle-overlay { background: rgba(0, 0, 0, .78); bottom: 6%; color: #fff; font-size: clamp(1.1rem, 2.4vw, 2.3rem); font-weight: 700; left: 8%; line-height: 1.35; margin: 0; padding: .3em .55em; pointer-events: none; position: absolute; right: 8%; text-align: center; white-space: pre-line; z-index: 3; }
+.subtitle-offset-overlay { background: rgba(0, 0, 0, .72); border-radius: .35rem; color: #fff; font-size: .85rem; font-weight: 700; left: 1rem; padding: .45rem .65rem; pointer-events: none; position: absolute; top: 1rem; z-index: 4; }
 .buffering-overlay { background: rgba(0, 0, 0, .76); border: 1px solid rgba(219, 233, 255, .35); border-radius: 999px; color: #fff; font-size: 1.1rem; font-weight: 750; left: 50%; padding: .75rem 1.25rem; pointer-events: none; position: fixed; top: 50%; transform: translate(-50%, -50%); z-index: 5; }
 .player-controls { align-items: center; display: flex; flex-wrap: wrap; gap: .8rem; margin-top: 1rem; }
 .playback-status { background: #1c273a; border: 1px solid #405a7d; border-radius: 999px; color: #dbe9ff; font-size: .9rem; font-weight: 800; margin-left: .8rem; min-width: 7rem; padding: .65rem 1rem; text-align: center; }
@@ -52,6 +53,10 @@ button:disabled { cursor: default; opacity: .45; }
 .subtitle-actions { display: flex; gap: .75rem; }
 .subtitle-actions input { flex: 1; }
 .subtitle-actions button { white-space: nowrap; }
+.subtitle-timing { margin-top: 1.25rem; }
+.subtitle-timing p { margin: .3rem 0; }
+.subtitle-timing-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: .65rem; }
+.subtitle-timing-actions button { min-width: 6rem; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin: .5rem 0 1rem; }
 .setup-recovery { max-width: 720px; }
 .subtitle-results { display: grid; gap: .5rem; margin-top: 1rem; }

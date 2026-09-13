@@ -22,7 +22,7 @@ This roadmap describes the next user-facing improvements for the Samsung Tizen V
 - [ ] Add a subtitle-language preference in settings. Default search/ranking order: Finnish, then English.
 - [x] Filter subtitle results to Finnish and English and rank by exact episode/movie match, language preference, release-name similarity, and download count.
 - [ ] Remember the last chosen subtitle language and font size per device.
-- [ ] Add subtitle timing controls for the app-rendered Tizen overlay: quick ±0.5 s and ±2 s adjustments, an on-screen current-offset indicator, and a per-title remembered offset.
+- [x] Add subtitle timing controls for the app-rendered Tizen overlay: quick ±0.5 s and ±2 s adjustments, an on-screen current-offset indicator, and a per-title remembered offset.
 - [ ] Keep normalizing provider formatting tags such as ASS/SSA overrides and inline HTML before rendering text.
 
 ## Phase 3: Catalogue discovery and browsing
