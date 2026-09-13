@@ -5,7 +5,7 @@ import { loadPlaylistUrl, savePlaylistUrl } from "../platform/browser/playlist-c
 import { isBackKey, normalizedRemoteKey, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
 import { IndexedDbCatalogOpenError, IndexedDbCatalogStore, type VodGroup, type VodSort } from "../platform/web/indexed-db-catalog.ts";
 import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
-import type { MediaPlayer, VideoDisplayMode } from "../platform/media-player.ts";
+import type { MediaPlayer, PlaybackProgress, VideoDisplayMode } from "../platform/media-player.ts";
 import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avplay-player.ts";
 import { loadOpenSubtitlesApiKey, saveOpenSubtitlesApiKey } from "../platform/browser/opensubtitles-config.ts";
 import { OpenSubtitlesClient, OpenSubtitlesRequestError, type SubtitleResult } from "../platform/opensubtitles/client.ts";
@@ -17,6 +17,16 @@ type ScreenState = "loading" | "setup" | "ready" | "importing" | "error" | "stor
 const PAGE_SIZE = 100;
 const OPEN_SUBTITLES_BASE_URL = import.meta.env.DEV ? "/opensubtitles-api/api/v1" : undefined;
 type BrowseMode = "local" | "provider" | "episodes";
+
+function formatPlaybackTime(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safeSeconds / 3_600);
+  const minutes = Math.floor((safeSeconds % 3_600) / 60);
+  const remainingSeconds = safeSeconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
+    : `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
 
 export function App() {
   const [state, setState] = useState<ScreenState>("loading");
@@ -34,7 +44,10 @@ export function App() {
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [videoDisplayMode, setVideoDisplayMode] = useState<VideoDisplayMode>("auto");
   const [playbackStatus, setPlaybackStatus] = useState("Loading…");
+  const [playbackProgress, setPlaybackProgress] = useState<PlaybackProgress | null>(null);
   const [isPlaybackPaused, setIsPlaybackPaused] = useState(false);
+  const [isPlaybackBuffering, setIsPlaybackBuffering] = useState(false);
+  const [isSkipFeedbackVisible, setIsSkipFeedbackVisible] = useState(false);
   const [selectedTitle, setSelectedTitle] = useState<VodCatalogItem | null>(null);
   const [openSubtitlesApiKey, setOpenSubtitlesApiKey] = useState(loadOpenSubtitlesApiKey);
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[]>([]);
@@ -64,6 +77,7 @@ export function App() {
   const browseRequestRef = useRef(new BrowseRequestGate());
   const remoteBrowseRef = useRef<{ key: string; items: VodCatalogItem[] } | null>(null);
   const playerRef = useRef<MediaPlayer | null>(null);
+  const skipFeedbackTimerRef = useRef<number | null>(null);
   const avPlayContainerRef = useRef<HTMLObjectElement | null>(null);
   const playerStageRef = useRef<HTMLDivElement | null>(null);
   const openSubtitlesApiKeyRef = useRef<HTMLInputElement | null>(null);
@@ -185,6 +199,7 @@ export function App() {
       setPlayerFullscreen(false);
       setVideoDisplayMode("auto");
       setPlaybackStatus("Loading…");
+      setPlaybackProgress(null);
       setIsPlaybackPaused(false);
       setVisibleSubtitle("");
       setSubtitleFontSize(2.3);
@@ -429,6 +444,7 @@ export function App() {
     setSubtitleResults([]);
     setSubtitleStatus("");
     if (!selectedTitle) return;
+    setIsSkipFeedbackVisible(false);
     const player = isTizenAvPlayAvailable() && avPlayContainerRef.current
       ? new TizenAvPlayPlayer(avPlayContainerRef.current, setVisibleSubtitle)
       : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
@@ -445,12 +461,18 @@ export function App() {
           error: "Playback failed. Try restarting the stream.",
         };
         setPlaybackStatus(status[playbackState]);
+        setIsPlaybackBuffering(playbackState === "buffering");
         setIsPlaybackPaused(playbackState === "paused" || playbackState === "ended" || playbackState === "error");
       },
+      onProgress: setPlaybackProgress,
     });
     player.load(selectedTitle.streamUrl);
     return () => {
       subtitleRequestRef.current += 1;
+      if (skipFeedbackTimerRef.current !== null) {
+        window.clearTimeout(skipFeedbackTimerRef.current);
+        skipFeedbackTimerRef.current = null;
+      }
       playerRef.current = null;
       player.setEventHandlers(null);
       player.destroy();
@@ -554,6 +576,14 @@ export function App() {
   };
 
   const skipVideo = (seconds: number) => {
+    if (playerFullscreen) {
+      setIsSkipFeedbackVisible(true);
+      if (skipFeedbackTimerRef.current !== null) window.clearTimeout(skipFeedbackTimerRef.current);
+      skipFeedbackTimerRef.current = window.setTimeout(() => {
+        skipFeedbackTimerRef.current = null;
+        setIsSkipFeedbackVisible(false);
+      }, 1_800);
+    }
     playerRef.current?.skip(seconds);
   };
 
@@ -664,8 +694,14 @@ export function App() {
           {isTizenAvPlayAvailable()
             ? <object className="player tizen-player" ref={avPlayContainerRef} type="application/avplayer" aria-label="Video player" />
             : <video className="player" autoPlay ref={videoRef} />}
+          {playerFullscreen && isPlaybackBuffering && <div className="buffering-overlay" role="status" aria-live="polite">Buffering…</div>}
           {visibleSubtitle && <p className="subtitle-overlay" aria-live="off" style={{ fontSize: subtitleFontSize + "rem" }}>{visibleSubtitle}</p>}
         </div>
+        {playbackProgress && (!playerFullscreen || playbackStatus === "Paused" || isSkipFeedbackVisible) && <div className="playback-progress" aria-label="Playback progress">
+          <span>{formatPlaybackTime(playbackProgress.currentTimeSeconds)}</span>
+          <progress max={playbackProgress.durationSeconds} value={Math.min(playbackProgress.currentTimeSeconds, playbackProgress.durationSeconds)} aria-label="Video progress" />
+          <span>{formatPlaybackTime(playbackProgress.durationSeconds)}</span>
+        </div>}
         <div className="player-controls" aria-label="Playback controls">
           <button className={playerFocusIndex === 1 ? "remote-focused" : ""} type="button" onClick={playVideo} ref={playerPlayButtonRef}>Play</button>
           <button className={playerFocusIndex === 2 ? "remote-focused" : ""} type="button" onClick={pauseVideo} ref={playerPauseButtonRef}>Pause</button>

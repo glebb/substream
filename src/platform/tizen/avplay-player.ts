@@ -10,6 +10,8 @@ interface AvPlayApi {
   jumpBackward(milliseconds: number): void;
   stop(): void;
   close(): void;
+  getDuration?(): number;
+  setBufferingParam?(bufferingType: "PLAYER_BUFFER_FOR_PLAY" | "PLAYER_BUFFER_FOR_RESUME", parameter: "PLAYER_BUFFER_SIZE_IN_SECOND", value: number): void;
   setDisplayRect(left: number, top: number, width: number, height: number): void;
   setDisplayMethod(mode: "PLAYER_DISPLAY_MODE_LETTER_BOX" | "PLAYER_DISPLAY_MODE_FULL_SCREEN" | "PLAYER_DISPLAY_MODE_AUTO_ASPECT_RATIO"): void;
   setListener?(listener: {
@@ -68,11 +70,14 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       player.open(streamUrl);
       this.opened = true;
       this.paused = false;
+      this.configureBuffering(player);
       this.setDisplayRect(player);
       this.applyDisplayMode(player);
       player.setListener?.({
         oncurrentplaytime: (milliseconds) => {
-          if (this.isCurrent(generation)) this.updateSubtitle(milliseconds);
+          if (!this.isCurrent(generation)) return;
+          this.updateSubtitle(milliseconds);
+          this.emitProgress(milliseconds, player);
         },
         onbufferingstart: () => { if (this.isCurrent(generation)) this.emit("buffering"); },
         onbufferingcomplete: () => { if (this.isCurrent(generation) && !this.paused) this.emit("playing"); },
@@ -183,6 +188,15 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     player.setDisplayMethod(modeByName[this.displayMode]);
   }
 
+  private configureBuffering(player: AvPlayApi): void {
+    if (!player.setBufferingParam) return;
+    // AVPlay accepts these settings only in IDLE, after open() and before prepareAsync().
+    // Keep the initial threshold modest for Tizen TV memory, while allowing a deeper
+    // reserve if playback stalls and AVPlay needs to refill.
+    try { player.setBufferingParam("PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 5); } catch { /* Older AVPlay versions may not support this setting. */ }
+    try { player.setBufferingParam("PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 15); } catch { /* Buffer tuning must not prevent playback. */ }
+  }
+
   async setSubtitle(subtitleText: string, _label: string, _language: string): Promise<SubtitleAttachment> {
     if (!this.opened) return { enabled: false, reason: "AVPlay is not ready." };
     this.subtitleCues = parseSrtCues(subtitleText);
@@ -207,6 +221,20 @@ export class TizenAvPlayPlayer implements MediaPlayer {
 
   private emit(state: PlaybackState): void {
     this.eventHandlers?.onStateChange(state);
+  }
+
+  private emitProgress(currentTimeMilliseconds: number, player: AvPlayApi): void {
+    if (!Number.isFinite(currentTimeMilliseconds) || !player.getDuration) return;
+    try {
+      const durationMilliseconds = player.getDuration();
+      if (!Number.isFinite(durationMilliseconds) || durationMilliseconds <= 0) return;
+      this.eventHandlers?.onProgress?.({
+        currentTimeSeconds: Math.max(0, currentTimeMilliseconds / 1_000),
+        durationSeconds: durationMilliseconds / 1_000,
+      });
+    } catch {
+      // Duration may be unavailable while AVPlay is preparing the stream.
+    }
   }
 
   private fail(generation: number): void {

@@ -23,6 +23,7 @@ describe("TizenAvPlayPlayer", () => {
     const close = vi.fn();
     const setDisplayRect = vi.fn();
     const setDisplayMethod = vi.fn();
+    const setBufferingParam = vi.fn();
     let listener: {
       oncurrentplaytime?(milliseconds: number): void;
       onbufferingstart?(): void;
@@ -30,13 +31,15 @@ describe("TizenAvPlayPlayer", () => {
       onstreamcompleted?(): void;
     } | undefined;
     const setListener = vi.fn((nextListener: NonNullable<typeof listener>) => { listener = nextListener; });
-    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: { open, prepareAsync, play, pause, jumpForward, jumpBackward, stop, close, setDisplayRect, setDisplayMethod, setListener } };
+    const getDuration = vi.fn(() => 125_000);
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: { open, prepareAsync, play, pause, jumpForward, jumpBackward, stop, close, getDuration, setDisplayRect, setDisplayMethod, setBufferingParam, setListener } };
     const container = { getBoundingClientRect: () => ({ left: 10.2, top: 20.7, width: 1280, height: 720 }) } as unknown as HTMLElement;
 
     const onSubtitleCue = vi.fn();
+    const progress: Array<{ currentTimeSeconds: number; durationSeconds: number }> = [];
     const player = new TizenAvPlayPlayer(container, onSubtitleCue);
     const states: string[] = [];
-    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.setEventHandlers({ onStateChange: (state) => states.push(state), onProgress: (value) => progress.push(value) });
     expect(isTizenAvPlayAvailable()).toBe(true);
     player.load("https://example.invalid/stream.mkv");
     player.pause();
@@ -49,6 +52,10 @@ describe("TizenAvPlayPlayer", () => {
     player.skip(Number.NaN);
     player.skip(Number.POSITIVE_INFINITY);
     expect(open).toHaveBeenCalledWith("https://example.invalid/stream.mkv");
+    expect(setBufferingParam).toHaveBeenNthCalledWith(1, "PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 5);
+    expect(setBufferingParam).toHaveBeenNthCalledWith(2, "PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 15);
+    expect(open.mock.invocationCallOrder[0]).toBeLessThan(setBufferingParam.mock.invocationCallOrder[0]!);
+    expect(setBufferingParam.mock.invocationCallOrder[1]).toBeLessThan(prepareAsync.mock.invocationCallOrder[0]!);
     expect(setDisplayRect).toHaveBeenCalledWith(10, 21, 1280, 720);
     expect(setDisplayMethod).toHaveBeenNthCalledWith(1, "PLAYER_DISPLAY_MODE_AUTO_ASPECT_RATIO");
     expect(setDisplayMethod).toHaveBeenLastCalledWith("PLAYER_DISPLAY_MODE_LETTER_BOX");
@@ -66,6 +73,10 @@ describe("TizenAvPlayPlayer", () => {
     listener?.onstreamcompleted?.();
     expect(onSubtitleCue).toHaveBeenCalledWith("Hello");
     expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+    expect(progress).toEqual([
+      { currentTimeSeconds: 1.5, durationSeconds: 125 },
+      { currentTimeSeconds: 2.5, durationSeconds: 125 },
+    ]);
     expect(play).toHaveBeenCalledTimes(3);
     expect(states).toContain("loading");
     expect(states).toContain("buffering");
@@ -137,6 +148,27 @@ describe("TizenAvPlayPlayer", () => {
     expect(() => failedPrepare.load("https://private.example/signed")).not.toThrow();
     expect(prepareStates).toEqual(["loading", "error"]);
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("continues playback when AVPlay does not support buffer tuning", () => {
+    const prepareAsync = vi.fn((success: () => void) => success());
+    const play = vi.fn();
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync, play, pause: vi.fn(), jumpForward: vi.fn(), jumpBackward: vi.fn(),
+      stop: vi.fn(), close: vi.fn(), setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+      setBufferingParam: vi.fn(() => { throw new Error("unsupported"); }),
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const states: string[] = [];
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    expect(() => player.load("https://example.invalid/stream.mkv")).not.toThrow();
+    expect(prepareAsync).toHaveBeenCalledOnce();
+    expect(play).toHaveBeenCalledOnce();
+    expect(states).toContain("playing");
+    expect(states).not.toContain("error");
+    player.destroy();
   });
 
 });

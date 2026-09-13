@@ -14,6 +14,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
       ["pause", () => { if (!this.video.ended) this.emit("paused"); }],
       ["ended", () => this.emit("ended")],
       ["error", () => this.emit("error")],
+      ["timeupdate", () => this.emitProgress()],
+      ["durationchange", () => this.emitProgress()],
     ];
     for (const [type, listener] of this.eventListeners) this.video.addEventListener(type, listener);
   }
@@ -82,6 +84,13 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   private emit(state: PlaybackState): void {
     this.eventHandlers?.onStateChange(state);
+  }
+
+  private emitProgress(): void {
+    const durationSeconds = this.video.duration;
+    const currentTimeSeconds = this.video.currentTime;
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || !Number.isFinite(currentTimeSeconds)) return;
+    this.eventHandlers?.onProgress?.({ currentTimeSeconds, durationSeconds });
   }
 
   async setSubtitle(subtitleText: string, label: string, language: string): Promise<SubtitleAttachment> {

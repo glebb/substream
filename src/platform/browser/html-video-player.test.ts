@@ -39,6 +39,21 @@ describe("HtmlVideoPlayer", () => {
     player.destroy();
   });
 
+  it("reports elapsed time and duration when browser media metadata is available", () => {
+    const { video, dispatch } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    const progress: Array<{ currentTimeSeconds: number; durationSeconds: number }> = [];
+    player.setEventHandlers({ onStateChange: () => undefined, onProgress: (value) => progress.push(value) });
+
+    video.currentTime = 42;
+    dispatch("timeupdate");
+    (video as unknown as { duration: number }).duration = Number.POSITIVE_INFINITY;
+    dispatch("durationchange");
+
+    expect(progress).toEqual([{ currentTimeSeconds: 42, durationSeconds: 100 }]);
+    player.destroy();
+  });
+
   it("contains synchronous load failures and reports a playback error", () => {
     const { video } = fakeVideo(() => { throw new Error("private signed stream URL"); });
     const player = new HtmlVideoPlayer(video);

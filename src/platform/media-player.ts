@@ -7,8 +7,14 @@ export interface SubtitleAttachment {
 export type VideoDisplayMode = "auto" | "fit" | "fill";
 export type PlaybackState = "loading" | "buffering" | "playing" | "paused" | "ended" | "error";
 
+export interface PlaybackProgress {
+  currentTimeSeconds: number;
+  durationSeconds: number;
+}
+
 export interface MediaPlayerEventHandlers {
   onStateChange(state: PlaybackState): void;
+  onProgress?(progress: PlaybackProgress): void;
 }
 
 export interface MediaPlayer {
