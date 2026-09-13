@@ -1,23 +1,40 @@
-import type { MediaPlayer, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import type { MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { srtToWebVtt } from "../../core/subtitles/srt-to-vtt.ts";
 
 export class HtmlVideoPlayer implements MediaPlayer {
   private subtitleObjectUrl: string | undefined;
+  private eventHandlers: MediaPlayerEventHandlers | null = null;
+  private readonly eventListeners: Array<[string, EventListener]>;
 
-  constructor(private readonly video: HTMLVideoElement) {}
+  constructor(private readonly video: HTMLVideoElement) {
+    this.eventListeners = [
+      ["loadstart", () => this.emit("loading")],
+      ["playing", () => this.emit("playing")],
+      ["waiting", () => this.emit("buffering")],
+      ["pause", () => { if (!this.video.ended) this.emit("paused"); }],
+      ["ended", () => this.emit("ended")],
+      ["error", () => this.emit("error")],
+    ];
+    for (const [type, listener] of this.eventListeners) this.video.addEventListener(type, listener);
+  }
+
+  setEventHandlers(handlers: MediaPlayerEventHandlers | null): void {
+    this.eventHandlers = handlers;
+  }
 
   load(streamUrl: string): void {
-    this.video.src = streamUrl;
-    this.video.load();
-    void this.video.play().catch(() => {
-      // Some browsers and TVs require an explicit user gesture before playback.
-    });
+    this.emit("loading");
+    try {
+      this.video.src = streamUrl;
+      this.video.load();
+      void this.requestPlay();
+    } catch {
+      this.emit("error");
+    }
   }
 
   play(): void {
-    void this.video.play().catch(() => {
-      // A user gesture may be required before playback is allowed.
-    });
+    void this.requestPlay();
   }
 
   pause(): void {
@@ -25,12 +42,16 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   restart(): void {
-    this.video.currentTime = 0;
-    this.play();
+    try {
+      this.video.currentTime = 0;
+      this.play();
+    } catch {
+      this.emit("error");
+    }
   }
 
   skip(seconds: number): void {
-    if (!Number.isFinite(this.video.duration)) return;
+    if (!Number.isFinite(seconds) || !Number.isFinite(this.video.duration)) return;
     this.video.currentTime = Math.max(0, Math.min(this.video.duration, this.video.currentTime + seconds));
   }
 
@@ -46,7 +67,21 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.video.pause();
     this.video.removeAttribute("src");
     this.video.load();
+    for (const [type, listener] of this.eventListeners) this.video.removeEventListener(type, listener);
     if (this.subtitleObjectUrl) URL.revokeObjectURL(this.subtitleObjectUrl);
+  }
+
+  private async requestPlay(): Promise<void> {
+    try {
+      await this.video.play();
+    } catch {
+      // Autoplay restrictions require an explicit gesture; the video remains paused.
+      this.emit(this.video.error ? "error" : "paused");
+    }
+  }
+
+  private emit(state: PlaybackState): void {
+    this.eventHandlers?.onStateChange(state);
   }
 
   async setSubtitle(subtitleText: string, label: string, language: string): Promise<SubtitleAttachment> {

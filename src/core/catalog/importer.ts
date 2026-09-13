@@ -1,7 +1,7 @@
 import { IncrementalM3uParser } from "../m3u/index.ts";
 import type { M3uEntry } from "../m3u/types.ts";
-import { createVodCatalogItem } from "./catalog.ts";
-import type { VodCatalogItem, VodContentType } from "./types.ts";
+import { createUnknownCatalogEntry, createVodCatalogItem } from "./catalog.ts";
+import type { UnknownCatalogEntry, VodCatalogItem, VodContentType } from "./types.ts";
 
 export interface CatalogImportGroup {
   name: string;
@@ -12,13 +12,14 @@ export interface CatalogImportGroup {
 export interface CatalogImportSummary {
   processedEntries: number;
   importedItems: number;
+  unknownEntries: number;
   groups: CatalogImportGroup[];
   warnings: number;
 }
 
 export interface CatalogImportSink {
   begin(): Promise<void>;
-  append(items: readonly VodCatalogItem[]): Promise<void>;
+  append(items: readonly VodCatalogItem[], unknownEntries?: readonly UnknownCatalogEntry[]): Promise<void>;
   complete(summary: CatalogImportSummary): Promise<void>;
   fail?(): Promise<void>;
 }
@@ -38,16 +39,20 @@ export async function importM3uChunks(
   const batchSize = Math.max(1, options.batchSize ?? 500);
   const progressInterval = Math.max(1, options.progressInterval ?? 5_000);
   const batch: VodCatalogItem[] = [];
+  const unknownBatch: UnknownCatalogEntry[] = [];
   const groups = new Map<string, { count: number; contentTypes: Set<VodContentType> }>();
   let processedEntries = 0;
   let importedItems = 0;
+  let unknownEntries = 0;
   const importStartedAt = Date.now();
 
   const flush = async () => {
-    if (batch.length === 0) return;
+    if (batch.length === 0 && unknownBatch.length === 0) return;
     const items = batch.splice(0, batch.length);
-    await sink.append(items);
+    const unknowns = unknownBatch.splice(0, unknownBatch.length);
+    await sink.append(items, unknowns);
     importedItems += items.length;
+    unknownEntries += unknowns.length;
     options.onProgress?.({ processedEntries, importedItems });
   };
   const addEntries = async (entries: readonly M3uEntry[]) => {
@@ -55,6 +60,9 @@ export async function importM3uChunks(
       processedEntries += 1;
       const item = createVodCatalogItem(entry, importStartedAt);
       if (!item) {
+        const unknown = createUnknownCatalogEntry(entry, importStartedAt);
+        if (unknown) unknownBatch.push(unknown);
+        if (batch.length + unknownBatch.length >= batchSize) await flush();
         if (processedEntries % progressInterval === 0) options.onProgress?.({ processedEntries, importedItems });
         continue;
       }
@@ -63,7 +71,7 @@ export async function importM3uChunks(
       group.count += 1;
       group.contentTypes.add(item.contentType);
       groups.set(item.group, group);
-      if (batch.length >= batchSize) await flush();
+      if (batch.length + unknownBatch.length >= batchSize) await flush();
       else if (processedEntries % progressInterval === 0) options.onProgress?.({ processedEntries, importedItems });
     }
   };
@@ -76,6 +84,7 @@ export async function importM3uChunks(
     const summary: CatalogImportSummary = {
       processedEntries,
       importedItems,
+      unknownEntries,
       groups: [...groups.entries()].map(([name, group]) => ({
         name,
         count: group.count,

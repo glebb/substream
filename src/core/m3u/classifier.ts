@@ -1,7 +1,7 @@
 import type { M3uEntry, MediaClassification } from "./types.ts";
 
 const VOD_EXTENSIONS = new Set([
-  "3gp", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ts", "webm", "wmv",
+  "3gp", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "webm", "wmv",
 ]);
 
 // Providers frequently use "Movies Club" for live television channels. Only

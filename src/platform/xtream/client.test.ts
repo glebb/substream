@@ -32,3 +32,14 @@ describe("XtreamClient", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 });
+
+it("normalizes missing years and rejects path syntax in container extensions", async () => {
+  const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => [
+    { stream_id: 7, name: "Example Movie", year: " ", container_extension: "mkv?unexpected=1" },
+  ] });
+  const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=pass", request);
+  expect(client).not.toBeNull();
+  await expect(client!.movies("1")).resolves.toMatchObject([
+    { year: null, streamUrl: "https://iptv.example/movie/user/pass/7.mp4" },
+  ]);
+});

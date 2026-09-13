@@ -43,7 +43,7 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/opensubtitles-api/, ""),
           target: "https://api.opensubtitles.com",
         },
-      } : undefined,
+      } : {},
     },
   };
 });

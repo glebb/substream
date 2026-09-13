@@ -153,11 +153,13 @@ export class XtreamClient {
   }
 
   private streamUrl(kind: "movie" | "series", id: string, extension: string | undefined): string {
-    return this.connection.streamBaseUrl + kind + "/" + encodeURIComponent(this.connection.username) + "/" + encodeURIComponent(this.connection.password) + "/" + encodeURIComponent(id) + "." + (extension || "mp4");
+    const safeExtension = extension && /^[a-z0-9]+$/i.test(extension) ? extension : "mp4";
+    return this.connection.streamBaseUrl + kind + "/" + encodeURIComponent(this.connection.username) + "/" + encodeURIComponent(this.connection.password) + "/" + encodeURIComponent(id) + "." + safeExtension;
   }
 }
 
 function numberOrNull(value: string | number | undefined): number | null {
+  if (typeof value === "string" && value.trim() === "") return null;
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }

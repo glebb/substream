@@ -5,8 +5,14 @@ export interface SubtitleAttachment {
 }
 
 export type VideoDisplayMode = "auto" | "fit" | "fill";
+export type PlaybackState = "loading" | "buffering" | "playing" | "paused" | "ended" | "error";
+
+export interface MediaPlayerEventHandlers {
+  onStateChange(state: PlaybackState): void;
+}
 
 export interface MediaPlayer {
+  setEventHandlers(handlers: MediaPlayerEventHandlers | null): void;
   load(streamUrl: string): void;
   play(): void;
   pause(): void;

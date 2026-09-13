@@ -69,6 +69,15 @@ https://iptv.example/live/alice/secret/42.ts
 
     expect(entry && classifyM3uEntry(entry)).toMatchObject({ kind: "live", confidence: "high" });
   });
+
+  it("does not treat a generic transport-stream extension as VOD evidence", () => {
+    const entry = parseM3u(`#EXTM3U
+#EXTINF:-1 group-title="Sweden - Movies Club",SE: Film Channel FHD
+https://iptv.example/channel/42.ts
+`).entries[0];
+
+    expect(entry && classifyM3uEntry(entry)).toMatchObject({ kind: "live", confidence: "high" });
+  });
 });
 
 describe("redactUrl", () => {

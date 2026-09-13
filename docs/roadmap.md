@@ -5,6 +5,7 @@ This roadmap describes the next user-facing improvements for the Samsung Tizen V
 ## Phase 1: Playback and setup
 
 - [ ] Show video progress: elapsed time, duration, and a seek/progress bar when AVPlay provides duration and current-time events.
+- [ ] Show buffering state and a visible buffer indicator when the adapter reports it.
 - [ ] Persist playback progress per title and offer **Resume** or **Start over**.
 - [ ] Add a **Continue watching** section, ordered by most recently played unfinished titles, with an explicit option to remove an item from history.
 - [ ] Prepopulate the M3U URL whenever it is bundled in a personal build or already stored locally. Do not show the setup form until the user explicitly chooses **Change playlist**.

@@ -23,13 +23,20 @@ describe("TizenAvPlayPlayer", () => {
     const close = vi.fn();
     const setDisplayRect = vi.fn();
     const setDisplayMethod = vi.fn();
-    let listener: { oncurrentplaytime?(milliseconds: number): void } | undefined;
-    const setListener = vi.fn((nextListener: { oncurrentplaytime?(milliseconds: number): void }) => { listener = nextListener; });
+    let listener: {
+      oncurrentplaytime?(milliseconds: number): void;
+      onbufferingstart?(): void;
+      onbufferingcomplete?(): void;
+      onstreamcompleted?(): void;
+    } | undefined;
+    const setListener = vi.fn((nextListener: NonNullable<typeof listener>) => { listener = nextListener; });
     (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: { open, prepareAsync, play, pause, jumpForward, jumpBackward, stop, close, setDisplayRect, setDisplayMethod, setListener } };
     const container = { getBoundingClientRect: () => ({ left: 10.2, top: 20.7, width: 1280, height: 720 }) } as unknown as HTMLElement;
 
     const onSubtitleCue = vi.fn();
-    const player = new TizenAvPlayPlayer(container, vi.fn(), onSubtitleCue);
+    const player = new TizenAvPlayPlayer(container, onSubtitleCue);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
     expect(isTizenAvPlayAvailable()).toBe(true);
     player.load("https://example.invalid/stream.mkv");
     player.pause();
@@ -39,6 +46,8 @@ describe("TizenAvPlayPlayer", () => {
     player.setDisplayMode("fit");
     player.skip(60);
     player.skip(-60);
+    player.skip(Number.NaN);
+    player.skip(Number.POSITIVE_INFINITY);
     expect(open).toHaveBeenCalledWith("https://example.invalid/stream.mkv");
     expect(setDisplayRect).toHaveBeenCalledWith(10, 21, 1280, 720);
     expect(setDisplayMethod).toHaveBeenNthCalledWith(1, "PLAYER_DISPLAY_MODE_AUTO_ASPECT_RATIO");
@@ -47,14 +56,87 @@ describe("TizenAvPlayPlayer", () => {
     expect(pause).toHaveBeenCalledOnce();
     expect(jumpForward).toHaveBeenCalledWith(60_000);
     expect(jumpBackward).toHaveBeenCalledWith(60_000);
+    expect(jumpForward).toHaveBeenCalledTimes(1);
+    expect(jumpBackward).toHaveBeenCalledTimes(1);
     await expect(player.setSubtitle("1\n00:00:01,000 --> 00:00:02,000\nHello", "English", "en")).resolves.toEqual({ enabled: true });
     listener?.oncurrentplaytime?.(1_500);
     listener?.oncurrentplaytime?.(2_500);
+    listener?.onbufferingstart?.();
+    listener?.onbufferingcomplete?.();
+    listener?.onstreamcompleted?.();
     expect(onSubtitleCue).toHaveBeenCalledWith("Hello");
     expect(onSubtitleCue).toHaveBeenLastCalledWith("");
     expect(play).toHaveBeenCalledTimes(3);
+    expect(states).toContain("loading");
+    expect(states).toContain("buffering");
+    expect(states).toContain("playing");
+    expect(states).toContain("paused");
+    expect(states).toContain("ended");
     player.destroy();
     expect(stop).toHaveBeenCalledTimes(2);
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it("ignores prepare callbacks from a replaced stream", () => {
+    const prepareCallbacks: Array<{ success: () => void; error: (error: unknown) => void }> = [];
+    const play = vi.fn();
+    const playerApi = {
+      open: vi.fn(),
+      prepareAsync: vi.fn((success: () => void, error: (error: unknown) => void) => prepareCallbacks.push({ success, error })),
+      play,
+      pause: vi.fn(),
+      jumpForward: vi.fn(),
+      jumpBackward: vi.fn(),
+      stop: vi.fn(),
+      close: vi.fn(),
+      setDisplayRect: vi.fn(),
+      setDisplayMethod: vi.fn(),
+    };
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: playerApi };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const onPlaybackError = vi.fn();
+    const onSubtitleCue = vi.fn();
+    const player = new TizenAvPlayPlayer(container, onSubtitleCue);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    player.load("https://example.invalid/first.mkv");
+    player.load("https://example.invalid/second.mkv");
+    prepareCallbacks[0]?.success();
+    prepareCallbacks[0]?.error(new Error("stale"));
+    expect(play).not.toHaveBeenCalled();
+    expect(onPlaybackError).not.toHaveBeenCalled();
+
+    prepareCallbacks[1]?.success();
+    expect(play).toHaveBeenCalledOnce();
+    expect(states).toContain("playing");
+    player.destroy();
+  });
+
+  it("reports synchronous open and prepare failures instead of throwing", () => {
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const states: string[] = [];
+    const failedOpen = new TizenAvPlayPlayer(container, vi.fn());
+    failedOpen.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(() => { throw new Error("private signed URL"); }),
+      prepareAsync: vi.fn(), play: vi.fn(), pause: vi.fn(), jumpForward: vi.fn(), jumpBackward: vi.fn(),
+      stop: vi.fn(), close: vi.fn(), setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+    } };
+    expect(() => failedOpen.load("https://private.example/signed" )).not.toThrow();
+    expect(states).toEqual(["loading", "error"]);
+
+    const close = vi.fn();
+    const failedPrepare = new TizenAvPlayPlayer(container, vi.fn());
+    const prepareStates: string[] = [];
+    failedPrepare.setEventHandlers({ onStateChange: (state) => prepareStates.push(state) });
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn(() => { throw new Error("prepare failed"); }), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close, setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+    } };
+    expect(() => failedPrepare.load("https://private.example/signed")).not.toThrow();
+    expect(prepareStates).toEqual(["loading", "error"]);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
 });

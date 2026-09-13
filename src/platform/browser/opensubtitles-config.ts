@@ -3,9 +3,17 @@ import { packageDefaults } from "../package-defaults.ts";
 const KEY = "my-m3u.opensubtitles-api-key";
 
 export function loadOpenSubtitlesApiKey(): string {
-  return window.localStorage.getItem(KEY)?.trim() || packageDefaults.openSubtitlesApiKey || "";
+  try {
+    return globalThis.localStorage?.getItem(KEY)?.trim() || packageDefaults.openSubtitlesApiKey || "";
+  } catch {
+    return packageDefaults.openSubtitlesApiKey || "";
+  }
 }
 
 export function saveOpenSubtitlesApiKey(apiKey: string): void {
-  window.localStorage.setItem(KEY, apiKey.trim());
+  try {
+    globalThis.localStorage?.setItem(KEY, apiKey.trim());
+  } catch {
+    // A key remains usable for the current session if persistence is denied.
+  }
 }

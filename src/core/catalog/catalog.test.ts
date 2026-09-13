@@ -42,6 +42,8 @@ https://iptv.example/movie/user/pass/1.mkv
 https://iptv.example/series/user/pass/2.mkv
 #EXTINF:-1 group-title="Sweden - Movies Club",SE: Film Channel FHD
 https://iptv.example/live/user/pass/3.ts
+#EXTINF:-1 group-title="Unclear",Mystery stream
+https://iptv.example/media/opaque?id=4
 `).entries;
 
   it("keeps only VOD entries and identifies provider movie/series routes", () => {
@@ -59,5 +61,17 @@ https://iptv.example/live/user/pass/3.ts
 
     expect(searchVodCatalog(catalog, "rappaaja", { contentType: "movie", limit: 1 }))
       .toMatchObject([{ title: "Risto Räppääjä ja väärä Vincent" }]);
+  });
+
+  it("retains unknown entries with classifier evidence separately from VOD", () => {
+    const catalog = buildVodCatalog(entries);
+
+    expect(catalog.items).toHaveLength(2);
+    expect(catalog.unknownEntries).toHaveLength(1);
+    expect(catalog.unknownEntries[0]).toMatchObject({
+      entry: { name: "Mystery stream", attributes: { "group-title": "Unclear" } },
+      classification: { kind: "unknown", evidence: ["No reliable VOD or live markers"] },
+    });
+    expect(catalog.items[0]?.classification).toMatchObject({ kind: "vod", evidence: expect.any(Array) });
   });
 });

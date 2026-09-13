@@ -231,13 +231,15 @@ Open the integrated terminal in this folder and run:
 "$TZ" uninstall --package-id=M3uTvApp01.MyM3u --serial="$TV_SERIAL"
 ```
 
-## Known behavior on this TV
+## Previously observed behavior on this TV
+
+These are deployment notes from earlier UE75MU8005 testing, not a substitute for the smoke check in [the project verification guide](../docs/verification.md). Revalidate them after SDK, firmware, or app changes.
 
 - Install works from the command line using `tz install`.
 - Uninstall works from the command line using the application ID `M3uTvApp01.MyM3u`.
 - The app launches correctly when started manually from the TV UI.
 - Remote launch currently fails on this Samsung TV from both the older WASM extension path and direct CLI launch.
-- The first catalogue import can take time because hundreds of thousands of VOD records are persisted to TV IndexedDB. The Tizen path batches 2,000 records and only builds the three indexes needed for sorting; the import screen reports safe connection, reader, parser, and write progress. Record the last visible stage/counters if it stops.
+- The first catalogue import can take time because hundreds of thousands of VOD records are persisted to TV IndexedDB. The Tizen path batches 2,000 records, stages a new catalogue generation before promotion, and maintains indexed browse/search views; the import screen reports safe connection, reader, parser, and write progress. Record the last visible stage/counters if it stops.
 - AVPlay external-subtitle paths are rejected by this TV firmware. The app instead renders parsed, timed SRT cues itself over the video surface. ASS/SSA positioning tags and inline HTML formatting tags are omitted from the visible subtitle text.
 - In the player, Left/Right skip one minute, Up/Down move through on-screen controls, and the physical Play/Pause key toggles playback. The Aspect control cycles Auto, Fit, and Fill; Subtitle A−/A+ change overlay text size.
 - The browser player renders downloaded SRT text as Blob/WebVTT tracks. The UE75MU8005 firmware rejects AVPlay's external-subtitle API, so the TV adapter parses the SRT locally and renders timed subtitle text over playback from AVPlay's play-time callback. No filesystem permissions are needed.

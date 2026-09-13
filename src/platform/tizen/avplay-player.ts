@@ -1,4 +1,4 @@
-import type { MediaPlayer, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import type { MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { parseSrtCues, type SubtitleCue } from "../../core/subtitles/srt-cues.ts";
 
 interface AvPlayApi {
@@ -12,7 +12,13 @@ interface AvPlayApi {
   close(): void;
   setDisplayRect(left: number, top: number, width: number, height: number): void;
   setDisplayMethod(mode: "PLAYER_DISPLAY_MODE_LETTER_BOX" | "PLAYER_DISPLAY_MODE_FULL_SCREEN" | "PLAYER_DISPLAY_MODE_AUTO_ASPECT_RATIO"): void;
-  setListener?(listener: { oncurrentplaytime?(milliseconds: number): void }): void;
+  setListener?(listener: {
+    oncurrentplaytime?(milliseconds: number): void;
+    onbufferingstart?(): void;
+    onbufferingcomplete?(): void;
+    onstreamcompleted?(): void;
+    onerror?(error: unknown): void;
+  }): void;
 }
 
 interface WebApisGlobal {
@@ -36,64 +42,106 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private displayMode: VideoDisplayMode = "auto";
   private subtitleCues: SubtitleCue[] = [];
   private visibleCue = "";
+  private generation = 0;
+  private paused = false;
+  private eventHandlers: MediaPlayerEventHandlers | null = null;
 
   constructor(
     private readonly container: HTMLElement,
-    private readonly onPlaybackError: () => void,
     private readonly onSubtitleCue: (text: string) => void,
   ) {}
 
+  setEventHandlers(handlers: MediaPlayerEventHandlers | null): void {
+    this.eventHandlers = handlers;
+  }
+
   load(streamUrl: string): void {
     const player = avplay();
-    if (!player) throw new Error("Tizen AVPlay is unavailable");
+    if (!player) {
+      this.emit("error");
+      return;
+    }
     this.destroy();
-    player.open(streamUrl);
-    this.opened = true;
-    this.setDisplayRect(player);
-    this.applyDisplayMode(player);
-    player.setListener?.({ oncurrentplaytime: (milliseconds) => this.updateSubtitle(milliseconds) });
-    player.prepareAsync(
-      () => {
-        player.play();
-      },
-      () => {
-        this.opened = false;
-        this.onPlaybackError();
-      },
-    );
+    const generation = this.generation;
+    this.emit("loading");
+    try {
+      player.open(streamUrl);
+      this.opened = true;
+      this.paused = false;
+      this.setDisplayRect(player);
+      this.applyDisplayMode(player);
+      player.setListener?.({
+        oncurrentplaytime: (milliseconds) => {
+          if (this.isCurrent(generation)) this.updateSubtitle(milliseconds);
+        },
+        onbufferingstart: () => { if (this.isCurrent(generation)) this.emit("buffering"); },
+        onbufferingcomplete: () => { if (this.isCurrent(generation) && !this.paused) this.emit("playing"); },
+        onstreamcompleted: () => { if (this.isCurrent(generation)) { this.paused = true; this.emit("ended"); } },
+        onerror: () => { if (this.isCurrent(generation)) this.fail(generation); },
+      });
+      player.prepareAsync(
+        () => {
+          if (this.isCurrent(generation)) this.play();
+        },
+        () => this.fail(generation),
+      );
+    } catch {
+      this.fail(generation);
+    }
   }
 
   play(): void {
     if (!this.opened) return;
-    try { avplay()?.play(); } catch { this.onPlaybackError(); }
+    try {
+      const player = avplay();
+      if (!player) throw new Error("AVPlay unavailable");
+      player.play();
+      this.paused = false;
+      this.emit("playing");
+    } catch {
+      this.fail(this.generation);
+    }
   }
 
   pause(): void {
     if (!this.opened) return;
-    try { avplay()?.pause(); } catch { this.onPlaybackError(); }
+    try {
+      const player = avplay();
+      if (!player) throw new Error("AVPlay unavailable");
+      player.pause();
+      this.paused = true;
+      this.emit("paused");
+    } catch {
+      this.fail(this.generation);
+    }
   }
 
   restart(): void {
     const player = avplay();
     if (!this.opened || !player) return;
     try {
+      const generation = this.generation;
+      this.emit("loading");
       player.stop();
       this.setDisplayRect(player);
-      player.prepareAsync(() => player.play(), () => this.onPlaybackError());
+      player.prepareAsync(
+        () => { if (this.isCurrent(generation)) this.play(); },
+        () => this.fail(generation),
+      );
     } catch {
-      this.onPlaybackError();
+      this.fail(this.generation);
     }
   }
 
   skip(seconds: number): void {
-    if (!this.opened || seconds === 0) return;
+    if (!this.opened || !Number.isFinite(seconds) || seconds === 0) return;
     try {
       const player = avplay();
       if (!player) return;
       if (seconds > 0) player.jumpForward(seconds * 1_000);
       else player.jumpBackward(Math.abs(seconds) * 1_000);
     } catch {
-      this.onPlaybackError();
+      this.fail(this.generation);
     }
   }
 
@@ -101,7 +149,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.displayMode = mode;
     const player = avplay();
     if (!this.opened || !player) return;
-    try { this.applyDisplayMode(player); } catch { this.onPlaybackError(); }
+    try { this.applyDisplayMode(player); } catch { this.fail(this.generation); }
   }
 
   resize(): void {
@@ -153,8 +201,26 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.onSubtitleCue(text);
   }
 
+  private isCurrent(generation: number): boolean {
+    return this.opened && this.generation === generation;
+  }
+
+  private emit(state: PlaybackState): void {
+    this.eventHandlers?.onStateChange(state);
+  }
+
+  private fail(generation: number): void {
+    if (generation !== this.generation) return;
+    this.destroy();
+    this.emit("error");
+  }
+
   destroy(): void {
+    this.generation += 1;
     this.onSubtitleCue("");
+    this.subtitleCues = [];
+    this.visibleCue = "";
+    this.paused = false;
     if (!this.opened) return;
     const player = avplay();
     this.opened = false;
