@@ -83,6 +83,7 @@ describe("HtmlVideoPlayer", () => {
     vi.stubGlobal("document", {
       createElement: vi.fn(() => ({
         default: false,
+        track: { mode: "disabled" },
         kind: "",
         label: "",
         srclang: "",
@@ -100,12 +101,22 @@ describe("HtmlVideoPlayer", () => {
     expect(await player.setSubtitle(source, "Finnish", "fi")).toEqual({ enabled: true });
     expect(tracks).toHaveLength(1);
     expect(tracks[0]).toMatchObject({ default: true, kind: "subtitles", label: "Finnish", srclang: "fi", src: "blob:subtitle-1" });
+    expect(tracks[0]!.track.mode).toBe("showing");
     expect(await createdBlobs[0]!.text()).toContain("00:00:01.500 --> 00:00:03.000");
+
+    player.setSubtitleEnabled(false);
+    expect(tracks[0]!.track.mode).toBe("disabled");
 
     player.setSubtitleTimingOffset(-0.5);
     expect(tracks).toHaveLength(1);
     expect(tracks[0]!.src).toBe("blob:subtitle-2");
+    expect(tracks[0]!.track.mode).toBe("disabled");
     expect(await createdBlobs[1]!.text()).toContain("00:00:00.000 --> 00:00:01.500");
+    expect(revokedUrls).toEqual(["blob:subtitle-1"]);
+
+    player.setSubtitleEnabled(true);
+    expect(tracks[0]!.track.mode).toBe("showing");
+    expect(createdBlobs).toHaveLength(2);
     expect(revokedUrls).toEqual(["blob:subtitle-1"]);
 
     player.destroy();

@@ -13,9 +13,10 @@ This roadmap describes the next user-facing improvements for the Samsung Tizen V
 - [x] Prepopulate the OpenSubtitles API key when it is bundled or stored locally. Do not request it on the player screen unless it is missing or the user chooses **Change subtitle settings**.
 - [x] Automatically search for subtitles when playback begins, using the title, year, season, and episode already resolved by the catalogue.
 - [x] Automatically choose the best subtitle when the confidence is high; otherwise show a compact selection list without interrupting playback.
-- [ ] Add possibility to disable/enable subtitles.
-- [ ] Combine play/pause button.
-- [ ] Change the behavior on the playback screen. Only skip past/forward, if the video area is "selected". Otherwise left right buttons should move the selection just like up and down. In full screen the skipping should work always with left right.
+- [x] Add possibility to disable/enable subtitles.
+- [x] Combine play/pause button.
+- [x] Change the behavior on the playback screen. Only skip past/forward, if the video area is "selected". Otherwise left right buttons should move the selection just like up and down. In full screen the skipping should work always with left right.
+- [ ] Pressing the key i or info button from remote should display basic information about the video (like resolution). Another press hides the info.
 
 ## Phase 2: Subtitle experience
 

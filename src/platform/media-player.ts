@@ -31,6 +31,8 @@ export interface MediaPlayer {
   resize(): void;
   destroy(): void;
   setSubtitle(subtitleText: string, label: string, language: string): Promise<SubtitleAttachment>;
+  /** Enables or hides the currently attached subtitle without replacing its data. */
+  setSubtitleEnabled(enabled: boolean): void;
   /** Shifts attached subtitle cues; positive values display later and negative values earlier. */
   setSubtitleTimingOffset?(offsetSeconds: number): void;
 }

@@ -32,6 +32,7 @@ button:disabled { cursor: default; opacity: .45; }
 .player-title h2 { font-size: clamp(1.5rem, 3.5vw, 3rem); line-height: 1.13; margin: 0; overflow-wrap: anywhere; }
 .player-title .hint { margin: .35rem 0 0; }
 .player-stage { margin-top: 1.25rem; position: relative; }
+.player-stage.video-area-focused { outline: 4px solid #ffd54a; outline-offset: 4px; }
 .player { background: #000; display: block; margin: 0; width: 100%; }
 .playback-progress { align-items: center; color: #dbe9ff; display: flex; font-variant-numeric: tabular-nums; gap: .75rem; margin-top: .5rem; }
 .playback-progress progress { accent-color: #82b7ff; flex: 1; height: .75rem; }
@@ -39,11 +40,14 @@ button:disabled { cursor: default; opacity: .45; }
 .tizen-player { height: 60vh; max-height: 720px; min-height: 22rem; }
 .subtitle-overlay { background: rgba(0, 0, 0, .78); bottom: 6%; color: #fff; font-size: clamp(1.1rem, 2.4vw, 2.3rem); font-weight: 700; left: 8%; line-height: 1.35; margin: 0; padding: .3em .55em; pointer-events: none; position: absolute; right: 8%; text-align: center; white-space: pre-line; z-index: 3; }
 .subtitle-offset-overlay { background: rgba(0, 0, 0, .72); border-radius: .35rem; color: #fff; font-size: .85rem; font-weight: 700; left: 1rem; padding: .45rem .65rem; pointer-events: none; position: absolute; top: 1rem; z-index: 4; }
+.paused-title-overlay { background: rgba(0, 0, 0, .68); border-radius: .5rem; color: #fff; font-size: clamp(1.5rem, 4vw, 3.5rem); font-weight: 750; left: 8%; line-height: 1.2; max-height: 3.6em; overflow: hidden; padding: .45em .7em; pointer-events: none; position: fixed; right: 8%; text-align: center; text-overflow: ellipsis; top: 4vh; overflow-wrap: anywhere; z-index: 5; }
 .buffering-overlay { background: rgba(0, 0, 0, .76); border: 1px solid rgba(219, 233, 255, .35); border-radius: 999px; color: #fff; font-size: 1.1rem; font-weight: 750; left: 50%; padding: .75rem 1.25rem; pointer-events: none; position: fixed; top: 50%; transform: translate(-50%, -50%); z-index: 5; }
 .player-controls { align-items: center; display: flex; flex-wrap: wrap; gap: .8rem; margin-top: 1rem; }
 .playback-status { background: #1c273a; border: 1px solid #405a7d; border-radius: 999px; color: #dbe9ff; font-size: .9rem; font-weight: 800; margin-left: .8rem; min-width: 7rem; padding: .65rem 1rem; text-align: center; }
 .player-screen.is-fullscreen { background: #000; inset: 0; position: fixed; z-index: 20; }
-.player-screen.is-fullscreen .player-heading, .player-screen.is-fullscreen .player-controls, .player-screen.is-fullscreen .subtitles { display: none; }
+.player-screen.is-fullscreen:not(.has-visible-controls) .player-heading, .player-screen.is-fullscreen:not(.has-visible-controls) .player-controls, .player-screen.is-fullscreen .subtitles { display: none; }
+.player-screen.is-fullscreen.has-visible-controls .player-heading { align-items: center; background: rgba(0, 0, 0, .78); left: 5vw; padding: .5rem .75rem; position: fixed; right: 5vw; top: 1rem; z-index: 6; }
+.player-screen.is-fullscreen.has-visible-controls .player-controls { background: rgba(0, 0, 0, .78); bottom: 4.5rem; left: 5vw; margin: 0; padding: .65rem .75rem; position: fixed; right: 5vw; z-index: 6; }
 .player-screen.is-fullscreen .player-stage { height: 100vh; inset: 0; margin: 0; position: fixed; width: 100vw; }
 .player-screen.is-fullscreen .player { height: 100%; max-height: none; min-height: 0; width: 100%; }
 .player-screen.is-fullscreen .playback-progress { background: rgba(0, 0, 0, .72); bottom: 1rem; left: 5vw; margin: 0; padding: .6rem .8rem; position: fixed; right: 5vw; z-index: 4; }

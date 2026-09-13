@@ -215,6 +215,12 @@ describe("TizenAvPlayPlayer", () => {
     expect(onSubtitleCue).toHaveBeenLastCalledWith("");
     listener?.oncurrentplaytime?.(2_500);
     expect(onSubtitleCue).toHaveBeenLastCalledWith("Hello");
+    player.setSubtitleEnabled(false);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+    listener?.oncurrentplaytime?.(2_750);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+    player.setSubtitleEnabled(true);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("Hello");
     player.setSubtitleTimingOffset(-0.5);
     expect(onSubtitleCue).toHaveBeenLastCalledWith("");
     listener?.oncurrentplaytime?.(750);

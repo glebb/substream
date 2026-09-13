@@ -52,6 +52,7 @@ export function App() {
   const [focusIndex, setFocusIndex] = useState(0);
   const [playerFocusIndex, setPlayerFocusIndex] = useState(0);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
+  const [showFullscreenControls, setShowFullscreenControls] = useState(false);
   const [videoDisplayMode, setVideoDisplayMode] = useState<VideoDisplayMode>("auto");
   const [playbackStatus, setPlaybackStatus] = useState("Loading…");
   const [playbackProgress, setPlaybackProgress] = useState<PlaybackProgress | null>(null);
@@ -65,6 +66,8 @@ export function App() {
   const [subtitleStatus, setSubtitleStatus] = useState("");
   const [visibleSubtitle, setVisibleSubtitle] = useState("");
   const [isSubtitleAttached, setIsSubtitleAttached] = useState(false);
+  const [isSubtitleEnabled, setIsSubtitleEnabled] = useState(false);
+  const [isSubtitleOffsetVisible, setIsSubtitleOffsetVisible] = useState(false);
   const [subtitleTimingOffsetSeconds, setSubtitleTimingOffsetSeconds] = useState(0);
   const [subtitleFontSize, setSubtitleFontSize] = useState(2.3);
   const [catalogStatus, setCatalogStatus] = useState("");
@@ -78,11 +81,11 @@ export function App() {
   const previousPageRef = useRef<HTMLButtonElement | null>(null);
   const nextPageRef = useRef<HTMLButtonElement | null>(null);
   const playerBackButtonRef = useRef<HTMLButtonElement | null>(null);
-  const playerPlayButtonRef = useRef<HTMLButtonElement | null>(null);
-  const playerPauseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const playerTogglePlaybackButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerRestartButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerFullscreenButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerAspectButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subtitleToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSmallerButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleLargerButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleTimingMinusTwoButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -101,6 +104,7 @@ export function App() {
   const remoteBrowseRef = useRef<{ key: string; items: VodCatalogItem[] } | null>(null);
   const playerRef = useRef<MediaPlayer | null>(null);
   const skipFeedbackTimerRef = useRef<number | null>(null);
+  const subtitleOffsetTimerRef = useRef<number | null>(null);
   const avPlayContainerRef = useRef<HTMLObjectElement | null>(null);
   const playerStageRef = useRef<HTMLDivElement | null>(null);
   const openSubtitlesApiKeyRef = useRef<HTMLInputElement | null>(null);
@@ -109,32 +113,50 @@ export function App() {
   const [progress, setProgress] = useState("Preparing import…");
   const [error, setError] = useState("");
 
+  const showSubtitleOffset = () => {
+    setIsSubtitleOffsetVisible(true);
+    if (subtitleOffsetTimerRef.current !== null) window.clearTimeout(subtitleOffsetTimerRef.current);
+    subtitleOffsetTimerRef.current = window.setTimeout(() => {
+      subtitleOffsetTimerRef.current = null;
+      setIsSubtitleOffsetVisible(false);
+    }, 5_000);
+  };
+
   const updateImportStage = (message: string) => {
     importStageRef.current = message;
     setProgress(message);
   };
 
-  const playerControls = () => [
-    playerBackButtonRef.current,
-    playerPlayButtonRef.current,
-    playerPauseButtonRef.current,
-    playerRestartButtonRef.current,
-    playerFullscreenButtonRef.current,
-    playerAspectButtonRef.current,
-    subtitleSmallerButtonRef.current,
-    subtitleLargerButtonRef.current,
-    ...(subtitleTimingAvailable ? [
-      subtitleTimingMinusTwoButtonRef.current,
-      subtitleTimingMinusHalfButtonRef.current,
-      subtitleTimingPlusHalfButtonRef.current,
-      subtitleTimingPlusTwoButtonRef.current,
-    ] : []),
-    (showSubtitleSettings || !openSubtitlesApiKey.trim()) ? subtitleKeyInputRef.current : null,
-    findSubtitlesButtonRef.current,
-    showSubtitleSettings ? subtitleSaveButtonRef.current : subtitleSettingsButtonRef.current,
-    showSubtitleSettings && openSubtitlesApiKey.trim() ? subtitleCancelButtonRef.current : null,
-    ...subtitleButtonRefs.current,
-  ].filter((control): control is HTMLElement => control !== null);
+  const playerControls = () => {
+    const playbackControls = [
+      playerBackButtonRef.current,
+      playerStageRef.current,
+      playerTogglePlaybackButtonRef.current,
+      playerRestartButtonRef.current,
+      playerFullscreenButtonRef.current,
+      playerAspectButtonRef.current,
+    ];
+    // Subtitle settings are intentionally hidden in fullscreen, so keep them
+    // out of the remote-focus loop there as well.
+    if (playerFullscreen) return playbackControls.filter((control): control is HTMLElement => control !== null);
+    return [
+      ...playbackControls,
+      subtitleSmallerButtonRef.current,
+      subtitleLargerButtonRef.current,
+      ...(isSubtitleAttached ? [subtitleToggleButtonRef.current] : []),
+      ...(subtitleTimingAvailable ? [
+        subtitleTimingMinusTwoButtonRef.current,
+        subtitleTimingMinusHalfButtonRef.current,
+        subtitleTimingPlusHalfButtonRef.current,
+        subtitleTimingPlusTwoButtonRef.current,
+      ] : []),
+      (showSubtitleSettings || !openSubtitlesApiKey.trim()) ? subtitleKeyInputRef.current : null,
+      findSubtitlesButtonRef.current,
+      showSubtitleSettings ? subtitleSaveButtonRef.current : subtitleSettingsButtonRef.current,
+      showSubtitleSettings && openSubtitlesApiKey.trim() ? subtitleCancelButtonRef.current : null,
+      ...subtitleButtonRefs.current,
+    ].filter((control): control is HTMLElement => control !== null);
+  };
 
   const refreshCatalog = async () => {
     setState("loading");
@@ -239,6 +261,7 @@ export function App() {
     if (!title.providerSeriesId) {
       browseRequestRef.current.invalidate();
       setPlayerFocusIndex(0);
+      setShowFullscreenControls(false);
       setPlayerFullscreen(true);
       setVideoDisplayMode("auto");
       setPlaybackStatus("Loading…");
@@ -246,6 +269,7 @@ export function App() {
       setIsPlaybackPaused(false);
       setVisibleSubtitle("");
       setIsSubtitleAttached(false);
+      setIsSubtitleEnabled(false);
       setSubtitleTimingOffsetSeconds(loadSubtitleTimingOffset(title.id));
       setSubtitleFontSize(2.3);
       setSelectedTitle(title);
@@ -317,7 +341,11 @@ export function App() {
         browseRequestRef.current.invalidate();
         if (selectedTitle) {
           event.preventDefault();
-          if (playerFullscreen) setPlayerFullscreen(false);
+          if (playerFullscreen) {
+            setPlayerFullscreen(false);
+            setShowFullscreenControls(false);
+            setPlayerFocusIndex(videoAreaFocusIndex);
+          }
           else setSelectedTitle(null);
           return;
         }
@@ -340,10 +368,13 @@ export function App() {
       if (selectedTitle) {
         const controls = playerControls();
         if (controls.length === 0) return;
-        const currentIndex = Math.max(0, Math.min(controls.length - 1, playerFocusIndex));
+        const activeIndex = controls.indexOf(document.activeElement as HTMLElement);
+        const currentIndex = activeIndex >= 0 ? activeIndex : Math.max(0, Math.min(controls.length - 1, playerFocusIndex));
+        const isTextEntry = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+        if (isTextEntry && !["MediaPlayPause", "MediaPlay", "MediaPause", "MediaRewind", "MediaFastForward"].includes(key)) return;
         if (key === "MediaPlayPause") {
           event.preventDefault();
-          if (isPlaybackPaused) playVideo(); else pauseVideo();
+          togglePlayback();
           return;
         }
         if (key === "MediaPlay") {
@@ -356,24 +387,29 @@ export function App() {
           pauseVideo();
           return;
         }
-        if (key === "ArrowLeft" || key === "MediaRewind") {
+        if (key === "MediaRewind") {
           event.preventDefault();
           skipVideo(-60);
           return;
         }
-        if (key === "ArrowRight" || key === "MediaFastForward") {
+        if (key === "MediaFastForward") {
           event.preventDefault();
           skipVideo(60);
           return;
         }
-        if (key === "ArrowDown") {
+        if (key === "ArrowLeft" || key === "ArrowRight") {
           event.preventDefault();
-          setPlayerFocusIndex(Math.min(controls.length - 1, currentIndex + 1));
+          if (playerFullscreen || controls[currentIndex] === playerStageRef.current) {
+            skipVideo(key === "ArrowLeft" ? -60 : 60);
+          } else {
+            setPlayerFocusIndex(Math.max(0, Math.min(controls.length - 1, currentIndex + (key === "ArrowLeft" ? -1 : 1))));
+          }
           return;
         }
-        if (key === "ArrowUp") {
+        if (key === "ArrowDown" || key === "ArrowUp") {
           event.preventDefault();
-          setPlayerFocusIndex(Math.max(0, currentIndex - 1));
+          if (playerFullscreen) setShowFullscreenControls(true);
+          setPlayerFocusIndex(Math.max(0, Math.min(controls.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1))));
           return;
         }
         if (key === "Enter") {
@@ -458,7 +494,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCount, catalogStatus, focusIndex, groups, isPlaybackPaused, page, playerFocusIndex, playerFullscreen, playlistUrl, selectedTitle, showPlaylistForm, state, titles]);
+  }, [activeGroup, browseCount, catalogStatus, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, page, playerFocusIndex, playerFullscreen, playlistUrl, selectedTitle, showPlaylistForm, showFullscreenControls, state, titles]);
 
   useEffect(() => {
     const tile = tileRefs.current[focusIndex];
@@ -471,7 +507,7 @@ export function App() {
     const controls = playerControls();
     const control = controls[Math.min(playerFocusIndex, Math.max(0, controls.length - 1))];
     control?.focus();
-  }, [playerFocusIndex, selectedTitle, subtitleResults.length]);
+  }, [isSubtitleAttached, playerFocusIndex, selectedTitle, showFullscreenControls, showSubtitleSettings, subtitleResults.length]);
 
   useEffect(() => {
     if (selectedTitle) window.scrollTo(0, 0);
@@ -494,6 +530,12 @@ export function App() {
     if (!selectedTitle) return;
     setIsSkipFeedbackVisible(false);
     setIsSubtitleAttached(false);
+    setIsSubtitleEnabled(false);
+    setIsSubtitleOffsetVisible(false);
+    if (subtitleOffsetTimerRef.current !== null) {
+      window.clearTimeout(subtitleOffsetTimerRef.current);
+      subtitleOffsetTimerRef.current = null;
+    }
     const initialSubtitleOffset = loadSubtitleTimingOffset(selectedTitle.id);
     setSubtitleTimingOffsetSeconds(initialSubtitleOffset);
     const player = isTizenAvPlayAvailable() && avPlayContainerRef.current
@@ -526,6 +568,10 @@ export function App() {
       if (skipFeedbackTimerRef.current !== null) {
         window.clearTimeout(skipFeedbackTimerRef.current);
         skipFeedbackTimerRef.current = null;
+      }
+      if (subtitleOffsetTimerRef.current !== null) {
+        window.clearTimeout(subtitleOffsetTimerRef.current);
+        subtitleOffsetTimerRef.current = null;
       }
       playerRef.current = null;
       player.setEventHandlers(null);
@@ -642,7 +688,9 @@ export function App() {
         ? "Subtitle enabled: " + subtitle.language.toUpperCase()
         : "Subtitle downloaded, but the TV could not attach it. " + (attachment.reason ?? "Try another subtitle."));
       setIsSubtitleAttached(attachment.enabled);
+      setIsSubtitleEnabled(attachment.enabled);
       if (attachment.enabled) {
+        showSubtitleOffset();
         setPlayerFocusIndex(1);
         window.requestAnimationFrame(() => playerStageRef.current?.scrollIntoView({ block: "start", inline: "nearest" }));
       }
@@ -658,6 +706,25 @@ export function App() {
 
   const pauseVideo = () => {
     playerRef.current?.pause();
+  };
+
+  const togglePlayback = () => {
+    if (isPlaybackPaused) playVideo();
+    else pauseVideo();
+  };
+
+  const toggleSubtitles = () => {
+    if (!isSubtitleAttached) return;
+    const enabled = !isSubtitleEnabled;
+    playerRef.current?.setSubtitleEnabled(enabled);
+    setIsSubtitleEnabled(enabled);
+    setSubtitleStatus(enabled ? "Subtitles enabled." : "Subtitles disabled.");
+  };
+
+  const toggleFullscreen = () => {
+    setPlayerFullscreen((current) => !current);
+    setShowFullscreenControls(false);
+    setPlayerFocusIndex(videoAreaFocusIndex);
   };
 
   const restartVideo = () => {
@@ -683,6 +750,7 @@ export function App() {
       adjustSubtitleOffsetSeconds(subtitleTimingOffsetSeconds, deltaSeconds),
     );
     setSubtitleTimingOffsetSeconds(offset);
+    showSubtitleOffset();
     playerRef.current?.setSubtitleTimingOffset?.(offset);
   };
 
@@ -794,7 +862,16 @@ export function App() {
 
   const hasSubtitleKey = Boolean(openSubtitlesApiKey.trim());
   const subtitleKeyVisible = showSubtitleSettings || !hasSubtitleKey;
-  const findSubtitleFocusIndex = 8 + (subtitleTimingAvailable ? 4 : 0) + (subtitleKeyVisible ? 1 : 0);
+  const videoAreaFocusIndex = 1;
+  const playbackToggleFocusIndex = 2;
+  const restartFocusIndex = 3;
+  const fullscreenFocusIndex = 4;
+  const aspectFocusIndex = 5;
+  const subtitleSmallerFocusIndex = 6;
+  const subtitleLargerFocusIndex = 7;
+  const subtitleToggleFocusIndex = 8;
+  const subtitleTimingStartFocusIndex = subtitleToggleFocusIndex + (isSubtitleAttached ? 1 : 0);
+  const findSubtitleFocusIndex = subtitleTimingStartFocusIndex + (subtitleTimingAvailable ? 4 : 0) + (subtitleKeyVisible ? 1 : 0);
   const subtitleSettingsFocusIndex = findSubtitleFocusIndex + 1;
   const firstSubtitleFocusIndex = subtitleSettingsFocusIndex + 1 + (subtitleKeyVisible && hasSubtitleKey ? 1 : 0);
 
@@ -828,18 +905,33 @@ export function App() {
       </div>
     </section>}
     {state === "ready" && <section>
-      {showPlaylistForm ? playlistSetupForm : selectedTitle ? <section className={"player-screen " + (playerFullscreen ? "is-fullscreen" : "")}>
+      {showPlaylistForm ? playlistSetupForm : selectedTitle ? <section className={"player-screen " + (playerFullscreen ? "is-fullscreen" : "") + (playerFullscreen && showFullscreenControls ? " has-visible-controls" : "")} onFocusCapture={(event) => {
+        const target = event.target as HTMLElement;
+        const controls = playerControls();
+        const index = target === playerStageRef.current || playerStageRef.current?.contains(target)
+          ? videoAreaFocusIndex
+          : controls.indexOf(target);
+        if (index >= 0) setPlayerFocusIndex(index);
+      }}>
         <div className="player-heading">
           <div className="player-title"><h2>{selectedTitle.title}</h2><p className="hint">{selectedTitle.year ?? selectedTitle.contentType}</p></div>
-          <button className={playerFocusIndex === 0 ? "remote-focused" : ""} type="button" onClick={() => { browseRequestRef.current.invalidate(); setPlayerFullscreen(false); setSelectedTitle(null); }} ref={playerBackButtonRef}>Back to titles</button>
+          <button className={playerFocusIndex === 0 ? "remote-focused" : ""} type="button" onClick={() => { browseRequestRef.current.invalidate(); setPlayerFullscreen(false); setShowFullscreenControls(false); setSelectedTitle(null); }} ref={playerBackButtonRef}>Back to titles</button>
         </div>
-        <div className="player-stage" ref={playerStageRef}>
+        <div
+          className={"player-stage " + (playerFocusIndex === videoAreaFocusIndex ? "video-area-focused" : "")}
+          ref={playerStageRef}
+          role="group"
+          aria-label="Video area. Press left or right to skip while selected."
+          tabIndex={0}
+          onClick={() => playerStageRef.current?.focus()}
+        >
           {isTizenAvPlayAvailable()
             ? <object className="player tizen-player" ref={avPlayContainerRef} type="application/avplayer" aria-label="Video player" />
             : <video className="player" autoPlay ref={videoRef} />}
           {playerFullscreen && isPlaybackBuffering && <div className="buffering-overlay" role="status" aria-live="polite">Buffering…</div>}
+          {playerFullscreen && playbackStatus === "Paused" && <div className="paused-title-overlay">{selectedTitle.title}</div>}
           {visibleSubtitle && <p className="subtitle-overlay" aria-live="off" style={{ fontSize: subtitleFontSize + "rem" }}>{visibleSubtitle}</p>}
-          {subtitleTimingAvailable && isSubtitleAttached && <div className="subtitle-offset-overlay" aria-live="polite">Subtitle offset {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</div>}
+          {subtitleTimingAvailable && isSubtitleAttached && isSubtitleOffsetVisible && <div className="subtitle-offset-overlay" aria-live="polite">Subtitle offset {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</div>}
         </div>
         {playbackProgress && (!playerFullscreen || playbackStatus === "Paused" || isSkipFeedbackVisible) && <div className="playback-progress" aria-label="Playback progress">
           <span>{formatPlaybackTime(playbackProgress.currentTimeSeconds)}</span>
@@ -847,13 +939,13 @@ export function App() {
           <span>{formatPlaybackTime(playbackProgress.durationSeconds)}</span>
         </div>}
         <div className="player-controls" aria-label="Playback controls">
-          <button className={playerFocusIndex === 1 ? "remote-focused" : ""} type="button" onClick={playVideo} ref={playerPlayButtonRef}>Play</button>
-          <button className={playerFocusIndex === 2 ? "remote-focused" : ""} type="button" onClick={pauseVideo} ref={playerPauseButtonRef}>Pause</button>
-          <button className={playerFocusIndex === 3 ? "remote-focused" : ""} type="button" onClick={restartVideo} ref={playerRestartButtonRef}>Restart</button>
-          <button className={playerFocusIndex === 4 ? "remote-focused" : ""} type="button" onClick={() => setPlayerFullscreen((current) => !current)} ref={playerFullscreenButtonRef}>{playerFullscreen ? "Exit full screen" : "Full screen"}</button>
-          <button className={playerFocusIndex === 5 ? "remote-focused" : ""} type="button" onClick={cycleVideoDisplayMode} ref={playerAspectButtonRef}>Aspect: {videoDisplayMode === "auto" ? "Auto" : videoDisplayMode === "fit" ? "Fit" : "Fill"}</button>
-          <button className={playerFocusIndex === 6 ? "remote-focused" : ""} type="button" onClick={() => setSubtitleFontSize((current) => Math.max(1, current - .2))} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
-          <button className={playerFocusIndex === 7 ? "remote-focused" : ""} type="button" onClick={() => setSubtitleFontSize((current) => Math.min(3.5, current + .2))} ref={subtitleLargerButtonRef}>Subtitle A+</button>
+          <button className={playerFocusIndex === playbackToggleFocusIndex ? "remote-focused" : ""} type="button" onClick={togglePlayback} aria-label={isPlaybackPaused ? "Play video" : "Pause video"} aria-pressed={!isPlaybackPaused} ref={playerTogglePlaybackButtonRef}>{isPlaybackPaused ? "Play" : "Pause"}</button>
+          <button className={playerFocusIndex === restartFocusIndex ? "remote-focused" : ""} type="button" onClick={restartVideo} ref={playerRestartButtonRef}>Restart</button>
+          <button className={playerFocusIndex === fullscreenFocusIndex ? "remote-focused" : ""} type="button" onClick={toggleFullscreen} ref={playerFullscreenButtonRef}>{playerFullscreen ? "Exit full screen" : "Full screen"}</button>
+          <button className={playerFocusIndex === aspectFocusIndex ? "remote-focused" : ""} type="button" onClick={cycleVideoDisplayMode} ref={playerAspectButtonRef}>Aspect: {videoDisplayMode === "auto" ? "Auto" : videoDisplayMode === "fit" ? "Fit" : "Fill"}</button>
+          <button className={playerFocusIndex === subtitleSmallerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => setSubtitleFontSize((current) => Math.max(1, current - .2))} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
+          <button className={playerFocusIndex === subtitleLargerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => setSubtitleFontSize((current) => Math.min(3.5, current + .2))} ref={subtitleLargerButtonRef}>Subtitle A+</button>
+          {isSubtitleAttached && <button className={playerFocusIndex === subtitleToggleFocusIndex ? "remote-focused" : ""} type="button" onClick={toggleSubtitles} aria-label="Subtitles" aria-pressed={isSubtitleEnabled} ref={subtitleToggleButtonRef}>Subtitles: {isSubtitleEnabled ? "Enabled" : "Disabled"}</button>}
           <span className={"playback-status " + (playbackStatus.startsWith("Playback failed") ? "error" : "")} role="status" aria-live="polite">{playbackStatus}</span>
         </div>
         <section className="subtitles">
@@ -862,10 +954,10 @@ export function App() {
             <p><strong>Current offset: {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</strong></p>
             <p className="hint">Positive values show subtitles later; negative values show them earlier. Saved for this title on this device.</p>
             <div className="subtitle-timing-actions">
-              <button className={playerFocusIndex === 8 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-2)} ref={subtitleTimingMinusTwoButtonRef}>−2 s</button>
-              <button className={playerFocusIndex === 9 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-0.5)} ref={subtitleTimingMinusHalfButtonRef}>−0.5 s</button>
-              <button className={playerFocusIndex === 10 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(0.5)} ref={subtitleTimingPlusHalfButtonRef}>+0.5 s</button>
-              <button className={playerFocusIndex === 11 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(2)} ref={subtitleTimingPlusTwoButtonRef}>+2 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-2)} ref={subtitleTimingMinusTwoButtonRef}>−2 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 1 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-0.5)} ref={subtitleTimingMinusHalfButtonRef}>−0.5 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 2 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(0.5)} ref={subtitleTimingPlusHalfButtonRef}>+0.5 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 3 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(2)} ref={subtitleTimingPlusTwoButtonRef}>+2 s</button>
             </div>
           </div>}
           {subtitleKeyVisible && <>

@@ -9,6 +9,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private subtitleLabel = "";
   private subtitleLanguage = "";
   private subtitleTimingOffsetSeconds = 0;
+  private subtitleEnabled = true;
+  private subtitleTrack: HTMLTrackElement | undefined;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
   private readonly eventListeners: Array<[string, EventListener]>;
 
@@ -106,6 +108,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.subtitleText = subtitleText;
     this.subtitleLabel = label;
     this.subtitleLanguage = language;
+    this.subtitleEnabled = true;
     try {
       this.replaceSubtitleTrack();
       return { enabled: true };
@@ -128,6 +131,12 @@ export class HtmlVideoPlayer implements MediaPlayer {
     }
   }
 
+  setSubtitleEnabled(enabled: boolean): void {
+    if (!this.subtitleTrack) return;
+    this.subtitleEnabled = enabled;
+    this.applySubtitleEnabled();
+  }
+
   private replaceSubtitleTrack(): void {
     const vtt = shiftWebVttCues(srtToWebVtt(this.subtitleText ?? ""), this.subtitleTimingOffsetSeconds);
     const objectUrl = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
@@ -140,6 +149,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
       track.srclang = this.subtitleLanguage;
       track.src = objectUrl;
       this.video.append(track);
+      this.subtitleTrack = track;
+      this.applySubtitleEnabled();
       this.video.querySelectorAll("track").forEach((existing) => {
         if (existing !== track) existing.remove();
       });
@@ -155,9 +166,19 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   private removeSubtitleTrack(): void {
     this.video.querySelectorAll("track").forEach((track) => track.remove());
+    this.subtitleTrack = undefined;
     if (this.subtitleObjectUrl) {
       URL.revokeObjectURL(this.subtitleObjectUrl);
       this.subtitleObjectUrl = undefined;
+    }
+  }
+
+  private applySubtitleEnabled(): void {
+    if (!this.subtitleTrack) return;
+    try {
+      this.subtitleTrack.track.mode = this.subtitleEnabled ? "showing" : "disabled";
+    } catch {
+      // The browser may not have initialized the track yet; mode is applied again on replacement.
     }
   }
 }

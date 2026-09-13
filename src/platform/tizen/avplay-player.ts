@@ -46,6 +46,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private subtitleCues: SubtitleCue[] = [];
   private visibleCue = "";
   private subtitleOffsetMilliseconds = 0;
+  private subtitlesEnabled = true;
   private currentPlayheadMilliseconds = 0;
   private generation = 0;
   private paused = false;
@@ -204,6 +205,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   async setSubtitle(subtitleText: string, _label: string, _language: string): Promise<SubtitleAttachment> {
     if (!this.opened) return { enabled: false, reason: "AVPlay is not ready." };
     this.subtitleCues = parseSrtCues(subtitleText);
+    this.subtitlesEnabled = true;
     this.visibleCue = "";
     this.onSubtitleCue("");
     this.updateSubtitle(this.currentPlayheadMilliseconds);
@@ -217,9 +219,17 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.updateSubtitle(this.currentPlayheadMilliseconds);
   }
 
+  setSubtitleEnabled(enabled: boolean): void {
+    if (this.subtitleCues.length === 0) return;
+    this.subtitlesEnabled = enabled;
+    this.updateSubtitle(this.currentPlayheadMilliseconds);
+  }
+
   private updateSubtitle(milliseconds: number): void {
-    const cue = this.subtitleCues.find((candidate) => milliseconds >= candidate.startMs + this.subtitleOffsetMilliseconds
-      && milliseconds < candidate.endMs + this.subtitleOffsetMilliseconds);
+    const cue = this.subtitlesEnabled
+      ? this.subtitleCues.find((candidate) => milliseconds >= candidate.startMs + this.subtitleOffsetMilliseconds
+        && milliseconds < candidate.endMs + this.subtitleOffsetMilliseconds)
+      : undefined;
     const text = cue?.text ?? "";
     if (text === this.visibleCue) return;
     this.visibleCue = text;
@@ -283,6 +293,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.subtitleCues = [];
     this.visibleCue = "";
     this.subtitleOffsetMilliseconds = 0;
+    this.subtitlesEnabled = true;
     this.currentPlayheadMilliseconds = 0;
     this.paused = false;
     if (!this.opened) return;
