@@ -43,3 +43,10 @@ export function homeGridNavigationTarget(key: string, focusIndex: number): "sett
 export function dashboardControlNavigationTarget(key: string, settingsIsFocused: boolean): "grid" | null {
   return key === "ArrowDown" && settingsIsFocused ? "grid" : null;
 }
+
+/** Moves through a row of dialog actions without letting focus escape the dialog. */
+export function actionRowNavigationTarget(key: string, currentIndex: number, itemCount: number): number | null {
+  if (itemCount <= 0 || !["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(key)) return null;
+  const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
+  return Math.max(0, Math.min(itemCount - 1, currentIndex + delta));
+}

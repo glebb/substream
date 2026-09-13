@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dashboardControlNavigationTarget, homeGridNavigationTarget, resolveAppBackAction } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, dashboardControlNavigationTarget, homeGridNavigationTarget, resolveAppBackAction } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
   it("routes Up from the first home-grid row to Settings and Down back to the grid", () => {
@@ -8,6 +8,14 @@ describe("remote dashboard navigation", () => {
     expect(homeGridNavigationTarget("ArrowUp", 4)).toBeNull();
     expect(dashboardControlNavigationTarget("ArrowDown", true)).toBe("grid");
     expect(dashboardControlNavigationTarget("ArrowDown", false)).toBeNull();
+  });
+
+  it("keeps dialog action navigation within the available choices", () => {
+    expect(actionRowNavigationTarget("ArrowRight", 0, 3)).toBe(1);
+    expect(actionRowNavigationTarget("ArrowDown", 1, 3)).toBe(2);
+    expect(actionRowNavigationTarget("ArrowLeft", 0, 3)).toBe(0);
+    expect(actionRowNavigationTarget("ArrowUp", 2, 3)).toBe(1);
+    expect(actionRowNavigationTarget("Enter", 0, 3)).toBeNull();
   });
 
   it("resolves Back from the topmost open screen first", () => {

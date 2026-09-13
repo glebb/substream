@@ -16,7 +16,7 @@ import { clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimin
 import { clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared } from "../platform/browser/catalog-preferences.ts";
 import { clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, type PlaybackHistoryItem } from "../platform/browser/playback-progress-config.ts";
 import { BrowseRequestGate, browsePageCount, sortAndPageBrowseItems } from "./browse.ts";
-import { dashboardControlNavigationTarget, homeGridNavigationTarget, resolveAppBackAction } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, dashboardControlNavigationTarget, homeGridNavigationTarget, resolveAppBackAction } from "./remote-navigation.ts";
 import "./app.css";
 
 type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
@@ -79,6 +79,8 @@ export function App() {
   const [browseCount, setBrowseCount] = useState(0);
   const [focusIndex, setFocusIndex] = useState(0);
   const [playerFocusIndex, setPlayerFocusIndex] = useState(0);
+  const [resumeChoiceFocusIndex, setResumeChoiceFocusIndex] = useState(0);
+  const [settingsButtonFocused, setSettingsButtonFocused] = useState(false);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [showFullscreenControls, setShowFullscreenControls] = useState(false);
   const [videoDisplayMode, setVideoDisplayMode] = useState<VideoDisplayMode>("auto");
@@ -506,6 +508,24 @@ export function App() {
         }
         return;
       }
+      if (resumeChoice) {
+        const controls = resumeChoiceControlsRef.current.filter((control): control is HTMLButtonElement => Boolean(control) && !control.disabled);
+        if (controls.length === 0) return;
+        const activeIndex = controls.indexOf(document.activeElement as HTMLButtonElement);
+        const currentIndex = activeIndex >= 0 ? activeIndex : resumeChoiceFocusIndex;
+        const targetIndex = actionRowNavigationTarget(key, currentIndex, controls.length);
+        if (targetIndex !== null) {
+          event.preventDefault();
+          setResumeChoiceFocusIndex(targetIndex);
+          controls[targetIndex]?.focus();
+          return;
+        }
+        if (key === "Enter") {
+          event.preventDefault();
+          controls[currentIndex]?.click();
+        }
+        return;
+      }
       if (settingsConfirmation || showSettings) {
         const controls = settingsControlsRef.current.filter((control): control is HTMLButtonElement => Boolean(control) && !control.disabled);
         if (controls.length === 0) return;
@@ -676,10 +696,11 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCount, catalogStatus, continueHistory, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, selectedTitle, settingsConfirmation, showPlaylistForm, showFullscreenControls, showSettings, state, titles]);
+  }, [activeGroup, browseCount, catalogStatus, continueHistory, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlaylistForm, showFullscreenControls, showSettings, state, titles]);
 
   useEffect(() => {
     if (selectedTitle || resumeChoice || showSettings || settingsConfirmation) return;
+    setSettingsButtonFocused(false);
     const tile = tileRefs.current[focusIndex];
     tile?.focus();
     tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -692,6 +713,7 @@ export function App() {
 
   useEffect(() => {
     if (!resumeChoice) return;
+    setResumeChoiceFocusIndex(0);
     window.requestAnimationFrame(() => resumeChoiceControlsRef.current[0]?.focus());
   }, [resumeChoice]);
 
@@ -1187,7 +1209,7 @@ export function App() {
 
   return <main className="screen">
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
-      {state === "ready" && !selectedTitle && !showPlaylistForm && !showSettings && <button type="button" ref={settingsOpenButtonRef} onClick={openSettings}>Settings</button>}
+      {state === "ready" && !selectedTitle && !showPlaylistForm && !showSettings && <button className={settingsButtonFocused ? "remote-focused" : ""} type="button" ref={settingsOpenButtonRef} onBlur={() => setSettingsButtonFocused(false)} onFocus={() => setSettingsButtonFocused(true)} onClick={openSettings}>Settings</button>}
     </header>
     {state !== "ready" && showPlaylistForm && playlistSetupForm}
     {state !== "ready" && !showPlaylistForm && state === "error" && <section className="setup-recovery">
@@ -1226,9 +1248,9 @@ export function App() {
         <h2 id="resume-title">Continue “{resumeChoice.title.title}”?</h2>
         <p className="hint">Saved at {formatPlaybackTime(resumeChoice.history.currentTimeSeconds)} of {formatPlaybackTime(resumeChoice.history.durationSeconds)}.</p>
         <div className="settings-actions">
-          <button type="button" ref={(element) => { resumeChoiceControlsRef.current[0] = element; }} onClick={() => chooseResumeAction(true)}>Resume</button>
-          <button type="button" ref={(element) => { resumeChoiceControlsRef.current[1] = element; }} onClick={() => chooseResumeAction(false)}>Start over</button>
-          <button type="button" ref={(element) => { resumeChoiceControlsRef.current[2] = element; }} onClick={() => setResumeChoice(null)}>Cancel</button>
+          <button className={resumeChoiceFocusIndex === 0 ? "remote-focused" : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[0] = element; }} onFocus={() => setResumeChoiceFocusIndex(0)} onClick={() => chooseResumeAction(true)}>Resume</button>
+          <button className={resumeChoiceFocusIndex === 1 ? "remote-focused" : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[1] = element; }} onFocus={() => setResumeChoiceFocusIndex(1)} onClick={() => chooseResumeAction(false)}>Start over</button>
+          <button className={resumeChoiceFocusIndex === 2 ? "remote-focused" : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[2] = element; }} onFocus={() => setResumeChoiceFocusIndex(2)} onClick={() => setResumeChoice(null)}>Cancel</button>
         </div>
       </section> : showPlaylistForm ? playlistSetupForm : selectedTitle ? <section className={"player-screen " + (playerFullscreen ? "is-fullscreen" : "") + (playerFullscreen && showFullscreenControls ? " has-visible-controls" : "")} onFocusCapture={(event) => {
         const target = event.target as HTMLElement;
