@@ -6,8 +6,8 @@ interface AvPlayApi {
   prepareAsync(onSuccess: () => void, onError: (error: unknown) => void): void;
   play(): void;
   pause(): void;
-  jumpForward(milliseconds: number): void;
-  jumpBackward(milliseconds: number): void;
+  jumpForward(milliseconds: number, onSuccess?: () => void, onError?: (error: unknown) => void): void;
+  jumpBackward(milliseconds: number, onSuccess?: () => void, onError?: (error: unknown) => void): void;
   stop(): void;
   close(): void;
   getDuration?(): number;
@@ -46,6 +46,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private visibleCue = "";
   private generation = 0;
   private paused = false;
+  private jumpInFlight = false;
+  private queuedJumpMilliseconds = 0;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
 
   constructor(
@@ -58,12 +60,12 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   }
 
   load(streamUrl: string): void {
+    this.destroy();
     const player = avplay();
     if (!player) {
       this.emit("error");
       return;
     }
-    this.destroy();
     const generation = this.generation;
     this.emit("loading");
     try {
@@ -140,14 +142,12 @@ export class TizenAvPlayPlayer implements MediaPlayer {
 
   skip(seconds: number): void {
     if (!this.opened || !Number.isFinite(seconds) || seconds === 0) return;
-    try {
-      const player = avplay();
-      if (!player) return;
-      if (seconds > 0) player.jumpForward(seconds * 1_000);
-      else player.jumpBackward(Math.abs(seconds) * 1_000);
-    } catch {
-      this.fail(this.generation);
+    const deltaMilliseconds = seconds * 1_000;
+    if (this.jumpInFlight) {
+      this.queuedJumpMilliseconds += deltaMilliseconds;
+      return;
     }
+    this.startJump(this.generation, deltaMilliseconds);
   }
 
   setDisplayMode(mode: VideoDisplayMode): void {
@@ -219,6 +219,27 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     return this.opened && this.generation === generation;
   }
 
+  private startJump(generation: number, deltaMilliseconds: number): void {
+    if (!this.isCurrent(generation) || deltaMilliseconds === 0) return;
+    const player = avplay();
+    if (!player) return;
+    this.jumpInFlight = true;
+    const onComplete = (): void => {
+      if (!this.isCurrent(generation)) return;
+      this.jumpInFlight = false;
+      const queued = this.queuedJumpMilliseconds;
+      this.queuedJumpMilliseconds = 0;
+      if (queued !== 0) this.startJump(generation, queued);
+    };
+    try {
+      if (deltaMilliseconds > 0) player.jumpForward(deltaMilliseconds, onComplete, onComplete);
+      else player.jumpBackward(Math.abs(deltaMilliseconds), onComplete, onComplete);
+    } catch {
+      // A rejected seek must not tear down an otherwise healthy playback session.
+      onComplete();
+    }
+  }
+
   private emit(state: PlaybackState): void {
     this.eventHandlers?.onStateChange(state);
   }
@@ -245,6 +266,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
 
   destroy(): void {
     this.generation += 1;
+    this.jumpInFlight = false;
+    this.queuedJumpMilliseconds = 0;
     this.onSubtitleCue("");
     this.subtitleCues = [];
     this.visibleCue = "";

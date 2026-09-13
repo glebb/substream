@@ -17,8 +17,8 @@ describe("TizenAvPlayPlayer", () => {
     const prepareAsync = vi.fn((success: () => void) => success());
     const play = vi.fn();
     const pause = vi.fn();
-    const jumpForward = vi.fn();
-    const jumpBackward = vi.fn();
+    const jumpForward = vi.fn((_milliseconds: number, onSuccess?: () => void) => onSuccess?.());
+    const jumpBackward = vi.fn((_milliseconds: number, onSuccess?: () => void) => onSuccess?.());
     const stop = vi.fn();
     const close = vi.fn();
     const setDisplayRect = vi.fn();
@@ -61,8 +61,8 @@ describe("TizenAvPlayPlayer", () => {
     expect(setDisplayMethod).toHaveBeenLastCalledWith("PLAYER_DISPLAY_MODE_LETTER_BOX");
     expect(play).toHaveBeenCalledTimes(3);
     expect(pause).toHaveBeenCalledOnce();
-    expect(jumpForward).toHaveBeenCalledWith(60_000);
-    expect(jumpBackward).toHaveBeenCalledWith(60_000);
+    expect(jumpForward).toHaveBeenCalledWith(60_000, expect.any(Function), expect.any(Function));
+    expect(jumpBackward).toHaveBeenCalledWith(60_000, expect.any(Function), expect.any(Function));
     expect(jumpForward).toHaveBeenCalledTimes(1);
     expect(jumpBackward).toHaveBeenCalledTimes(1);
     await expect(player.setSubtitle("1\n00:00:01,000 --> 00:00:02,000\nHello", "English", "en")).resolves.toEqual({ enabled: true });
@@ -122,6 +122,77 @@ describe("TizenAvPlayPlayer", () => {
     expect(play).toHaveBeenCalledOnce();
     expect(states).toContain("playing");
     player.destroy();
+  });
+
+  it("serializes and coalesces rapid skips, then recovers from a seek error", () => {
+    const jumps: Array<{
+      direction: "forward" | "backward";
+      milliseconds: number;
+      success: (() => void) | undefined;
+      error: ((reason: unknown) => void) | undefined;
+    }> = [];
+    const playerApi = {
+      open: vi.fn(),
+      prepareAsync: vi.fn((success: () => void) => success()),
+      play: vi.fn(),
+      pause: vi.fn(),
+      jumpForward: vi.fn((milliseconds: number, success?: () => void, error?: (reason: unknown) => void) => {
+        jumps.push({ direction: "forward", milliseconds, success, error });
+      }),
+      jumpBackward: vi.fn((milliseconds: number, success?: () => void, error?: (reason: unknown) => void) => {
+        jumps.push({ direction: "backward", milliseconds, success, error });
+      }),
+      stop: vi.fn(), close: vi.fn(), setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+    };
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: playerApi };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const states: string[] = [];
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    player.load("https://example.invalid/stream.mkv");
+    player.skip(10);
+    player.skip(20);
+    player.skip(-5);
+    expect(jumps).toHaveLength(1);
+    expect(jumps[0]).toMatchObject({ direction: "forward", milliseconds: 10_000 });
+
+    jumps[0]?.success?.();
+    expect(jumps).toHaveLength(2);
+    expect(jumps[1]).toMatchObject({ direction: "forward", milliseconds: 15_000 });
+
+    player.skip(-3);
+    expect(jumps).toHaveLength(2);
+    jumps[1]?.error?.(new Error("seek rejected"));
+    expect(jumps).toHaveLength(3);
+    expect(jumps[2]).toMatchObject({ direction: "backward", milliseconds: 3_000 });
+    expect(states).not.toContain("error");
+
+    jumps[2]?.success?.();
+    player.skip(2);
+    expect(jumps).toHaveLength(4);
+    expect(jumps[3]).toMatchObject({ direction: "forward", milliseconds: 2_000 });
+    player.destroy();
+  });
+
+  it("discards queued skips when the stream is destroyed", () => {
+    const jumps: Array<{ success: (() => void) | undefined }> = [];
+    const playerApi = {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()),
+      play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn((_milliseconds: number, success?: () => void) => jumps.push({ success })),
+      jumpBackward: vi.fn((_milliseconds: number, success?: () => void) => jumps.push({ success })),
+      stop: vi.fn(), close: vi.fn(), setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+    };
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: playerApi };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.load("https://example.invalid/stream.mkv");
+    player.skip(10);
+    player.skip(20);
+    player.destroy();
+    jumps[0]?.success?.();
+    expect(jumps).toHaveLength(1);
   });
 
   it("reports synchronous open and prepare failures instead of throwing", () => {
