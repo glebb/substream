@@ -66,6 +66,30 @@ describe("OpenSubtitlesClient", () => {
     expect(request.mock.calls[0]?.[0]).toBe("https://api.opensubtitles.com/api/v1/subtitles?episode_number=2&languages=en&query=example+show&season_number=1&type=episode");
   });
 
+  it("preserves candidates with missing feature metadata and returns fields used for confidence ranking", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [
+        { id: "known", attributes: { language: "fi", files: [{ file_id: 1, file_name: "episode.srt" }, { file_id: 2, file_name: "ignored.srt" }], feature_details: {
+          feature_type: "Episode", title: "Example Show", year: 2024, parent_feature_id: 55, season_number: 2, episode_number: 3,
+        } } },
+        { id: "unknown", attributes: { language: "en", files: [{ file_id: 3, file_name: "unknown.srt" }] } },
+        { id: "wrong", attributes: { language: "en", files: [{ file_id: 4, file_name: "wrong.srt" }], feature_details: { parent_feature_id: 99, season_number: 2, episode_number: 3 } } },
+      ] }),
+      text: async () => "",
+    });
+    const client = new OpenSubtitlesClient("test-key", request);
+
+    await expect(client.search({ languages: ["fi", "en"], parentFeatureId: 55, season: 2, episode: 3, type: "episode" })).resolves.toEqual([
+      expect.objectContaining({
+        id: "known", language: "fi", fileId: 1, fileName: "episode.srt", featureType: "Episode", featureTitle: "Example Show",
+        featureYear: 2024, parentFeatureId: 55, season: 2, episode: 3,
+      }),
+      expect.objectContaining({ id: "unknown", language: "en", fileId: 3, fileName: "unknown.srt" }),
+    ]);
+  });
+
   it("allows a title-only series fallback search", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ data: [] }), text: async () => "" });
     const client = new OpenSubtitlesClient("test-key", request);

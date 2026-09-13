@@ -9,11 +9,12 @@ import type { MediaPlayer, PlaybackProgress, VideoDisplayMode } from "../platfor
 import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avplay-player.ts";
 import { loadOpenSubtitlesApiKey, saveOpenSubtitlesApiKey } from "../platform/browser/opensubtitles-config.ts";
 import { OpenSubtitlesClient, OpenSubtitlesRequestError, type SubtitleResult } from "../platform/opensubtitles/client.ts";
+import { rankSubtitleResults } from "../core/subtitles/rank.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { BrowseRequestGate, browsePageCount, sortAndPageBrowseItems } from "./browse.ts";
 import "./app.css";
 
-type ScreenState = "loading" | "setup" | "ready" | "importing" | "error" | "storage-error";
+type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 100;
 const OPEN_SUBTITLES_BASE_URL = import.meta.env.DEV ? "/opensubtitles-api/api/v1" : undefined;
 type BrowseMode = "local" | "provider" | "episodes";
@@ -32,6 +33,7 @@ export function App() {
   const [state, setState] = useState<ScreenState>("loading");
   const [startupStatus, setStartupStatus] = useState("Opening catalogue…");
   const [playlistUrl, setPlaylistUrl] = useState(loadPlaylistUrl);
+  const [showPlaylistForm, setShowPlaylistForm] = useState(() => !loadPlaylistUrl());
   const [groups, setGroups] = useState<VodGroup[]>([]);
   const [activeGroup, setActiveGroup] = useState<VodGroup | null>(null);
   const [titles, setTitles] = useState<VodCatalogItem[]>([]);
@@ -50,6 +52,7 @@ export function App() {
   const [isSkipFeedbackVisible, setIsSkipFeedbackVisible] = useState(false);
   const [selectedTitle, setSelectedTitle] = useState<VodCatalogItem | null>(null);
   const [openSubtitlesApiKey, setOpenSubtitlesApiKey] = useState(loadOpenSubtitlesApiKey);
+  const [showSubtitleSettings, setShowSubtitleSettings] = useState(() => !loadOpenSubtitlesApiKey());
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[]>([]);
   const [subtitleStatus, setSubtitleStatus] = useState("");
   const [visibleSubtitle, setVisibleSubtitle] = useState("");
@@ -58,6 +61,8 @@ export function App() {
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const playlistUrlRef = useRef<HTMLInputElement | null>(null);
   const importButtonRef = useRef<HTMLButtonElement | null>(null);
+  const retryPlaylistRef = useRef<HTMLButtonElement | null>(null);
+  const changePlaylistRef = useRef<HTMLButtonElement | null>(null);
   const sortSelectRef = useRef<HTMLSelectElement | null>(null);
   const backToGroupsRef = useRef<HTMLButtonElement | null>(null);
   const previousPageRef = useRef<HTMLButtonElement | null>(null);
@@ -70,7 +75,11 @@ export function App() {
   const playerAspectButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSmallerButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleLargerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subtitleKeyInputRef = useRef<HTMLInputElement | null>(null);
   const findSubtitlesButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subtitleSettingsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subtitleSaveButtonRef = useRef<HTMLButtonElement | null>(null);
+  const subtitleCancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const subtitleRequestRef = useRef(0);
@@ -81,6 +90,7 @@ export function App() {
   const avPlayContainerRef = useRef<HTMLObjectElement | null>(null);
   const playerStageRef = useRef<HTMLDivElement | null>(null);
   const openSubtitlesApiKeyRef = useRef<HTMLInputElement | null>(null);
+  const startupImportStartedRef = useRef(false);
   const importStageRef = useRef("Preparing import");
   const [progress, setProgress] = useState("Preparing import…");
   const [error, setError] = useState("");
@@ -99,9 +109,12 @@ export function App() {
     playerAspectButtonRef.current,
     subtitleSmallerButtonRef.current,
     subtitleLargerButtonRef.current,
+    (showSubtitleSettings || !openSubtitlesApiKey.trim()) ? subtitleKeyInputRef.current : null,
     findSubtitlesButtonRef.current,
+    showSubtitleSettings ? subtitleSaveButtonRef.current : subtitleSettingsButtonRef.current,
+    showSubtitleSettings && openSubtitlesApiKey.trim() ? subtitleCancelButtonRef.current : null,
     ...subtitleButtonRefs.current,
-  ].filter((control): control is HTMLButtonElement => control !== null);
+  ].filter((control): control is HTMLElement => control !== null);
 
   const refreshCatalog = async () => {
     setState("loading");
@@ -120,7 +133,7 @@ export function App() {
         setGroups(await store.groups());
         setState("ready");
       } else {
-        setState("setup");
+        setState(playlistUrl.trim() ? "auto-import" : "setup");
       }
     } catch (cause) {
       setError(cause instanceof IndexedDbCatalogOpenError
@@ -138,8 +151,18 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (state === "setup" || state === "error") playlistUrlRef.current?.focus();
+    if (state !== "auto-import" || startupImportStartedRef.current) return;
+    startupImportStartedRef.current = true;
+    if (playlistUrl.trim()) void importPlaylistUrl(playlistUrl);
+    else {
+      setShowPlaylistForm(true);
+      setState("setup");
+    }
   }, [state]);
+
+  useEffect(() => {
+    if (showPlaylistForm && state !== "loading" && state !== "importing") playlistUrlRef.current?.focus();
+  }, [showPlaylistForm, state]);
 
   const openGroup = async (group: VodGroup, targetPage: number, targetSort = sort) => {
     if (group.providerCategoryId && group.providerContentType) {
@@ -245,7 +268,10 @@ export function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       const key = normalizedRemoteKey(event);
       if (state !== "ready") {
-        const controls = ([playlistUrlRef.current, importButtonRef.current] as Array<HTMLElement | null>).filter((control): control is HTMLElement => control !== null);
+        const controls = (showPlaylistForm
+          ? [playlistUrlRef.current, importButtonRef.current]
+          : [retryPlaylistRef.current, changePlaylistRef.current])
+          .filter((control): control is HTMLElement => control !== null);
         if (controls.length === 0) return;
         const currentIndex = Math.max(0, controls.indexOf(document.activeElement as HTMLElement));
         if (key === "ArrowDown" || key === "ArrowRight") {
@@ -258,9 +284,9 @@ export function App() {
           controls[Math.max(0, currentIndex - 1)]?.focus();
           return;
         }
-        if (key === "Enter" && document.activeElement === importButtonRef.current) {
+        if (key === "Enter" && document.activeElement instanceof HTMLButtonElement) {
           event.preventDefault();
-          importButtonRef.current?.click();
+          document.activeElement.click();
         }
         return;
       }
@@ -346,7 +372,7 @@ export function App() {
       }
       const targetButton = event.target instanceof HTMLButtonElement ? event.target : null;
       if (targetButton && !targetButton.classList.contains("tile")) {
-        const browseControls = [sortSelectRef.current, backToGroupsRef.current, previousPageRef.current, nextPageRef.current]
+        const browseControls = [changePlaylistRef.current, sortSelectRef.current, backToGroupsRef.current, previousPageRef.current, nextPageRef.current]
           .filter((control): control is HTMLSelectElement | HTMLButtonElement => control !== null && !(control instanceof HTMLButtonElement && control.disabled));
         const index = browseControls.indexOf(targetButton);
         if (key === "Enter") return;
@@ -355,7 +381,7 @@ export function App() {
           browseControls[Math.max(0, Math.min(browseControls.length - 1, index + (key === "ArrowLeft" ? -1 : 1)))]?.focus();
           return;
         }
-        if (key === "ArrowDown" && index <= 1) {
+        if (key === "ArrowDown" && index <= 2) {
           event.preventDefault();
           setFocusIndex(0);
           tileRefs.current[0]?.focus();
@@ -410,7 +436,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCount, catalogStatus, focusIndex, groups, isPlaybackPaused, page, playerFocusIndex, playerFullscreen, playlistUrl, selectedTitle, state, titles]);
+  }, [activeGroup, browseCount, catalogStatus, focusIndex, groups, isPlaybackPaused, page, playerFocusIndex, playerFullscreen, playlistUrl, selectedTitle, showPlaylistForm, state, titles]);
 
   useEffect(() => {
     const tile = tileRefs.current[focusIndex];
@@ -467,6 +493,8 @@ export function App() {
       onProgress: setPlaybackProgress,
     });
     player.load(selectedTitle.streamUrl);
+    if (openSubtitlesApiKey.trim()) void findSubtitles(true);
+    else setSubtitleStatus("Add an OpenSubtitles API key below to search automatically.");
     return () => {
       subtitleRequestRef.current += 1;
       if (skipFeedbackTimerRef.current !== null) {
@@ -479,9 +507,12 @@ export function App() {
     };
   }, [selectedTitle]);
 
-  const findSubtitles = async () => {
-    const apiKey = openSubtitlesApiKeyRef.current?.value.trim() || openSubtitlesApiKey.trim();
+  const findSubtitles = async (automatic = false) => {
+    const apiKey = openSubtitlesApiKeyRef.current
+      ? openSubtitlesApiKeyRef.current.value.trim()
+      : openSubtitlesApiKey.trim();
     if (!selectedTitle || !apiKey) {
+      if (!apiKey) setShowSubtitleSettings(true);
       setSubtitleStatus("Enter an OpenSubtitles API key before searching.");
       return;
     }
@@ -491,38 +522,67 @@ export function App() {
     try {
       setOpenSubtitlesApiKey(apiKey);
       saveOpenSubtitlesApiKey(apiKey);
+      setShowSubtitleSettings(false);
       const client = new OpenSubtitlesClient(apiKey, undefined, OPEN_SUBTITLES_BASE_URL);
       const titleForSearch = normalizeTitle(selectedTitle.title);
-      const languages = ["en", "fi", "sv"];
-      let results: SubtitleResult[];
+      const resolvedTitle = selectedTitle.searchTitle || titleForSearch.searchTitle;
+      const resolvedYear = selectedTitle.year ?? titleForSearch.year;
+      const season = selectedTitle.season ?? titleForSearch.season;
+      const episode = selectedTitle.episode ?? titleForSearch.episode;
+      const languages = ["fi", "en"];
+      let results: SubtitleResult[] = [];
+      let parentFeatureId: number | undefined;
       let usedSeriesFallback = false;
-      if (selectedTitle.contentType === "series" && titleForSearch.season !== undefined && titleForSearch.episode !== undefined) {
-        const feature = await client.findSeriesFeature(titleForSearch.searchTitle, titleForSearch.year);
+      if (selectedTitle.contentType === "series" && season !== undefined && episode !== undefined) {
+        const feature = await client.findSeriesFeature(resolvedTitle, resolvedYear);
+        if (requestId !== subtitleRequestRef.current) return;
         if (feature) {
+          parentFeatureId = feature.id;
           results = await client.search({
             languages,
             parentFeatureId: feature.id,
-            season: titleForSearch.season,
-            episode: titleForSearch.episode,
+            season,
+            episode,
             type: "episode",
           });
         } else {
           usedSeriesFallback = true;
-          results = [];
+          results = await client.search({
+            query: resolvedTitle,
+            languages,
+            season,
+            episode,
+            ...(resolvedYear !== null ? { year: resolvedYear } : {}),
+            type: "episode",
+          });
         }
       } else {
         results = await client.search({
-          languages: ["en", "fi", "sv"],
-          query: titleForSearch.searchTitle,
+          languages,
+          query: resolvedTitle,
           type: selectedTitle.contentType === "movie" ? "movie" : "episode",
-          ...(titleForSearch.year !== null ? { year: titleForSearch.year } : {}),
+          ...(resolvedYear !== null ? { year: resolvedYear } : {}),
         });
       }
       if (requestId !== subtitleRequestRef.current) return;
-      setSubtitleResults(results);
-      setSubtitleStatus(results.length
-        ? results.length.toLocaleString() + " subtitle matches found"
-        : usedSeriesFallback ? "No exact series record was found on OpenSubtitles." : "No subtitle matches found");
+      const ranked = rankSubtitleResults({
+        title: resolvedTitle,
+        year: resolvedYear,
+        contentType: selectedTitle.contentType === "series" ? "series" : "movie",
+        ...(season !== undefined ? { season } : {}),
+        ...(episode !== undefined ? { episode } : {}),
+        ...(parentFeatureId !== undefined ? { parentFeatureId } : {}),
+      }, results).slice(0, 8);
+      setSubtitleResults(ranked);
+      const best = ranked[0];
+      if (automatic && best?.highConfidence) {
+        setSubtitleStatus("Best match found. Loading " + best.language.toUpperCase() + " subtitles…");
+        await loadSubtitle(best, apiKey);
+      } else {
+        setSubtitleStatus(ranked.length
+          ? ranked.length.toLocaleString() + (usedSeriesFallback ? " possible episode subtitles found" : " subtitle matches found")
+          : usedSeriesFallback ? "No exact series record or matching episode subtitles were found." : "No subtitle matches found");
+      }
     } catch (cause) {
       if (requestId !== subtitleRequestRef.current) return;
       setSubtitleResults([]);
@@ -534,8 +594,10 @@ export function App() {
     }
   };
 
-  const loadSubtitle = async (subtitle: SubtitleResult) => {
-    const apiKey = openSubtitlesApiKeyRef.current?.value.trim() || openSubtitlesApiKey.trim();
+  const loadSubtitle = async (subtitle: SubtitleResult, apiKeyOverride?: string) => {
+    const apiKey = apiKeyOverride ?? (openSubtitlesApiKeyRef.current
+      ? openSubtitlesApiKeyRef.current.value.trim()
+      : openSubtitlesApiKey.trim());
     if (!apiKey || !playerRef.current) {
       setSubtitleStatus("Enter an OpenSubtitles API key to download a subtitle.");
       return;
@@ -592,15 +654,34 @@ export function App() {
     setVideoDisplayMode((current) => next[current]);
   };
 
-  const importPlaylist = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!playlistUrl.trim()) return;
+  const saveSubtitleSettings = () => {
+    const apiKey = openSubtitlesApiKeyRef.current
+      ? openSubtitlesApiKeyRef.current.value.trim()
+      : openSubtitlesApiKey.trim();
+    if (!apiKey) {
+      setSubtitleStatus("Enter an OpenSubtitles API key before saving.");
+      return;
+    }
+    setOpenSubtitlesApiKey(apiKey);
+    saveOpenSubtitlesApiKey(apiKey);
+    setShowSubtitleSettings(false);
+    setSubtitleStatus("Subtitle settings saved.");
+  };
+
+  const cancelSubtitleSettings = () => {
+    setOpenSubtitlesApiKey(loadOpenSubtitlesApiKey());
+    setShowSubtitleSettings(false);
+  };
+
+  async function importPlaylistUrl(url: string) {
+    if (!url.trim()) return;
     setError("");
     updateImportStage("Connecting to the playlist…");
     setState("importing");
     try {
-      savePlaylistUrl(playlistUrl);
-      const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
+      setPlaylistUrl(url);
+      savePlaylistUrl(url);
+      const provider = XtreamClient.fromPlaylistUrl(url);
       if (provider) {
         updateImportStage("Checking the provider catalogue…");
         try {
@@ -621,6 +702,7 @@ export function App() {
               store.close();
             }
             updateImportStage(categories.length.toLocaleString() + " provider categories ready");
+            setShowPlaylistForm(false);
             setState("ready");
             return;
           }
@@ -628,7 +710,7 @@ export function App() {
           updateImportStage("Provider catalogue unavailable. Falling back to M3U import…");
         }
       }
-      const response = await fetch(playlistUrl, { cache: "no-store" });
+      const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) {
         updateImportStage("Playlist server responded with HTTP " + response.status);
         throw new Error("Playlist request failed");
@@ -652,6 +734,7 @@ export function App() {
         });
         setGroups(await store.groups());
         setProgress(result.importedItems.toLocaleString() + " VOD items imported");
+        setShowPlaylistForm(false);
         setState("ready");
       } finally {
         store.close();
@@ -665,7 +748,18 @@ export function App() {
       setError("Import failed after: " + importStageRef.current + ". Check TV network access and the playlist server, then try again.");
       setState("error");
     }
+  }
+
+  const importPlaylist = (event: FormEvent) => {
+    event.preventDefault();
+    if (playlistUrl.trim()) void importPlaylistUrl(playlistUrl);
   };
+
+  const hasSubtitleKey = Boolean(openSubtitlesApiKey.trim());
+  const subtitleKeyVisible = showSubtitleSettings || !hasSubtitleKey;
+  const findSubtitleFocusIndex = subtitleKeyVisible ? 9 : 8;
+  const subtitleSettingsFocusIndex = findSubtitleFocusIndex + 1;
+  const firstSubtitleFocusIndex = subtitleSettingsFocusIndex + 1 + (subtitleKeyVisible && hasSubtitleKey ? 1 : 0);
 
   if (state === "loading") return <main className="screen"><p role="status" aria-live="polite">{startupStatus}</p></main>;
   if (state === "storage-error") return <main className="screen">
@@ -673,19 +767,31 @@ export function App() {
     <p role="alert">{error}</p>
     <button type="button" autoFocus onClick={() => void refreshCatalog()}>Try again</button>
   </main>;
-  if (state === "importing") return <main className="screen"><h1>Importing library</h1><p>{progress}</p></main>;
+  if (state === "importing" || state === "auto-import") return <main className="screen"><h1>Importing library</h1><p role="status" aria-live="polite">{progress}</p></main>;
+
+  const playlistSetupForm = <form onSubmit={importPlaylist}>
+    <label htmlFor="playlist-url">M3U playlist URL</label>
+    <input id="playlist-url" type="password" value={playlistUrl} onChange={(event) => setPlaylistUrl(event.target.value)} autoComplete="off" ref={playlistUrlRef} />
+    <p className="hint">Stored only in this app’s private local data. Do not use a VITE environment variable for this URL.</p>
+    <div className="settings-actions">
+      <button type="submit" ref={importButtonRef}>Import VOD library</button>
+      {playlistUrl.trim() && <button type="button" onClick={() => setShowPlaylistForm(false)}>Cancel</button>}
+    </div>
+    {error && <p className="error" role="alert">{error}</p>}
+  </form>;
 
   return <main className="screen">
     <header><p className="eyebrow">MY M3U</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></header>
-    {state !== "ready" && <form onSubmit={importPlaylist}>
-      <label htmlFor="playlist-url">M3U playlist URL</label>
-      <input id="playlist-url" type="password" value={playlistUrl} onChange={(event) => setPlaylistUrl(event.target.value)} autoComplete="off" ref={playlistUrlRef} />
-      <p className="hint">Stored only in this app’s private local data. Do not use a VITE environment variable for this URL.</p>
-      <button type="submit" ref={importButtonRef}>Import VOD library</button>
-      {error && <p className="error" role="alert">{error}</p>}
-    </form>}
+    {state !== "ready" && showPlaylistForm && playlistSetupForm}
+    {state !== "ready" && !showPlaylistForm && state === "error" && <section className="setup-recovery">
+      <p className="error" role="alert">{error || "The saved playlist could not be imported."}</p>
+      <div className="settings-actions">
+        {playlistUrl.trim() && <button type="button" ref={retryPlaylistRef} onClick={() => void importPlaylistUrl(playlistUrl)}>Retry saved playlist</button>}
+        <button type="button" ref={changePlaylistRef} onClick={() => { setError(""); setShowPlaylistForm(true); }}>Change playlist</button>
+      </div>
+    </section>}
     {state === "ready" && <section>
-      {selectedTitle ? <section className={"player-screen " + (playerFullscreen ? "is-fullscreen" : "")}>
+      {showPlaylistForm ? playlistSetupForm : selectedTitle ? <section className={"player-screen " + (playerFullscreen ? "is-fullscreen" : "")}>
         <div className="player-heading">
           <div className="player-title"><h2>{selectedTitle.title}</h2><p className="hint">{selectedTitle.year ?? selectedTitle.contentType}</p></div>
           <button className={playerFocusIndex === 0 ? "remote-focused" : ""} type="button" onClick={() => { browseRequestRef.current.invalidate(); setPlayerFullscreen(false); setSelectedTitle(null); }} ref={playerBackButtonRef}>Back to titles</button>
@@ -714,18 +820,29 @@ export function App() {
         </div>
         <section className="subtitles">
           <h3>Subtitles</h3>
-          <label htmlFor="opensubtitles-api-key">OpenSubtitles API key</label>
-          <div className="subtitle-actions">
-            <input id="opensubtitles-api-key" type="password" defaultValue={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={openSubtitlesApiKeyRef} />
-            <button className={playerFocusIndex === 8 ? "remote-focused" : ""} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
-          </div>
+          {subtitleKeyVisible && <>
+            <label htmlFor="opensubtitles-api-key">OpenSubtitles API key</label>
+            <div className="subtitle-actions">
+              <input id="opensubtitles-api-key" type="password" value={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={(element) => { openSubtitlesApiKeyRef.current = element; subtitleKeyInputRef.current = element; }} />
+              <button className={playerFocusIndex === findSubtitleFocusIndex ? "remote-focused" : ""} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
+              <button className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} type="button" onClick={saveSubtitleSettings} ref={subtitleSaveButtonRef}>Save settings</button>
+              {hasSubtitleKey && <button className={playerFocusIndex === subtitleSettingsFocusIndex + 1 ? "remote-focused" : ""} type="button" onClick={cancelSubtitleSettings} ref={subtitleCancelButtonRef}>Cancel</button>}
+            </div>
+          </>}
+          {!subtitleKeyVisible && <div className="subtitle-actions">
+            <button className={playerFocusIndex === findSubtitleFocusIndex ? "remote-focused" : ""} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
+            <button className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} type="button" onClick={() => {
+              setShowSubtitleSettings(true);
+              window.requestAnimationFrame(() => subtitleKeyInputRef.current?.focus());
+            }} ref={subtitleSettingsButtonRef}>Change subtitle settings</button>
+          </div>}
           <p className="hint">An API key permits anonymous subtitle downloads within OpenSubtitles’ daily allowance.</p>
           {subtitleStatus && <p className="hint">{subtitleStatus}</p>}
           <div className="subtitle-results">
             {subtitleResults.map((subtitle, index) => <article key={subtitle.id}>
               <strong>{subtitle.language.toUpperCase()} · {subtitle.releaseName}</strong>
               <span>{subtitle.downloads.toLocaleString()} downloads{subtitle.hearingImpaired ? " · HI" : ""}</span>
-              <button className={playerFocusIndex === index + 9 ? "remote-focused" : ""} type="button" onClick={() => void loadSubtitle(subtitle)} ref={(element) => { subtitleButtonRefs.current[index] = element; }}>Use this subtitle</button>
+              <button className={playerFocusIndex === index + firstSubtitleFocusIndex ? "remote-focused" : ""} type="button" onClick={() => void loadSubtitle(subtitle)} ref={(element) => { subtitleButtonRefs.current[index] = element; }}>Use this subtitle</button>
             </article>)}
           </div>
         </section>
@@ -756,6 +873,7 @@ export function App() {
           <button disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onClick={() => changeBrowsePage(page + 1)} type="button">Next</button>
         </div>
       </> : <>
+        <div className="settings-actions"><button type="button" ref={changePlaylistRef} onClick={() => { setError(""); setShowPlaylistForm(true); }}>Change playlist</button></div>
         <p className="hint">{catalogStatus || progress || "Select a category"}</p>
         <p className="hint">Use arrow keys and Enter on a TV remote, or click a group.</p>
         <div className="groups">

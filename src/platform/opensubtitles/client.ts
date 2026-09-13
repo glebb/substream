@@ -30,6 +30,12 @@ export type SubtitleResult = {
   fileName: string;
   hearingImpaired: boolean;
   downloads: number;
+  featureType?: string;
+  featureTitle?: string;
+  featureYear?: number | null;
+  parentFeatureId?: number;
+  season?: number;
+  episode?: number;
 };
 
 export type SubtitleDownload = {
@@ -57,6 +63,9 @@ type SearchResponse = {
       files?: Array<{ file_id?: number; file_name?: string }>;
       feature_details?: {
         feature_type?: string;
+        title?: string;
+        movie_name?: string;
+        year?: number | string | null;
         parent_feature_id?: number;
         season_number?: number;
         episode_number?: number;
@@ -104,9 +113,11 @@ export class OpenSubtitlesClient {
       const file = attributes?.files?.[0];
       if (!item.id || !attributes?.language || !file?.file_id || !file.file_name) return [];
       const feature = attributes.feature_details;
-      if (input.parentFeatureId !== undefined && feature?.parent_feature_id !== input.parentFeatureId) return [];
-      if (input.season !== undefined && feature?.season_number !== input.season) return [];
-      if (input.episode !== undefined && feature?.episode_number !== input.episode) return [];
+      if (input.parentFeatureId !== undefined && feature?.parent_feature_id !== undefined
+        && feature.parent_feature_id !== input.parentFeatureId) return [];
+      if (input.season !== undefined && feature?.season_number !== undefined && feature.season_number !== input.season) return [];
+      if (input.episode !== undefined && feature?.episode_number !== undefined && feature.episode_number !== input.episode) return [];
+      const featureYear = feature?.year == null ? null : Number(feature.year);
       return [{
         id: item.id,
         language: attributes.language,
@@ -115,6 +126,12 @@ export class OpenSubtitlesClient {
         fileName: file.file_name,
         hearingImpaired: attributes.hearing_impaired ?? false,
         downloads: attributes.download_count ?? 0,
+        ...(feature?.feature_type ? { featureType: feature.feature_type } : {}),
+        ...(feature?.title || feature?.movie_name ? { featureTitle: feature.title ?? feature.movie_name } : {}),
+        ...(feature?.year !== undefined ? { featureYear: Number.isSafeInteger(featureYear) ? featureYear : null } : {}),
+        ...(feature?.parent_feature_id !== undefined ? { parentFeatureId: feature.parent_feature_id } : {}),
+        ...(feature?.season_number !== undefined ? { season: feature.season_number } : {}),
+        ...(feature?.episode_number !== undefined ? { episode: feature.episode_number } : {}),
       }];
     });
   }

@@ -24,6 +24,20 @@ describe("browser configuration storage", () => {
     expect(loadOpenSubtitlesApiKey()).toBe("package-default-key");
   });
 
+  it("prefers locally saved configuration over bundled defaults", () => {
+    const values = new Map([
+      ["my-m3u.playlist-url", "https://local.example.invalid/playlist"],
+      ["my-m3u.opensubtitles-api-key", "local-test-key"],
+    ]);
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: { getItem: vi.fn((key: string) => values.get(key) ?? null) },
+    });
+
+    expect(loadPlaylistUrl()).toBe("https://local.example.invalid/playlist");
+    expect(loadOpenSubtitlesApiKey()).toBe("local-test-key");
+  });
+
   it("keeps the session usable when denied storage prevents saving", () => {
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,

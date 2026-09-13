@@ -52,6 +52,8 @@ button:disabled { cursor: default; opacity: .45; }
 .subtitle-actions { display: flex; gap: .75rem; }
 .subtitle-actions input { flex: 1; }
 .subtitle-actions button { white-space: nowrap; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin: .5rem 0 1rem; }
+.setup-recovery { max-width: 720px; }
 .subtitle-results { display: grid; gap: .5rem; margin-top: 1rem; }
 .subtitle-results article { background: #151925; border-radius: .55rem; display: grid; gap: .35rem; padding: .8rem 1rem; }
 .subtitle-results span { color: #aeb8ca; font-size: .85rem; }
@@ -59,4 +61,6 @@ button:disabled { cursor: default; opacity: .45; }
   .screen { padding: 5vh 5vw; }
   .groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tizen-player { min-height: 14rem; }
+  .subtitle-actions { align-items: stretch; flex-direction: column; }
+  .subtitle-actions input, .subtitle-actions button { width: 100%; }
 }

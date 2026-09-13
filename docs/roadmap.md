@@ -8,16 +8,19 @@ This roadmap describes the next user-facing improvements for the Samsung Tizen V
 - [x] Show buffering state and a visible buffer indicator when the adapter reports it.
 - [ ] Persist playback progress per title and offer **Resume** or **Start over**.
 - [ ] Add a **Continue watching** section, ordered by most recently played unfinished titles, with an explicit option to remove an item from history.
-- [ ] Prepopulate the M3U URL whenever it is bundled in a personal build or already stored locally. Do not show the setup form until the user explicitly chooses **Change playlist**.
+- [x] Prepopulate the M3U URL whenever it is bundled in a personal build or already stored locally. Do not show the setup form until the user explicitly chooses **Change playlist**.
 - [ ] Add a safe settings/reset screen: change playlist URL, clear the local VOD catalogue, clear saved OpenSubtitles settings, and reset all local app data. Reset actions must require confirmation and never reveal stored secrets.
-- [ ] Prepopulate the OpenSubtitles API key when it is bundled or stored locally. Do not request it on the player screen unless it is missing or the user chooses **Change subtitle settings**.
-- [ ] Automatically search for subtitles when playback begins, using the title, year, season, and episode already resolved by the catalogue.
-- [ ] Automatically choose the best subtitle when the confidence is high; otherwise show a compact selection list without interrupting playback.
+- [x] Prepopulate the OpenSubtitles API key when it is bundled or stored locally. Do not request it on the player screen unless it is missing or the user chooses **Change subtitle settings**.
+- [x] Automatically search for subtitles when playback begins, using the title, year, season, and episode already resolved by the catalogue.
+- [x] Automatically choose the best subtitle when the confidence is high; otherwise show a compact selection list without interrupting playback.
+- [ ] Add possibility to disable/enable subtitles.
+- [ ] Combine play/pause button.
+- [ ] Change the behavior on the playback screen. Only skip past/forward, if the video area is "selected". Otherwise left right buttons should move the selection just like up and down. In full screen the skipping should work always with left right.
 
 ## Phase 2: Subtitle experience
 
 - [ ] Add a subtitle-language preference in settings. Default search/ranking order: Finnish, then English.
-- [ ] Filter subtitle results by the selected languages and rank by exact episode/movie match, language preference, release-name similarity, and download count.
+- [x] Filter subtitle results to Finnish and English and rank by exact episode/movie match, language preference, release-name similarity, and download count.
 - [ ] Remember the last chosen subtitle language and font size per device.
 - [ ] Add subtitle timing controls for the app-rendered Tizen overlay: quick ±0.5 s and ±2 s adjustments, an on-screen current-offset indicator, and a per-title remembered offset.
 - [ ] Keep normalizing provider formatting tags such as ASS/SSA overrides and inline HTML before rendering text.
