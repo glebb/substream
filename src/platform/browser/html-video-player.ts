@@ -1,8 +1,14 @@
 import type { MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { srtToWebVtt } from "../../core/subtitles/srt-to-vtt.ts";
+import { shiftWebVttCues } from "../../core/subtitles/webvtt-timing.ts";
+import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
 
 export class HtmlVideoPlayer implements MediaPlayer {
   private subtitleObjectUrl: string | undefined;
+  private subtitleText: string | undefined;
+  private subtitleLabel = "";
+  private subtitleLanguage = "";
+  private subtitleTimingOffsetSeconds = 0;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
   private readonly eventListeners: Array<[string, EventListener]>;
 
@@ -70,7 +76,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.video.removeAttribute("src");
     this.video.load();
     for (const [type, listener] of this.eventListeners) this.video.removeEventListener(type, listener);
-    if (this.subtitleObjectUrl) URL.revokeObjectURL(this.subtitleObjectUrl);
+    this.removeSubtitleTrack();
   }
 
   private async requestPlay(): Promise<void> {
@@ -94,16 +100,64 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   async setSubtitle(subtitleText: string, label: string, language: string): Promise<SubtitleAttachment> {
-    if (this.subtitleObjectUrl) URL.revokeObjectURL(this.subtitleObjectUrl);
+    const previousSubtitle = this.subtitleText;
+    const previousLabel = this.subtitleLabel;
+    const previousLanguage = this.subtitleLanguage;
+    this.subtitleText = subtitleText;
+    this.subtitleLabel = label;
+    this.subtitleLanguage = language;
+    try {
+      this.replaceSubtitleTrack();
+      return { enabled: true };
+    } catch {
+      this.subtitleText = previousSubtitle;
+      this.subtitleLabel = previousLabel;
+      this.subtitleLanguage = previousLanguage;
+      return { enabled: false, reason: "The browser could not attach the selected subtitle." };
+    }
+  }
+
+  setSubtitleTimingOffset(offsetSeconds: number): void {
+    this.subtitleTimingOffsetSeconds = normalizeSubtitleOffsetSeconds(offsetSeconds);
+    if (this.subtitleText !== undefined) {
+      try {
+        this.replaceSubtitleTrack();
+      } catch {
+        // Keep the previously attached track if rebuilding its timed cues fails.
+      }
+    }
+  }
+
+  private replaceSubtitleTrack(): void {
+    const vtt = shiftWebVttCues(srtToWebVtt(this.subtitleText ?? ""), this.subtitleTimingOffsetSeconds);
+    const objectUrl = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+    let track: HTMLTrackElement | null = null;
+    try {
+      track = document.createElement("track");
+      track.default = true;
+      track.kind = "subtitles";
+      track.label = this.subtitleLabel;
+      track.srclang = this.subtitleLanguage;
+      track.src = objectUrl;
+      this.video.append(track);
+      this.video.querySelectorAll("track").forEach((existing) => {
+        if (existing !== track) existing.remove();
+      });
+      const previousObjectUrl = this.subtitleObjectUrl;
+      this.subtitleObjectUrl = objectUrl;
+      if (previousObjectUrl) URL.revokeObjectURL(previousObjectUrl);
+    } catch (error) {
+      track?.remove();
+      URL.revokeObjectURL(objectUrl);
+      throw error;
+    }
+  }
+
+  private removeSubtitleTrack(): void {
     this.video.querySelectorAll("track").forEach((track) => track.remove());
-    this.subtitleObjectUrl = URL.createObjectURL(new Blob([srtToWebVtt(subtitleText)], { type: "text/vtt" }));
-    const track = document.createElement("track");
-    track.default = true;
-    track.kind = "subtitles";
-    track.label = label;
-    track.srclang = language;
-    track.src = this.subtitleObjectUrl;
-    this.video.append(track);
-    return { enabled: true };
+    if (this.subtitleObjectUrl) {
+      URL.revokeObjectURL(this.subtitleObjectUrl);
+      this.subtitleObjectUrl = undefined;
+    }
   }
 }

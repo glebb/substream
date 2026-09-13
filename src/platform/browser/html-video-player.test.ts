@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HtmlVideoPlayer } from "./html-video-player.ts";
 
-function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElement; dispatch(type: string): void } {
+function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElement; dispatch(type: string): void; tracks: HTMLTrackElement[] } {
   const listeners = new Map<string, EventListener>();
+  const tracks: HTMLTrackElement[] = [];
   const video = {
     src: "",
     currentTime: 0,
@@ -15,11 +16,13 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
     addEventListener: vi.fn((type: string, listener: EventListener) => listeners.set(type, listener)),
     removeEventListener: vi.fn((type: string) => listeners.delete(type)),
     removeAttribute: vi.fn(),
-    querySelectorAll: vi.fn(() => []),
-    append: vi.fn(),
+    querySelectorAll: vi.fn(() => tracks),
+    append: vi.fn((track: HTMLTrackElement) => tracks.push(track)),
   } as unknown as HTMLVideoElement;
-  return { video, dispatch: (type) => listeners.get(type)?.(new Event(type)) };
+  return { video, dispatch: (type) => listeners.get(type)?.(new Event(type)), tracks };
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("HtmlVideoPlayer", () => {
   it("reports loading, buffering, playing, pause, and completion from video events", () => {
@@ -62,5 +65,51 @@ describe("HtmlVideoPlayer", () => {
 
     expect(() => player.load("https://private.example/signed")).not.toThrow();
     expect(states).toEqual(["loading", "error"]);
+  });
+
+  it("rebuilds browser WebVTT tracks from the original subtitle and revokes replaced and destroyed URLs", async () => {
+    const { video, tracks } = fakeVideo();
+    const createdBlobs: Blob[] = [];
+    const revokedUrls: string[] = [];
+    let nextUrl = 0;
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn((blob: Blob) => {
+        createdBlobs.push(blob);
+        nextUrl += 1;
+        return `blob:subtitle-${nextUrl}`;
+      }),
+      revokeObjectURL: vi.fn((url: string) => revokedUrls.push(url)),
+    });
+    vi.stubGlobal("document", {
+      createElement: vi.fn(() => ({
+        default: false,
+        kind: "",
+        label: "",
+        srclang: "",
+        src: "",
+        remove: vi.fn(function(this: HTMLTrackElement) {
+          const index = tracks.indexOf(this);
+          if (index >= 0) tracks.splice(index, 1);
+        }),
+      } as unknown as HTMLTrackElement)),
+    });
+
+    const player = new HtmlVideoPlayer(video);
+    player.setSubtitleTimingOffset(1);
+    const source = "1\n00:00:00,500 --> 00:00:02,000\nHello\n";
+    expect(await player.setSubtitle(source, "Finnish", "fi")).toEqual({ enabled: true });
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]).toMatchObject({ default: true, kind: "subtitles", label: "Finnish", srclang: "fi", src: "blob:subtitle-1" });
+    expect(await createdBlobs[0]!.text()).toContain("00:00:01.500 --> 00:00:03.000");
+
+    player.setSubtitleTimingOffset(-0.5);
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]!.src).toBe("blob:subtitle-2");
+    expect(await createdBlobs[1]!.text()).toContain("00:00:00.000 --> 00:00:01.500");
+    expect(revokedUrls).toEqual(["blob:subtitle-1"]);
+
+    player.destroy();
+    expect(tracks).toHaveLength(0);
+    expect(revokedUrls).toEqual(["blob:subtitle-1", "blob:subtitle-2"]);
   });
 });

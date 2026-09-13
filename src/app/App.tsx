@@ -37,7 +37,7 @@ function formatSubtitleTimingOffset(seconds: number): string {
 }
 
 export function App() {
-  const subtitleTimingAvailable = isTizenAvPlayAvailable();
+  const subtitleTimingAvailable = true;
   const [state, setState] = useState<ScreenState>("loading");
   const [startupStatus, setStartupStatus] = useState("Opening catalogue…");
   const [playlistUrl, setPlaylistUrl] = useState(loadPlaylistUrl);
