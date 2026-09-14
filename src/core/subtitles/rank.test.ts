@@ -29,19 +29,20 @@ describe("rankSubtitleResults", () => {
     expect(ranked[2]?.highConfidence).toBe(false);
   });
 
-  it("filters known year, series, and episode conflicts while retaining unknown metadata for manual choice", () => {
+  it("filters known series and episode conflicts while retaining episode results with their own release year", () => {
     const ranked = rankSubtitleResults({ title: "Example Show", year: 2024, contentType: "series", season: 2, episode: 3, parentFeatureId: 55 }, [
       candidate({ id: "exact", releaseName: "Example Show S02E03", featureType: "episode", featureTitle: "Example Show", featureYear: 2024, parentFeatureId: 55, season: 2, episode: 3 }),
+      candidate({ id: "episode-year", releaseName: "Example Show S02E03", featureType: "episode", featureTitle: "Example Show", featureYear: 2023, parentFeatureId: 55, season: 2, episode: 3 }),
       candidate({ id: "unknown", releaseName: "Example Show S02E03" }),
       candidate({ id: "wrong-episode", season: 2, episode: 4 }),
       candidate({ id: "wrong-parent", parentFeatureId: 99 }),
       candidate({ id: "wrong-type", featureType: "movie" }),
-      candidate({ id: "wrong-year", featureYear: 2023 }),
     ]);
 
-    expect(ranked.map(({ id }) => id)).toEqual(["exact", "unknown"]);
+    expect(ranked.map(({ id }) => id)).toEqual(["episode-year", "exact", "unknown"]);
     expect(ranked[0]?.highConfidence).toBe(true);
-    expect(ranked[1]?.highConfidence).toBe(false);
+    expect(ranked[1]?.highConfidence).toBe(true);
+    expect(ranked[2]?.highConfidence).toBe(false);
   });
 
   it("requires a title and year match before auto-selecting a movie subtitle", () => {

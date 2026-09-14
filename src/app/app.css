@@ -61,6 +61,12 @@ button:disabled { cursor: default; opacity: .45; }
 .subtitle-actions { display: flex; gap: .75rem; }
 .subtitle-actions input { flex: 1; }
 .subtitle-actions button { white-space: nowrap; }
+.subtitle-search-options { align-items: end; display: flex; flex-wrap: wrap; gap: .75rem; }
+.subtitle-search-heading { font-weight: 650; margin: 0 0 .5rem; }
+.subtitle-search-options label { margin: 0; }
+.subtitle-search-options input, .subtitle-search-options select { background: #181c28; color: inherit; display: block; margin-top: .35rem; width: 100%; }
+.subtitle-search-query { flex: 1 1 16rem; }
+.subtitle-search-number { flex: 0 1 7rem; }
 .subtitle-timing { margin-top: 1.25rem; }
 .subtitle-timing p { margin: .3rem 0; }
 .subtitle-timing-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: .65rem; }
@@ -83,4 +89,6 @@ button:disabled { cursor: default; opacity: .45; }
   .tizen-player { min-height: 14rem; }
   .subtitle-actions { align-items: stretch; flex-direction: column; }
   .subtitle-actions input, .subtitle-actions button { width: 100%; }
+  .subtitle-search-options { align-items: stretch; flex-direction: column; }
+  .subtitle-search-number, .subtitle-search-query { flex-basis: auto; }
 }

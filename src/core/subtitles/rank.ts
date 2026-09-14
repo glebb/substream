@@ -83,7 +83,11 @@ export function rankSubtitleResults(target: SubtitleMatchTarget, results: Subtit
     const featureType = result.featureType?.toLowerCase();
     if (target.contentType === "movie" && featureType && /episode|tvshow|series/.test(featureType)) return [];
     if (target.contentType === "series" && featureType && /movie|film/.test(featureType)) return [];
-    if (target.year !== null && result.featureYear != null && result.featureYear !== target.year) return [];
+    // Episode metadata commonly reports the episode's release year, while the
+    // catalogue stores the parent series' year. Season/episode and parent ID
+    // are the authoritative series identifiers, so only use year as a hard
+    // conflict for movie results.
+    if (target.contentType === "movie" && target.year !== null && result.featureYear != null && result.featureYear !== target.year) return [];
     if (target.parentFeatureId !== undefined && result.parentFeatureId !== undefined
       && result.parentFeatureId !== target.parentFeatureId) return [];
     if (target.season !== undefined && result.season !== undefined && result.season !== target.season) return [];

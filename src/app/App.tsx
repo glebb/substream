@@ -24,6 +24,7 @@ const PAGE_SIZE = 100;
 const OPEN_SUBTITLES_BASE_URL = import.meta.env.DEV ? "/opensubtitles-api/api/v1" : undefined;
 type BrowseMode = "local" | "provider" | "episodes";
 type SettingsConfirmation = "clear-catalog" | "clear-subtitles" | "reset-all";
+type SubtitleSearchType = "movie" | "series";
 
 function playbackHistoryItem(title: VodCatalogItem, progress: PlaybackProgress, providerSourceId?: string, updatedAt = Date.now()): PlaybackHistoryItem {
   const provider = title.id.match(/^xtream:(movie|episode):(\d{1,20})$/);
@@ -63,6 +64,11 @@ function formatSubtitleTimingOffset(seconds: number): string {
   return `${seconds > 0 ? "+" : ""}${seconds.toFixed(1)} s (${seconds > 0 ? "later" : "earlier"})`;
 }
 
+function positiveInteger(value: string): number | undefined {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export function App() {
   const subtitleTimingAvailable = true;
   const [state, setState] = useState<ScreenState>("loading");
@@ -98,6 +104,10 @@ export function App() {
   const [showVideoInfo, setShowVideoInfo] = useState(false);
   const [openSubtitlesApiKey, setOpenSubtitlesApiKey] = useState(loadOpenSubtitlesApiKey);
   const [showSubtitleSettings, setShowSubtitleSettings] = useState(() => !loadOpenSubtitlesApiKey());
+  const [subtitleSearchQuery, setSubtitleSearchQuery] = useState("");
+  const [subtitleSearchType, setSubtitleSearchType] = useState<SubtitleSearchType>("movie");
+  const [subtitleSearchSeason, setSubtitleSearchSeason] = useState("");
+  const [subtitleSearchEpisode, setSubtitleSearchEpisode] = useState("");
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[]>([]);
   const [subtitleStatus, setSubtitleStatus] = useState("");
   const [visibleSubtitle, setVisibleSubtitle] = useState("");
@@ -133,6 +143,10 @@ export function App() {
   const subtitleTimingPlusHalfButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleTimingPlusTwoButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleKeyInputRef = useRef<HTMLInputElement | null>(null);
+  const subtitleSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const subtitleSearchTypeRef = useRef<HTMLSelectElement | null>(null);
+  const subtitleSearchSeasonRef = useRef<HTMLInputElement | null>(null);
+  const subtitleSearchEpisodeRef = useRef<HTMLInputElement | null>(null);
   const findSubtitlesButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSettingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSaveButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -195,6 +209,9 @@ export function App() {
         subtitleTimingPlusTwoButtonRef.current,
       ] : []),
       (showSubtitleSettings || !openSubtitlesApiKey.trim()) ? subtitleKeyInputRef.current : null,
+      subtitleSearchInputRef.current,
+      subtitleSearchTypeRef.current,
+      ...(subtitleSearchType === "series" ? [subtitleSearchSeasonRef.current, subtitleSearchEpisodeRef.current] : []),
       findSubtitlesButtonRef.current,
       showSubtitleSettings ? subtitleSaveButtonRef.current : subtitleSettingsButtonRef.current,
       showSubtitleSettings && openSubtitlesApiKey.trim() ? subtitleCancelButtonRef.current : null,
@@ -324,6 +341,11 @@ export function App() {
     setIsSubtitleEnabled(false);
     setSubtitleTimingOffsetSeconds(loadSubtitleTimingOffset(title.id));
     setSubtitleFontSize(2.3);
+    const titleForSearch = normalizeTitle(title.title);
+    setSubtitleSearchQuery(title.searchTitle || titleForSearch.searchTitle);
+    setSubtitleSearchType(title.contentType === "series" ? "series" : "movie");
+    setSubtitleSearchSeason(String(title.season ?? titleForSearch.season ?? ""));
+    setSubtitleSearchEpisode(String(title.episode ?? titleForSearch.episode ?? ""));
     setSelectedTitle(title);
   };
 
@@ -696,7 +718,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCount, catalogStatus, continueHistory, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlaylistForm, showFullscreenControls, showSettings, state, titles]);
+  }, [activeGroup, browseCount, catalogStatus, continueHistory, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlaylistForm, showFullscreenControls, showSettings, state, subtitleSearchType, titles]);
 
   useEffect(() => {
     if (selectedTitle || resumeChoice || showSettings || settingsConfirmation) return;
@@ -722,7 +744,7 @@ export function App() {
     const controls = playerControls();
     const control = controls[Math.min(playerFocusIndex, Math.max(0, controls.length - 1))];
     control?.focus();
-  }, [isSubtitleAttached, playerFocusIndex, selectedTitle, showFullscreenControls, showSubtitleSettings, subtitleResults.length]);
+  }, [isSubtitleAttached, playerFocusIndex, selectedTitle, showFullscreenControls, showSubtitleSettings, subtitleResults.length, subtitleSearchType]);
 
   useEffect(() => {
     if (selectedTitle) window.scrollTo(0, 0);
@@ -834,15 +856,16 @@ export function App() {
       setShowSubtitleSettings(false);
       const client = new OpenSubtitlesClient(apiKey, undefined, OPEN_SUBTITLES_BASE_URL);
       const titleForSearch = normalizeTitle(selectedTitle.title);
-      const resolvedTitle = selectedTitle.searchTitle || titleForSearch.searchTitle;
+      const defaultSearchTitle = selectedTitle.searchTitle || titleForSearch.searchTitle;
+      const resolvedTitle = subtitleSearchQuery.trim() || defaultSearchTitle;
       const resolvedYear = selectedTitle.year ?? titleForSearch.year;
-      const season = selectedTitle.season ?? titleForSearch.season;
-      const episode = selectedTitle.episode ?? titleForSearch.episode;
+      const season = subtitleSearchType === "series" ? positiveInteger(subtitleSearchSeason) : undefined;
+      const episode = subtitleSearchType === "series" ? positiveInteger(subtitleSearchEpisode) : undefined;
       const languages = ["fi", "en"];
       let results: SubtitleResult[] = [];
       let parentFeatureId: number | undefined;
       let usedSeriesFallback = false;
-      if (selectedTitle.contentType === "series" && season !== undefined && episode !== undefined) {
+      if (subtitleSearchType === "series" && season !== undefined && episode !== undefined) {
         const feature = await client.findSeriesFeature(resolvedTitle, resolvedYear);
         if (requestId !== subtitleRequestRef.current) return;
         if (feature) {
@@ -861,7 +884,6 @@ export function App() {
             languages,
             season,
             episode,
-            ...(resolvedYear !== null ? { year: resolvedYear } : {}),
             type: "episode",
           });
         }
@@ -869,15 +891,17 @@ export function App() {
         results = await client.search({
           languages,
           query: resolvedTitle,
-          type: selectedTitle.contentType === "movie" ? "movie" : "episode",
-          ...(resolvedYear !== null ? { year: resolvedYear } : {}),
+          type: subtitleSearchType === "movie" ? "movie" : "episode",
+          ...(subtitleSearchType === "movie" && resolvedYear !== null ? { year: resolvedYear } : {}),
+          ...(subtitleSearchType === "series" && season !== undefined ? { season } : {}),
+          ...(subtitleSearchType === "series" && episode !== undefined ? { episode } : {}),
         });
       }
       if (requestId !== subtitleRequestRef.current) return;
       const ranked = rankSubtitleResults({
         title: resolvedTitle,
         year: resolvedYear,
-        contentType: selectedTitle.contentType === "series" ? "series" : "movie",
+        contentType: subtitleSearchType,
         ...(season !== undefined ? { season } : {}),
         ...(episode !== undefined ? { episode } : {}),
         ...(parentFeatureId !== undefined ? { parentFeatureId } : {}),
@@ -1182,7 +1206,11 @@ export function App() {
   const subtitleLargerFocusIndex = 8;
   const subtitleToggleFocusIndex = 9;
   const subtitleTimingStartFocusIndex = subtitleToggleFocusIndex + (isSubtitleAttached ? 1 : 0);
-  const findSubtitleFocusIndex = subtitleTimingStartFocusIndex + (subtitleTimingAvailable ? 4 : 0) + (subtitleKeyVisible ? 1 : 0);
+  const subtitleSearchFocusIndex = subtitleTimingStartFocusIndex + (subtitleTimingAvailable ? 4 : 0) + (subtitleKeyVisible ? 1 : 0);
+  const subtitleSearchTypeFocusIndex = subtitleSearchFocusIndex + 1;
+  const subtitleSeasonFocusIndex = subtitleSearchTypeFocusIndex + 1;
+  const subtitleEpisodeFocusIndex = subtitleSeasonFocusIndex + 1;
+  const findSubtitleFocusIndex = subtitleSearchTypeFocusIndex + 1 + (subtitleSearchType === "series" ? 2 : 0);
   const subtitleSettingsFocusIndex = findSubtitleFocusIndex + 1;
   const firstSubtitleFocusIndex = subtitleSettingsFocusIndex + 1 + (subtitleKeyVisible && hasSubtitleKey ? 1 : 0);
   const continueActionCount = continueHistory.length * 2;
@@ -1313,18 +1341,36 @@ export function App() {
             <label htmlFor="opensubtitles-api-key">OpenSubtitles API key</label>
             <div className="subtitle-actions">
               <input id="opensubtitles-api-key" type="password" value={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={(element) => { openSubtitlesApiKeyRef.current = element; subtitleKeyInputRef.current = element; }} />
-              <button className={playerFocusIndex === findSubtitleFocusIndex ? "remote-focused" : ""} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
               <button className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} type="button" onClick={saveSubtitleSettings} ref={subtitleSaveButtonRef}>Save settings</button>
               {hasSubtitleKey && <button className={playerFocusIndex === subtitleSettingsFocusIndex + 1 ? "remote-focused" : ""} type="button" onClick={cancelSubtitleSettings} ref={subtitleCancelButtonRef}>Cancel</button>}
             </div>
           </>}
-          {!subtitleKeyVisible && <div className="subtitle-actions">
+          <p className="subtitle-search-heading">Subtitle search</p>
+          <div className="subtitle-search-options">
+            <label className="subtitle-search-query" htmlFor="subtitle-search-query">Title
+              <input id="subtitle-search-query" type="search" value={subtitleSearchQuery} onChange={(event) => setSubtitleSearchQuery(event.target.value)} autoComplete="off" enterKeyHint="search" aria-label="Subtitle search term" ref={subtitleSearchInputRef} />
+            </label>
+            <label htmlFor="subtitle-search-type">Type
+              <select id="subtitle-search-type" value={subtitleSearchType} onChange={(event) => setSubtitleSearchType(event.target.value as SubtitleSearchType)} ref={subtitleSearchTypeRef}>
+                <option value="movie">Movie</option>
+                <option value="series">Series</option>
+              </select>
+            </label>
+            {subtitleSearchType === "series" && <>
+              <label className="subtitle-search-number" htmlFor="subtitle-search-season">Season
+                <input id="subtitle-search-season" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchSeason} onChange={(event) => setSubtitleSearchSeason(event.target.value)} ref={subtitleSearchSeasonRef} />
+              </label>
+              <label className="subtitle-search-number" htmlFor="subtitle-search-episode">Episode
+                <input id="subtitle-search-episode" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchEpisode} onChange={(event) => setSubtitleSearchEpisode(event.target.value)} ref={subtitleSearchEpisodeRef} />
+              </label>
+            </>}
             <button className={playerFocusIndex === findSubtitleFocusIndex ? "remote-focused" : ""} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
-            <button className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} type="button" onClick={() => {
+            {!subtitleKeyVisible && <button className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} type="button" onClick={() => {
               setShowSubtitleSettings(true);
               window.requestAnimationFrame(() => subtitleKeyInputRef.current?.focus());
             }} ref={subtitleSettingsButtonRef}>Change subtitle settings</button>
-          </div>}
+            }
+          </div>
           <p className="hint">An API key permits anonymous subtitle downloads within OpenSubtitles’ daily allowance.</p>
           {subtitleStatus && <p className="hint">{subtitleStatus}</p>}
           <div className="subtitle-results">
