@@ -1,8 +1,8 @@
-import { FormEvent, Fragment, useEffect, useRef, useState } from "react";
+import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { importM3uChunks, normalizeTitle, type VodCatalogItem } from "../core/catalog/index.ts";
 import { DEFAULT_MAX_WHOLE_RESPONSE_BYTES, responseTextChunks, validateWholeResponseFallback, WholeResponseFallbackError } from "../platform/browser/fetch-chunks.ts";
 import { clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl } from "../platform/browser/playlist-config.ts";
-import { isBackKey, normalizedRemoteKey, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
+import { isBackKey, isTizenRuntime, normalizedRemoteKey, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
 import { IndexedDbCatalogOpenError, IndexedDbCatalogStore, type VodGroup, type VodSort } from "../platform/web/indexed-db-catalog.ts";
 import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
 import type { MediaPlayer, PlaybackProgress, VideoDisplayMode } from "../platform/media-player.ts";
@@ -15,8 +15,8 @@ import { XtreamClient } from "../platform/xtream/client.ts";
 import { clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimingOffset } from "../platform/browser/subtitle-timing-config.ts";
 import { clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared } from "../platform/browser/catalog-preferences.ts";
 import { clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, type PlaybackHistoryItem } from "../platform/browser/playback-progress-config.ts";
-import { BrowseRequestGate, browsePageCount, sortAndPageBrowseItems } from "./browse.ts";
-import { actionRowNavigationTarget, dashboardControlNavigationTarget, homeGridNavigationTarget, playerTextEntryNavigationKey, resolveAppBackAction } from "./remote-navigation.ts";
+import { BrowseRequestGate, browseGroupsForCollection, browsePageCount, sortAndPageBrowseItems, type BrowseCollection } from "./browse.ts";
+import { actionRowNavigationTarget, browseGridColumnCount, dashboardControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, playerTextEntryNavigationKey, resolveAppBackAction, TITLE_LIST_PAGE_STRIDE, titleListNavigationTarget, titleListPageBoundaryTarget } from "./remote-navigation.ts";
 import "./app.css";
 
 type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
@@ -71,6 +71,7 @@ function positiveInteger(value: string): number | undefined {
 
 export function App() {
   const subtitleTimingAvailable = true;
+  const isTizen = isTizenRuntime();
   const [state, setState] = useState<ScreenState>("loading");
   const [startupStatus, setStartupStatus] = useState("Opening catalogue…");
   const [playlistUrl, setPlaylistUrl] = useState(loadPlaylistUrl);
@@ -82,6 +83,8 @@ export function App() {
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState<VodSort>("playlist");
   const [browseMode, setBrowseMode] = useState<BrowseMode>("local");
+  const [browseCollection, setBrowseCollection] = useState<BrowseCollection>("recent");
+  const visibleGroups = useMemo(() => browseCollection === "recent" ? [] : browseGroupsForCollection(groups, browseCollection), [browseCollection, groups]);
   const [browseCount, setBrowseCount] = useState(0);
   const [focusIndex, setFocusIndex] = useState(0);
   const [playerFocusIndex, setPlayerFocusIndex] = useState(0);
@@ -118,6 +121,7 @@ export function App() {
   const [subtitleFontSize, setSubtitleFontSize] = useState(2.3);
   const [catalogStatus, setCatalogStatus] = useState("");
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const browseTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const playlistUrlRef = useRef<HTMLInputElement | null>(null);
   const importButtonRef = useRef<HTMLButtonElement | null>(null);
   const retryPlaylistRef = useRef<HTMLButtonElement | null>(null);
@@ -271,7 +275,7 @@ export function App() {
     if (showPlaylistForm && state !== "loading" && state !== "importing") playlistUrlRef.current?.focus();
   }, [showPlaylistForm, state]);
 
-  const openGroup = async (group: VodGroup, targetPage: number, targetSort = sort) => {
+  const openGroup = async (group: VodGroup, targetPage: number, targetSort = sort, focusAtEnd = false) => {
     if (group.providerCategoryId && group.providerContentType) {
       const key = "provider:" + group.providerContentType + ":" + group.providerCategoryId;
       let items = remoteBrowseRef.current?.key === key ? remoteBrowseRef.current.items : null;
@@ -296,10 +300,11 @@ export function App() {
       setBrowseMode("provider");
       setBrowseCount(items.length);
       setActiveGroup(group);
-      setTitles(sortAndPageBrowseItems(items, targetPage, PAGE_SIZE, targetSort));
+      const pageItems = sortAndPageBrowseItems(items, targetPage, PAGE_SIZE, targetSort);
+      setTitles(pageItems);
       setPage(targetPage);
       setSort(targetSort);
-      setFocusIndex(0);
+      setFocusIndex(focusAtEnd ? Math.max(0, pageItems.length - 1) : 0);
       setCatalogStatus(items.length.toLocaleString() + " titles ready");
       return;
     }
@@ -318,7 +323,7 @@ export function App() {
     setTitles(result.value);
     setPage(targetPage);
     setSort(targetSort);
-    setFocusIndex(0);
+    setFocusIndex(focusAtEnd ? Math.max(0, result.value.length - 1) : 0);
     setCatalogStatus("");
   };
 
@@ -436,16 +441,17 @@ export function App() {
     }
   };
 
-  const changeBrowsePage = (targetPage: number, targetSort = sort) => {
+  const changeBrowsePage = (targetPage: number, targetSort = sort, focusAtEnd = false) => {
     if (browseMode !== "local" && remoteBrowseRef.current) {
       browseRequestRef.current.invalidate();
-      setTitles(sortAndPageBrowseItems(remoteBrowseRef.current.items, targetPage, PAGE_SIZE, targetSort));
+      const pageItems = sortAndPageBrowseItems(remoteBrowseRef.current.items, targetPage, PAGE_SIZE, targetSort);
+      setTitles(pageItems);
       setPage(targetPage);
       setSort(targetSort);
-      setFocusIndex(0);
+      setFocusIndex(focusAtEnd ? Math.max(0, pageItems.length - 1) : 0);
       return;
     }
-    if (activeGroup) void openGroup(activeGroup, targetPage, targetSort);
+    if (activeGroup) void openGroup(activeGroup, targetPage, targetSort, focusAtEnd);
   };
 
   useEffect(() => {
@@ -634,11 +640,37 @@ export function App() {
         return;
       }
       const targetButton = event.target instanceof HTMLButtonElement ? event.target : null;
-      if (targetButton && !targetButton.classList.contains("tile")) {
-        if (dashboardControlNavigationTarget(key, targetButton === settingsOpenButtonRef.current) === "grid") {
+      if (targetButton?.classList.contains("browse-tab")) {
+        const tabs = browseTabRefs.current.filter((tab): tab is HTMLButtonElement => tab !== null);
+        const currentTab = Math.max(0, tabs.indexOf(targetButton));
+        if (key === "ArrowLeft" || key === "ArrowRight") {
           event.preventDefault();
+          const nextTab = Math.max(0, Math.min(tabs.length - 1, currentTab + (key === "ArrowLeft" ? -1 : 1)));
+          const nextCollection: BrowseCollection[] = ["recent", "movies", "series"];
           setFocusIndex(0);
-          tileRefs.current[0]?.focus();
+          setBrowseCollection(nextCollection[nextTab] ?? "recent");
+          tabs[nextTab]?.focus();
+          return;
+        }
+        if (key === "ArrowDown") {
+          const itemCount = browseCollection === "recent" ? continueHistory.length * 2 : visibleGroups.length;
+          if (itemCount > 0) {
+            event.preventDefault();
+            setFocusIndex(0);
+            tileRefs.current[0]?.focus();
+          }
+          return;
+        }
+        if (key === "ArrowUp" && settingsOpenButtonRef.current) {
+          event.preventDefault();
+          settingsOpenButtonRef.current.focus();
+          return;
+        }
+      }
+      if (targetButton && !targetButton.classList.contains("tile")) {
+        if (dashboardControlNavigationTarget(key, targetButton === settingsOpenButtonRef.current) === "tabs") {
+          event.preventDefault();
+          browseTabRefs.current[browseCollection === "recent" ? 0 : browseCollection === "movies" ? 1 : 2]?.focus();
           return;
         }
         const browseControls = [settingsOpenButtonRef.current, sortSelectRef.current, backToGroupsRef.current, previousPageRef.current, nextPageRef.current, changePlaylistRef.current]
@@ -658,30 +690,44 @@ export function App() {
         }
         if (key === "ArrowUp" && (targetButton === previousPageRef.current || targetButton === nextPageRef.current)) {
           event.preventDefault();
-          const lastRowStart = Math.floor(Math.max(0, titles.length - 1) / 4) * 4;
-          setFocusIndex(lastRowStart);
-          tileRefs.current[lastRowStart]?.focus();
+          const columns = isTizen ? 1 : browseGridColumnCount(true, window.innerWidth <= 800);
+          const lastTitleIndex = isTizen ? Math.max(0, titles.length - 1) : Math.floor(Math.max(0, titles.length - 1) / columns) * columns;
+          setFocusIndex(lastTitleIndex);
+          tileRefs.current[lastTitleIndex]?.focus();
           return;
         }
         return;
       }
       if (targetButton && key === "Enter") return;
-      const continueActionCount = continueHistory.length * 2;
-      const itemCount = activeGroup ? titles.length : continueActionCount + groups.length;
+      const continueActionCount = browseCollection === "recent" ? continueHistory.length * 2 : 0;
+      const itemCount = activeGroup ? titles.length : continueActionCount + visibleGroups.length;
       if (itemCount === 0) return;
-      const moves: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -4, ArrowDown: 4 };
-      const move = moves[key];
-      if (move !== undefined) {
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
         event.preventDefault();
-        if (!activeGroup && homeGridNavigationTarget(key, focusIndex) === "settings" && settingsOpenButtonRef.current) {
-          settingsOpenButtonRef.current.focus();
+        const compactViewport = window.innerWidth <= 800;
+        const homeColumns = browseGridColumnCount(false, compactViewport);
+        const titleColumns = isTizen ? TITLE_LIST_PAGE_STRIDE : browseGridColumnCount(true, compactViewport);
+        const targetIndex = activeGroup
+          ? isTizen
+            ? titleListNavigationTarget(key, focusIndex, itemCount)
+            : gridNavigationTarget(key, focusIndex, itemCount, browseGridColumnCount(true, compactViewport))
+          : gridNavigationTarget(key, focusIndex, itemCount, homeColumns);
+        if (activeGroup && isTizen) {
+          const pageBoundary = titleListPageBoundaryTarget(key, focusIndex, itemCount, page, browsePageCount(browseCount, PAGE_SIZE));
+          if (pageBoundary) {
+            changeBrowsePage(pageBoundary.page, sort, pageBoundary.focusAtEnd);
+            return;
+          }
+        }
+        if (!activeGroup && key === "ArrowUp" && targetIndex === null && focusIndex < homeColumns) {
+          browseTabRefs.current[browseCollection === "recent" ? 0 : browseCollection === "movies" ? 1 : 2]?.focus();
           return;
         }
-        if (activeGroup && key === "ArrowUp" && focusIndex < 4) {
+        if (activeGroup && key === "ArrowUp" && targetIndex === null && (isTizen ? focusIndex < TITLE_LIST_PAGE_STRIDE : focusIndex < titleColumns)) {
           sortSelectRef.current?.focus();
           return;
         }
-        if (activeGroup && key === "ArrowDown" && focusIndex + 4 >= itemCount) {
+        if (activeGroup && key === "ArrowDown" && targetIndex === null) {
           if (page + 1 < browsePageCount(browseCount, PAGE_SIZE) && nextPageRef.current) {
             nextPageRef.current.focus();
             return;
@@ -691,12 +737,17 @@ export function App() {
             return;
           }
         }
-        setFocusIndex((current) => Math.max(0, Math.min(itemCount - 1, current + move)));
+        if (targetIndex !== null) {
+          setFocusIndex(targetIndex);
+          const targetTile = tileRefs.current[targetIndex];
+          targetTile?.focus();
+          targetTile?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        }
         return;
       }
       if (key === "Enter") {
         if (!activeGroup) {
-          if (focusIndex < continueActionCount) {
+          if (browseCollection === "recent" && focusIndex < continueActionCount) {
             const entry = continueHistory[Math.floor(focusIndex / 2)];
             if (!entry) return;
             event.preventDefault();
@@ -704,7 +755,7 @@ export function App() {
             else removeHistoryEntry(entry);
             return;
           }
-          const group = groups[focusIndex - continueActionCount];
+          const group = visibleGroups[focusIndex - continueActionCount];
           if (!group) return;
           event.preventDefault();
           void openGroup(group, 0);
@@ -718,15 +769,35 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCount, catalogStatus, continueHistory, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlaylistForm, showFullscreenControls, showSettings, state, subtitleSearchType, titles]);
+  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlaylistForm, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
 
   useEffect(() => {
     if (selectedTitle || resumeChoice || showSettings || settingsConfirmation) return;
     setSettingsButtonFocused(false);
+    if (!activeGroup) {
+      const activeElement = document.activeElement;
+      const tile = tileRefs.current[focusIndex];
+      const activeFocus = activeElement === document.body
+        ? "body"
+        : activeElement?.classList.contains("browse-tab")
+          ? "tab"
+          : activeElement?.classList.contains("tile") ? "tile" : "other";
+      const focusTarget = homeBrowseFocusTarget(activeFocus, Boolean(tile));
+      if (focusTarget === "tile" && tile) {
+        tile.focus();
+        tile.scrollIntoView({ block: "nearest", inline: "nearest" });
+        return;
+      }
+      if (focusTarget === "tab") {
+        const index = browseCollection === "recent" ? 0 : browseCollection === "movies" ? 1 : 2;
+        browseTabRefs.current[index]?.focus();
+      }
+      return;
+    }
     const tile = tileRefs.current[focusIndex];
     tile?.focus();
     tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeGroup, focusIndex, groups.length, page, resumeChoice, selectedTitle, settingsConfirmation, showSettings, titles.length, continueHistory.length]);
+  }, [activeGroup, browseCollection, focusIndex, groups.length, page, resumeChoice, selectedTitle, settingsConfirmation, showSettings, state, titles.length, continueHistory.length]);
 
   useEffect(() => {
     if (!showSettings && !settingsConfirmation) return;
@@ -1213,10 +1284,10 @@ export function App() {
   const findSubtitleFocusIndex = subtitleSearchTypeFocusIndex + 1 + (subtitleSearchType === "series" ? 2 : 0);
   const subtitleSettingsFocusIndex = findSubtitleFocusIndex + 1;
   const firstSubtitleFocusIndex = subtitleSettingsFocusIndex + 1 + (subtitleKeyVisible && hasSubtitleKey ? 1 : 0);
-  const continueActionCount = continueHistory.length * 2;
+  const continueActionCount = browseCollection === "recent" ? continueHistory.length * 2 : 0;
   const videoResolution = showVideoInfo ? playerRef.current?.getVideoResolution() ?? "Unavailable" : "";
 
-  if (state === "loading") return <main className="screen"><p role="status" aria-live="polite">{startupStatus}</p></main>;
+  if (state === "loading") return <main className="screen"><p role="status" aria-live="polite">{startupStatus}</p><div className="groups skeleton-grid" aria-hidden="true">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-tile" key={index} />)}</div></main>;
   if (state === "storage-error") return <main className="screen">
     <h1>Catalogue unavailable</h1>
     <p role="alert">{error}</p>
@@ -1397,20 +1468,35 @@ export function App() {
           </label>
           <button type="button" ref={backToGroupsRef} onClick={() => { browseRequestRef.current.invalidate(); remoteBrowseRef.current = null; setBrowseMode("local"); setBrowseCount(0); setActiveGroup(null); setTitles([]); setPage(0); setFocusIndex(0); setCatalogStatus(""); }}>Back to groups</button>
         </div>
-        <div className="groups title-grid">
-          {catalogStatus && <p className="hint">{catalogStatus}</p>}
+        <div className={"groups title-grid" + (isTizen ? " tv-title-list" : "")}>
+          {catalogStatus && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
           {titles.map((title, index) => <button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} key={title.id} onClick={() => { setFocusIndex(index); void openTitle(title); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
-            <strong>{title.title}</strong><span>{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span>
+            <strong>{title.title}</strong><span className="tile-meta">{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span>
           </button>)}
+          {!titles.length && !catalogStatus.startsWith("Loading ") && <p className="empty-state">No titles are available in this group yet.</p>}
         </div>
         <div className="pagination">
           <button disabled={page === 0} ref={previousPageRef} onClick={() => changeBrowsePage(page - 1)} type="button">Previous</button>
           <button disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onClick={() => changeBrowsePage(page + 1)} type="button">Next</button>
         </div>
       </> : <>
-        <p className="hint">{catalogStatus || (groups.length ? "Select a category" : "No local VOD catalogue is saved. Open Settings to import a playlist or reset local data.")}</p>
-        <p className="hint">Use arrow keys and Enter on a TV remote, or click a group.</p>
-        {continueHistory.length > 0 && <>
+        <nav className="browse-tabs" role="tablist" aria-label="Browse your library">
+          {(["recent", "movies", "series"] as BrowseCollection[]).map((collection, index) => <button
+            aria-selected={browseCollection === collection}
+            className={"browse-tab " + (browseCollection === collection ? "selected" : "")}
+            key={collection}
+            onClick={() => { setFocusIndex(0); setBrowseCollection(collection); }}
+            ref={(element) => { browseTabRefs.current[index] = element; }}
+            role="tab"
+            type="button"
+          >{collection === "recent" ? "Recent" : collection === "movies" ? "Movies" : "Series"}</button>)}
+        </nav>
+        {catalogStatus && !catalogStatus.startsWith("Loading ") && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
+        {catalogStatus.startsWith("Loading ") && <>
+          <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>
+          <div className="groups skeleton-grid" aria-hidden="true">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-tile" key={index} />)}</div>
+        </>}
+        {browseCollection === "recent" && continueHistory.length > 0 && <>
           <h2 className="section-heading">Continue watching</h2>
           <div className="groups continue-grid">
             {continueHistory.map((entry, index) => <Fragment key={entry.id}>
@@ -1423,11 +1509,16 @@ export function App() {
             </Fragment>)}
           </div>
         </>}
-        <div className="groups">
-          {groups.map((group, index) => <button className={"tile " + (continueActionCount + index === focusIndex ? "focused remote-focused" : "")} key={group.id} onClick={() => { setFocusIndex(continueActionCount + index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[continueActionCount + index] = element; }} type="button">
+        {browseCollection === "recent" && continueHistory.length === 0 && <div className="empty-state"><h2>Nothing here yet</h2><p>Titles you start watching will appear here so you can pick up where you left off.</p></div>}
+        {browseCollection !== "recent" && <>
+          <div className="collection-heading"><h2>{browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">Choose a group to browse its titles.</p></div>
+          <div className="groups group-grid">
+          {visibleGroups.map((group, index) => <button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} key={group.id} onClick={() => { setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
             <strong>{group.name}</strong><span>{group.providerCategoryId ? "Open on demand" : group.count.toLocaleString() + " titles"}</span>
           </button>)}
-        </div>
+          {!visibleGroups.length && <div className="empty-state"><h2>No {browseCollection === "movies" ? "movie" : "series"} groups found</h2><p>Import a library with {browseCollection === "movies" ? "movies" : "series"} to browse titles here.</p></div>}
+          </div>
+        </>}
       </>}
     </section>}
   </main>;

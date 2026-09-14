@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BrowseRequestGate, browsePageCount, sortAndPageBrowseItems } from "./browse.ts";
+import { BrowseRequestGate, browseGroupsForCollection, browsePageCount, sortAndPageBrowseItems } from "./browse.ts";
 import type { VodCatalogItem } from "../core/catalog/index.ts";
 
 function deferred<T>() {
@@ -25,6 +25,17 @@ function items(prefix: string, count: number): VodCatalogItem[] {
 }
 
 describe("browse helpers", () => {
+  it("shows matching provider/local groups and keeps mixed groups reachable", () => {
+    const groups = [
+      { id: "movie", name: "Films", count: 3, contentType: "movie" as const },
+      { id: "series", name: "Shows", count: 2, contentType: "series" as const },
+      { id: "mixed", name: "Unsorted", count: 4, contentType: "mixed" as const },
+      { id: "provider", name: "Provider films", count: 1, contentType: "other" as const, providerContentType: "movie" as const },
+    ];
+    expect(browseGroupsForCollection(groups, "movies").map((group) => group.id)).toEqual(["movie", "mixed", "provider"]);
+    expect(browseGroupsForCollection(groups, "series").map((group) => group.id)).toEqual(["series", "mixed"]);
+  });
+
   it("sorts and paginates provider categories and episode lists beyond 100 entries", () => {
     for (const source of [items("provider", 237), items("episodes", 143)]) {
       expect(browsePageCount(source.length, 100)).toBeGreaterThan(1);

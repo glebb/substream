@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { isBackKey, normalizedRemoteKey } from "./remote.ts";
+import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "./remote.ts";
 
 describe("normalizedRemoteKey", () => {
+  it("detects the Tizen runtime independently from browser playback globals", () => {
+    const target = globalThis as typeof globalThis & { tizen?: unknown };
+    const originalTizen = target.tizen;
+    try {
+      delete target.tizen;
+      expect(isTizenRuntime()).toBe(false);
+      target.tizen = {};
+      expect(isTizenRuntime()).toBe(true);
+    } finally {
+      if (originalTizen === undefined) delete target.tizen;
+      else target.tizen = originalTizen;
+    }
+  });
+
   it("normalizes legacy Samsung direction names and key codes", () => {
     expect(normalizedRemoteKey({ key: "Down", keyCode: 0 } as KeyboardEvent)).toBe("ArrowDown");
     expect(normalizedRemoteKey({ key: "", keyCode: 37 } as KeyboardEvent)).toBe("ArrowLeft");

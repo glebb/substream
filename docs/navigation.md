@@ -1,0 +1,22 @@
+# Browse navigation
+
+Browse focus has one invariant: the selected item index, the DOM-focused control, and the rendered collection must refer to the same item. Directional movement calculates a destination from the current index and item count; it then updates the index and focuses and scrolls that control in the same interaction. Navigation must not infer layout by parsing computed CSS values, which differ across browser engines.
+
+Recent and category grids use four columns on wide screens and two on compact screens. These values are paired with the `800px` breakpoint in `src/app/app.css` through `browseGridColumnCount` in `src/app/remote-navigation.ts`.
+
+## TV compact title-list rules
+
+On Tizen, title browsing is a single-column compact list. Left and Right move exactly one title backward or forward. At the first title, Left opens the previous page and restores focus to its last title; at the last title, Right opens the next page and restores focus to its first title. Up and Down move by a fixed view stride of eight titles, clamped to the first or last title when fewer than eight remain. The next focused title scrolls into view naturally. Only Up at the first title returns to Sort; only Down at the last title moves to pagination. Previous/Next buttons keep their existing behavior.
+
+The eight-title stride is centralized as `TITLE_LIST_PAGE_STRIDE` and used by the pure `titleListNavigationTarget` helper. Horizontal page transitions use `titleListPageBoundaryTarget`; async page loads restore focus at the appropriate end. Keep Tizen title layout single-column; do not derive this stride from grid columns. Web retains its responsive two-column title grid on wide screens and one-column list on compact screens, with matching grid navigation. Recent and Movies/Series category cards remain responsive grids.
+
+At the top edge, Up returns from a home grid to the selected Recent / Movies / Series tab. Settings remains above the tab row; Back continues to follow the active screen hierarchy.
+
+## Safe navigation change checklist
+
+- Add synthetic cases for movement from index zero in each direction, row edges, and incomplete final rows in home grids; test title-list single-step movement, stride clamping, true endpoints, and adjacent-page transitions separately.
+- Keep explicit home-grid and web title-grid column helpers aligned with CSS breakpoints and test compact and wide values.
+- Keep Tizen title-list CSS single-column and the page stride fixed in the named helper; preserve web's responsive title grid.
+- Update React selection and DOM focus together; scroll the newly focused tile into view.
+- Check top-edge tab/sort transitions, bottom-edge pagination, TV Left/Right page transitions and focus restoration, Settings, and Back after changing browse movement.
+- Run `npm run check` and smoke-test web keyboard and TV remote navigation with a synthetic catalogue.

@@ -30,8 +30,8 @@ This roadmap describes the next user-facing improvements for the Samsung Tizen V
 
 - [ ] Add VOD search across titles, normalized names, release year, and series/episode identifiers.
 - [ ] Add browse filters for content type, group, language/region, release year, and favourites/history.
-- [ ] Improve TV browsing layout with clearer group/title hierarchy, compact rows or poster grids, loading placeholders, empty states, and remote-friendly focus transitions.
-- [ ] Add favourites, recently watched, and continue-watching sections.
+- [x] Improve TV browsing layout with clearer group/title hierarchy, compact rows or poster grids, loading placeholders, empty states, and remote-friendly focus transitions.
+- [ ] Add favourites
 - [ ] Preserve efficient on-demand Xtream category loading and keep M3U import as a fallback.
 
 ## Phase 4: Movie and series metadata

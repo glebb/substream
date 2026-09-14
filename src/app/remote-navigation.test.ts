@@ -1,12 +1,56 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, dashboardControlNavigationTarget, homeGridNavigationTarget, playerTextEntryNavigationKey, resolveAppBackAction } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseGridColumnCount, dashboardControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, playerTextEntryNavigationKey, resolveAppBackAction, titleListNavigationTarget, titleListPageBoundaryTarget } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
-  it("routes Up from the first home-grid row to Settings and Down back to the grid", () => {
-    expect(homeGridNavigationTarget("ArrowUp", 0)).toBe("settings");
-    expect(homeGridNavigationTarget("ArrowUp", 3)).toBe("settings");
-    expect(homeGridNavigationTarget("ArrowUp", 4)).toBeNull();
-    expect(dashboardControlNavigationTarget("ArrowDown", true)).toBe("grid");
+  it("follows selected home tiles while preserving tab-row focus", () => {
+    expect(homeBrowseFocusTarget("tile", true)).toBe("tile");
+    expect(homeBrowseFocusTarget("tab", true)).toBe("stay");
+    expect(homeBrowseFocusTarget("body", false)).toBe("tab");
+    expect(homeBrowseFocusTarget("other", true)).toBe("stay");
+  });
+
+  it("moves from the first grid item and stops at row and list boundaries", () => {
+    expect(gridNavigationTarget("ArrowRight", 0, 7, 4)).toBe(1);
+    expect(gridNavigationTarget("ArrowDown", 0, 7, 4)).toBe(4);
+    expect(gridNavigationTarget("ArrowLeft", 0, 7, 4)).toBeNull();
+    expect(gridNavigationTarget("ArrowUp", 0, 7, 4)).toBeNull();
+    expect(gridNavigationTarget("ArrowRight", 3, 7, 4)).toBeNull();
+    expect(gridNavigationTarget("ArrowDown", 4, 7, 4)).toBeNull();
+    expect(gridNavigationTarget("ArrowRight", 6, 7, 4)).toBeNull();
+    expect(gridNavigationTarget("ArrowDown", 0, 2, 2)).toBeNull();
+  });
+
+  it("uses explicit responsive home-grid column counts", () => {
+    expect(browseGridColumnCount(false, false)).toBe(4);
+    expect(browseGridColumnCount(false, true)).toBe(2);
+    expect(browseGridColumnCount(true, false)).toBe(2);
+    expect(browseGridColumnCount(true, true)).toBe(1);
+  });
+
+  it("uses compact-list title steps with a one-view vertical stride", () => {
+    expect(titleListNavigationTarget("ArrowRight", 0, 20)).toBe(1);
+    expect(titleListNavigationTarget("ArrowLeft", 1, 20)).toBe(0);
+    expect(titleListNavigationTarget("ArrowUp", 8, 20)).toBe(0);
+    expect(titleListNavigationTarget("ArrowDown", 0, 20)).toBe(8);
+    expect(titleListNavigationTarget("ArrowLeft", 0, 20)).toBeNull();
+    expect(titleListNavigationTarget("ArrowUp", 7, 20)).toBe(0);
+    expect(titleListNavigationTarget("ArrowRight", 19, 20)).toBeNull();
+    expect(titleListNavigationTarget("ArrowDown", 12, 20)).toBe(19);
+    expect(titleListNavigationTarget("ArrowDown", 19, 20)).toBeNull();
+    expect(titleListNavigationTarget("ArrowUp", 0, 20)).toBeNull();
+    expect(titleListNavigationTarget("ArrowDown", 0, 20, 3)).toBe(3);
+  });
+
+  it("continues TV title navigation across pages at the horizontal endpoints", () => {
+    expect(titleListPageBoundaryTarget("ArrowRight", 7, 8, 0, 3)).toEqual({ page: 1, focusAtEnd: false });
+    expect(titleListPageBoundaryTarget("ArrowLeft", 0, 8, 1, 3)).toEqual({ page: 0, focusAtEnd: true });
+    expect(titleListPageBoundaryTarget("ArrowRight", 7, 8, 2, 3)).toBeNull();
+    expect(titleListPageBoundaryTarget("ArrowLeft", 1, 8, 1, 3)).toBeNull();
+    expect(titleListPageBoundaryTarget("ArrowRight", 6, 8, 0, 3)).toBeNull();
+  });
+
+  it("routes between Settings and the browse tabs", () => {
+    expect(dashboardControlNavigationTarget("ArrowDown", true)).toBe("tabs");
     expect(dashboardControlNavigationTarget("ArrowDown", false)).toBeNull();
   });
 

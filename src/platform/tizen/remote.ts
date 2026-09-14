@@ -9,6 +9,10 @@ interface TizenGlobal {
   tvinputdevice?: TizenInputDevice;
 }
 
+export function isTizenRuntime(): boolean {
+  return (globalThis as typeof globalThis & { tizen?: TizenGlobal }).tizen !== undefined;
+}
+
 export function registerTizenPlaybackKeys(): void {
   const input = (globalThis as typeof globalThis & { tizen?: TizenGlobal }).tizen?.tvinputdevice;
   if (!input) return;

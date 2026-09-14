@@ -1,5 +1,13 @@
 import type { VodCatalogItem } from "../core/catalog/index.ts";
-import type { VodSort } from "../platform/web/indexed-db-catalog.ts";
+import type { VodGroup, VodSort } from "../platform/web/indexed-db-catalog.ts";
+
+export type BrowseCollection = "recent" | "movies" | "series";
+
+/** Mixed local groups remain reachable from either typed collection. */
+export function browseGroupsForCollection(groups: readonly VodGroup[], collection: Exclude<BrowseCollection, "recent">): VodGroup[] {
+  const type = collection === "movies" ? "movie" : "series";
+  return groups.filter((group) => group.providerContentType === type || group.contentType === type || group.contentType === "mixed");
+}
 
 export type BrowseRequestResult<T> =
   | { kind: "ready"; value: T }

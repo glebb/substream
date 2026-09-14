@@ -28,6 +28,8 @@ Use synthetic data only. The check command includes React TSX, Vite configuratio
 
 Use a separate synthetic test playlist/provider where practical; do not print personal URLs or credentials in diagnostics.
 
+Browse-grid focus rules and the safe change checklist are documented in [navigation.md](navigation.md).
+
 1. Install a freshly packaged build on the UE75MU8005 and confirm startup and the IndexedDB version-7 migration complete.
 2. Navigate categories, sorting, Previous/Next, series episodes, and Back using only the TV remote.
 3. Trigger Back while a category is loading; confirm delayed data does not reopen it.
