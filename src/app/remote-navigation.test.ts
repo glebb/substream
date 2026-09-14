@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, dashboardControlNavigationTarget, homeGridNavigationTarget, resolveAppBackAction } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, dashboardControlNavigationTarget, homeGridNavigationTarget, playerTextEntryNavigationKey, resolveAppBackAction } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
   it("routes Up from the first home-grid row to Settings and Down back to the grid", () => {
@@ -16,6 +16,13 @@ describe("remote dashboard navigation", () => {
     expect(actionRowNavigationTarget("ArrowLeft", 0, 3)).toBe(0);
     expect(actionRowNavigationTarget("ArrowUp", 2, 3)).toBe(1);
     expect(actionRowNavigationTarget("Enter", 0, 3)).toBeNull();
+  });
+
+  it("uses Up and Down to leave editable player controls without taking text cursor keys", () => {
+    expect(playerTextEntryNavigationKey("ArrowUp")).toBe(true);
+    expect(playerTextEntryNavigationKey("ArrowDown")).toBe(true);
+    expect(playerTextEntryNavigationKey("ArrowLeft")).toBe(false);
+    expect(playerTextEntryNavigationKey("ArrowRight")).toBe(false);
   });
 
   it("resolves Back from the topmost open screen first", () => {

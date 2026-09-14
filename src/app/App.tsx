@@ -16,7 +16,7 @@ import { clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimin
 import { clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared } from "../platform/browser/catalog-preferences.ts";
 import { clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, type PlaybackHistoryItem } from "../platform/browser/playback-progress-config.ts";
 import { BrowseRequestGate, browsePageCount, sortAndPageBrowseItems } from "./browse.ts";
-import { actionRowNavigationTarget, dashboardControlNavigationTarget, homeGridNavigationTarget, resolveAppBackAction } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, dashboardControlNavigationTarget, homeGridNavigationTarget, playerTextEntryNavigationKey, resolveAppBackAction } from "./remote-navigation.ts";
 import "./app.css";
 
 type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
@@ -571,7 +571,7 @@ export function App() {
         const activeIndex = controls.indexOf(document.activeElement as HTMLElement);
         const currentIndex = activeIndex >= 0 ? activeIndex : Math.max(0, Math.min(controls.length - 1, playerFocusIndex));
         const isTextEntry = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-        if (isTextEntry && !["MediaPlayPause", "MediaPlay", "MediaPause", "MediaRewind", "MediaFastForward"].includes(key)) return;
+        if (isTextEntry && !["MediaPlayPause", "MediaPlay", "MediaPause", "MediaRewind", "MediaFastForward"].includes(key) && !playerTextEntryNavigationKey(key)) return;
         if (key === "Info" && !isTextEntry) {
           event.preventDefault();
           setShowVideoInfo((visible) => !visible);

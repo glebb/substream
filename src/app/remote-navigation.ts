@@ -50,3 +50,8 @@ export function actionRowNavigationTarget(key: string, currentIndex: number, ite
   const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
   return Math.max(0, Math.min(itemCount - 1, currentIndex + delta));
 }
+
+/** Lets editable player controls retain typing and cursor keys, while Up/Down leave the field on a TV remote. */
+export function playerTextEntryNavigationKey(key: string): boolean {
+  return key === "ArrowUp" || key === "ArrowDown";
+}
