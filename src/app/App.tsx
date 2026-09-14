@@ -963,7 +963,7 @@ export function App() {
           languages,
           query: resolvedTitle,
           type: subtitleSearchType === "movie" ? "movie" : "episode",
-          ...(subtitleSearchType === "movie" && resolvedYear !== null ? { year: resolvedYear } : {}),
+          ...(automatic && subtitleSearchType === "movie" && resolvedYear !== null ? { year: resolvedYear } : {}),
           ...(subtitleSearchType === "series" && season !== undefined ? { season } : {}),
           ...(subtitleSearchType === "series" && episode !== undefined ? { episode } : {}),
         });
@@ -971,7 +971,9 @@ export function App() {
       if (requestId !== subtitleRequestRef.current) return;
       const ranked = rankSubtitleResults({
         title: resolvedTitle,
-        year: resolvedYear,
+        // A manual title search can target a different release than the VOD
+        // currently playing, so do not discard its results by that VOD's year.
+        year: automatic ? resolvedYear : null,
         contentType: subtitleSearchType,
         ...(season !== undefined ? { season } : {}),
         ...(episode !== undefined ? { episode } : {}),
