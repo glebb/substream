@@ -33,18 +33,28 @@ Open the local URL printed by Vite, add your playlist from the app's setup scree
 | `npm run check` | Typecheck and run the synthetic unit tests. |
 | `npm run build` | Produce a standard browser build in `dist/`. |
 | `npm run build:tizen` | Produce the Tizen web payload in `tizen/dist/`. |
+| `npm run build:tizen:6` | Produce a Chromium 76-compatible Tizen 6+ web payload in `tizen/dist/`. |
+| `npm run package:tizen` | Build and sign `tizen3.wgt` and `tizen6.wgt` with the configured Tizen CLI. |
+| `npm run prepare:tizen3:personal` / `prepare:tizen6:personal` | Prepare a signed-package payload for the VS Code Tizen extension. |
+| `npm run collect:tizen3` / `collect:tizen6` | Rename the extension-produced package to its compatibility-specific name. |
+| `npm run launch:tizen3 -- TV_IP` / `launch:tizen6 -- TV_IP` | Install and launch a signed package on a TV without changing VS Code settings. |
 | `npm run inspect:m3u` | Print a credential-safe summary of the private playlist configured in `.env`. |
 
-## Tizen TV build
+## Tizen TV build and deployment
 
-The Tizen application has its own manifest and launcher icon at [`tizen/config.xml`](tizen/config.xml) and [`tizen/icon.png`](tizen/icon.png). Build the web payload first, then package and install it with the Samsung Tizen tooling:
+The Tizen application has its own manifest and launcher icon at [`tizen/config.xml`](tizen/config.xml) and [`tizen/icon.png`](tizen/icon.png). The preferred workflow uses the working VS Code Tizen extension for signing, then deploys by IP without changing VS Code settings.
 
 ```sh
 npm run check
-npm run build:tizen
+npm run prepare:tizen6:personal
+# Sign the generated package with the VS Code Tizen extension.
+npm run collect:tizen6
+npm run launch:tizen6 -- TV_IP
 ```
 
-Follow the complete [Tizen setup, packaging, and deployment guide](tizen/README.md) for certificates, device connection, packaging, and installation.
+Use `tizen3` instead of `tizen6` when you specifically need the unchanged legacy-compatible package. Follow the complete [Tizen setup, packaging, and deployment guide](tizen/README.md) for certificates, device connection, packaging, and installation.
+
+To avoid exporting the local Tizen SDK path for every package build, copy `.tizen-cli.local.example` to `.tizen-cli.local` and set its `TIZEN_CLI` value. The local file is ignored by Git.
 
 The app's Tizen ID is `Substream0.Substream`; it installs separately from the prior My M3U development build.
 

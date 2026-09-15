@@ -1,10 +1,12 @@
 .env
 .env.*
 !.env.example
+.tizen-cli.local
 node_modules/
 dist/
 tizen/dist/
 tizen/Debug/
+tizen/.package-variant
 tizen/.tizen-rds/
 tizen/**/*.wgt
 coverage/

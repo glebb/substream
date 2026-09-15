@@ -8,6 +8,8 @@ Substream is a Samsung Tizen IPTV VOD player with OpenSubtitles-powered subtitle
 npm run check       # typecheck and synthetic tests
 npm run build       # standard browser build
 npm run build:tizen # standard Tizen web payload
+npm run prepare:tizen6:personal # prepare the verified Tizen 6+ package for VS Code signing
+npm run launch:tizen6 -- TV_IP # deploy a signed Tizen 6+ WGT by IP
 npm run inspect:m3u # credential-safe summary of the private playlist in .env
 ```
 

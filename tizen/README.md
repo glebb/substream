@@ -2,13 +2,13 @@
 
 This folder packages a prebuilt web app for Samsung Tizen TV.
 
-- Actual Tizen package artifact: `Debug/tizen.wgt`
+- Compatibility package artifacts: `Debug/tizen3.wgt` and `Debug/tizen6.wgt`
 - Application ID: `Substream0.Substream`
 - Package ID: `Substream0`
 - Entry manifest: `config.xml`
 - Web payload: `dist/`
 
-The root-level `Substream.wgt` file is not part of the normal workflow and has been removed. Use `Debug/tizen.wgt` as the package you install on the TV.
+The root-level `Substream.wgt` file is not part of the normal workflow and has been removed. Use `Debug/tizen3.wgt` for the unchanged legacy-compatible build, or `Debug/tizen6.wgt` for Tizen 6.0+ TVs.
 
 ## One-time setup
 
@@ -80,16 +80,59 @@ This is deliberately separate from `npm run build:tizen`; the normal build conta
 
 An installed package can be extracted, so these values must be treated as exposed to anyone with access to the `.wgt` or TV app storage. Never distribute, upload, or commit that package. To stop embedding them later, use `npm run build:tizen`, rebuild/package/install, and uninstall the old app first if you also want to erase its locally saved settings.
 
-## Repeatable personal-TV deployment
+## Build both compatibility packages
 
-For each app change:
+For a project-local setup, copy the root `.tizen-cli.local.example` file to `.tizen-cli.local` and set its `TIZEN_CLI` value to the Samsung Tizen CLI executable. The local file is ignored by Git. You can alternatively set `TIZEN_CLI` (or use the existing `TZ` variable from the CLI workflow below), then run this from the repository root:
 
-1. At the repository root, run `npm run check` and `npm run build:tizen:personal`.
-2. Open `tizen/` in VS Code and run **Build Project**.
-3. Install the generated `tizen/Debug/tizen.wgt` using the extension or CLI below.
-4. Open the app manually from the TV Apps screen.
+```sh
+npm run package:tizen
+```
 
-The first connection/permit and certificate steps are one-time work unless the TV, Mac IP, certificate, or network changes.
+This signs and produces exactly these two files in `tizen/Debug/`:
+
+- `tizen3.wgt` uses the same build settings as the previous `tizen.wgt`, including its Tizen 3 fallback.
+- `tizen6.wgt` uses the SystemJS-compatible entry directly, avoiding Tizen 6's unreliable modern-module detection while retaining a Chromium 76 CSS target. This is the package for Tizen 6.0 / 2021 TVs such as the QE65Q70AATXXH.
+
+For the local, credential-embedding workflow, use `npm run package:tizen:personal` instead. Both output packages contain the embedded values and must remain private.
+
+### VS Code extension workflow (no Tizen CLI required)
+
+When the VS Code Tizen extension already signs packages successfully, use this workflow instead of the CLI command above. It keeps the extension's existing certificate profile and creates the two compatibility packages without requiring Tizen Studio or a `tz` executable.
+
+1. At the repository root, run `npm run prepare:tizen3:personal`.
+2. In VS Code, run the same Tizen signed-package action you normally use. It creates `tizen/Debug/tizen.wgt`.
+3. At the repository root, run `npm run collect:tizen3`. This renames the signed package to `tizen/Debug/tizen3.wgt`.
+4. Repeat the same sequence with `tizen6`: `npm run prepare:tizen6:personal`, package in VS Code, then `npm run collect:tizen6`.
+
+The prepare command records the intended variant in an ignored local marker. The collect command refuses to rename a package prepared for the other variant, which prevents accidentally labelling a Tizen 3 build as Tizen 6.
+
+### Install and launch by IP
+
+After packaging, the VS Code extension's `sdb` helper can install and launch either WGT without changing `tizentv.targetDeviceAddress` in VS Code settings:
+
+```sh
+npm run launch:tizen3 -- 192.168.1.50
+npm run launch:tizen6 -- 192.168.1.50
+```
+
+The command connects to the supplied IP on port `26101`, replaces the existing Substream application, installs the selected package, and attempts to launch it. The TV must be in Developer Mode and already permitted for the extension's certificate profile. The first successful VS Code extension launch provisions its `sdb` helper at `~/tizentv-tools/sdb/sdb`; the command uses that helper automatically.
+
+Some TVs, including the tested setup documented in this project, reject the final remote launch command even after a successful installation. The command reports that case as a successful install; open Substream from the TV Apps screen manually.
+
+## Verified VS Code build and deployment
+
+This is the primary workflow on this Mac. It does not require Tizen Studio or a `tz` executable: the VS Code extension signs the WGT, and its provisioned `sdb` helper deploys it by IP.
+
+The first connection/permit and certificate steps are one-time work unless the TV, Mac IP, certificate, or network changes. For each app change:
+
+1. Run `npm run check` from the repository root.
+2. Run `npm run prepare:tizen6:personal` for a Tizen 6+ TV, or `npm run prepare:tizen3:personal` for the unchanged legacy-compatible variant.
+3. In VS Code, open the `tizen/` folder and run the same Tizen signed-package action used for previous builds. It produces `tizen/Debug/tizen.wgt`.
+4. Run the matching collect command: `npm run collect:tizen6` or `npm run collect:tizen3`.
+5. Deploy the result directly by IP, for example: `npm run launch:tizen6 -- TV_IP`.
+6. If the launcher reports that the remote execute command was rejected, open Substream manually from the TV Apps screen; installation has still completed.
+
+`tizen6.wgt` is intentionally legacy-only at the JavaScript entry point. The Tizen 6 web runtime can claim module support yet leave the static splash visible if Vite's modern entry fails; using the same SystemJS-compatible entry path as the working Tizen 3 package avoids that failure mode.
 
 ## Fast provider catalogue
 
@@ -130,7 +173,7 @@ Run this in this folder:
 "$TZ" pack --proj-dir="$PWD"
 ```
 
-Expected output includes:
+Expected output includes an intermediate package at:
 
 ```text
 Package File Location: .../Debug/tizen.wgt
@@ -139,7 +182,7 @@ Package File Location: .../Debug/tizen.wgt
 ### 3. Install on the TV
 
 ```sh
-"$TZ" install --package-path="$PWD/Debug/tizen.wgt" --serial="$TV_SERIAL"
+"$TZ" install --package-path="$PWD/Debug/tizen6.wgt" --serial="$TV_SERIAL"
 ```
 
 Expected output includes:
@@ -212,16 +255,18 @@ Notes:
 
 Use the Tizen extension sidebar action `Build Project`.
 
-Run it after `npm run build:tizen:personal` (or `npm run build:tizen`). It refreshes the generated `tizen_web_project.yaml` asset list and produces the package at `Debug/tizen.wgt`.
+For the two compatibility packages on this Mac, use the verified `prepare` and `collect` commands above. The CLI `package:tizen` commands remain available only when a separate Samsung `tz` executable is configured.
 
 ### Deploy from VS Code
 
-You have two practical options:
+Use the IP-based launcher instead of changing `Tizen TV WASM: Target Device Address` in VS Code settings:
 
-1. Use the integrated terminal and run the CLI install command from the previous section.
-2. Use `Tizen TV WASM: Launch Application` after setting `Tizen TV WASM: Target Device Address` to the TV IP.
+```sh
+npm run launch:tizen3 -- TV_IP
+npm run launch:tizen6 -- TV_IP
+```
 
-The second option installs the app, but on this TV the final remote launch step can still report failure even when the app is already installed. If that happens, launch the app manually from the TV.
+It installs the chosen signed package and attempts to launch it. On this TV the final remote-launch step can still report failure even when the app is already installed; if that happens, launch the app manually from the TV.
 
 ### Uninstall from VS Code
 

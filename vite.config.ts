@@ -6,6 +6,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const apiKey = env.OPENSUBTITLES_API_KEY;
   const isPersonalBuild = process.env.PERSONAL_BUILD === "1";
+  const tizenCompatibilityTarget = process.env.TIZEN_COMPAT_TARGET;
+  if (tizenCompatibilityTarget !== undefined && tizenCompatibilityTarget !== "tizen6") {
+    throw new Error("TIZEN_COMPAT_TARGET must be tizen6 when it is set");
+  }
   if (isPersonalBuild && (!env.IPTV_M3U_URL || !apiKey)) {
     throw new Error("Personal builds require IPTV_M3U_URL and OPENSUBTITLES_API_KEY in .env");
   }
@@ -14,6 +18,13 @@ export default defineConfig(({ mode }) => {
     : {};
   return {
     base: "./",
+    // Keep the default build unchanged for the existing Tizen 3 package. The
+    // Tizen 6 package uses a CSS target appropriate for its Chromium M76 engine.
+    ...(tizenCompatibilityTarget === "tizen6" ? {
+      build: {
+        cssTarget: "chrome76",
+      },
+    } : {}),
     // Values are only embedded by the explicit personal-TV command. Never use
     // VITE_ variables for them: that would expose them in every browser build.
     define: {
@@ -26,6 +37,11 @@ export default defineConfig(({ mode }) => {
       react(),
       legacy({
         targets: ["Chrome >= 47"],
+        // Tizen 6 advertises support for module scripts, but when its modern
+        // entry fails Vite's feature probe still prevents the legacy fallback
+        // from loading. Ship only the tested SystemJS-compatible entry for
+        // this package, avoiding that false-positive path altogether.
+        ...(tizenCompatibilityTarget === "tizen6" ? { renderModernChunks: false } : {}),
         polyfills: true,
       }),
     ],

@@ -1,0 +1,3 @@
+# Local path to the Samsung Tizen packaging executable. This file is safe to
+# commit; copy it to .tizen-cli.local and replace the placeholder on this Mac.
+TIZEN_CLI=/absolute/path/to/sdktools/data/tools/tizen-core/tz

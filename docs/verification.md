@@ -28,6 +28,8 @@ Use synthetic data only. The check command includes React TSX, Vite configuratio
 
 Use a separate synthetic test playlist/provider where practical; do not print personal URLs or credentials in diagnostics.
 
+Build and deploy with the verified VS Code flow in [`tizen/README.md`](../tizen/README.md): `prepare`, sign in VS Code, `collect`, then `launch` with the TV IP. For the QE65Q70AATXXH, test `tizen6.wgt`; it intentionally uses the legacy/SystemJS entry to avoid Tizen 6's modern-module splash-screen failure.
+
 Browse-grid focus rules and the safe change checklist are documented in [navigation.md](navigation.md).
 
 1. Install a freshly packaged build on the UE75MU8005 and confirm startup and the IndexedDB version-7 migration complete.
