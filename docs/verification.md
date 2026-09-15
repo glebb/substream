@@ -32,6 +32,8 @@ Build and deploy with the verified VS Code flow in [`tizen/README.md`](../tizen/
 
 Browse-grid focus rules and the safe change checklist are documented in [navigation.md](navigation.md).
 
+For the UI refresh, include a visual/focus smoke pass at 1920x1080 and 1440x900, plus compact 390x844 and 320x568 sizes. Confirm the selected tab and yellow focus ring remain distinct, settings and confirmation panels stay centered and readable, Continue Watching keeps Resume/Remove pairs in interleaved remote order with visible progress, and the player shows OpenSubtitles setup only when no key is configured. At widths below 520px, verify category CSS is one column and Up/Down/Left/Right follow the one-column helper without horizontal overflow. Repeat the same focus and Back checks in a Tizen-sized browser view; AVPlay display sizing and the fixed eight-title list stride must remain unchanged.
+
 1. Install a freshly packaged build on the UE75MU8005 and confirm startup and the IndexedDB version-7 migration complete.
 2. Navigate categories, sorting, Previous/Next, series episodes, and Back using only the TV remote.
 3. Trigger Back while a category is loading; confirm delayed data does not reopen it.

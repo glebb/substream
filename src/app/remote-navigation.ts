@@ -60,9 +60,25 @@ export function gridNavigationTarget(key: string, currentIndex: number, itemCoun
 }
 
 /** Mirrors the explicit app.css responsive grid breakpoints without parsing computed CSS. */
-export function browseGridColumnCount(isTitleGrid: boolean, compactViewport: boolean): number {
+export function browseGridColumnCount(isTitleGrid: boolean, compactViewport: boolean, narrowViewport = false): number {
   if (isTitleGrid) return compactViewport ? 1 : 2;
+  if (narrowViewport) return 1;
   return compactViewport ? 2 : 4;
+}
+
+/**
+ * Continue-watching movement treats each title's Resume and Remove controls as
+ * one logical row. The returned index still addresses the interleaved DOM
+ * controls (Resume, Remove, Resume, Remove), so both web and TV can share it.
+ */
+export function recentNavigationTarget(key: string, currentIndex: number, itemCount: number): number | null {
+  if (itemCount <= 0 || currentIndex < 0 || currentIndex >= itemCount || itemCount % 2 !== 0) return null;
+  const isResume = currentIndex % 2 === 0;
+  if (key === "ArrowLeft") return isResume ? null : currentIndex - 1;
+  if (key === "ArrowRight") return isResume ? currentIndex + 1 : null;
+  if (key === "ArrowUp") return currentIndex >= 2 ? currentIndex - 2 : null;
+  if (key === "ArrowDown") return currentIndex + 2 < itemCount ? currentIndex + 2 : null;
+  return null;
 }
 
 export const TITLE_LIST_PAGE_STRIDE = 8;
@@ -94,4 +110,65 @@ export function actionRowNavigationTarget(key: string, currentIndex: number, ite
 /** Lets editable player controls retain typing and cursor keys, while Up/Down leave the field on a TV remote. */
 export function playerTextEntryNavigationKey(key: string): boolean {
   return key === "ArrowUp" || key === "ArrowDown";
+}
+
+export interface PlayerPlaybackShortcutContext {
+  /** The video area currently owns player focus. */
+  videoActive: boolean;
+  /** The player is in its fullscreen presentation. */
+  fullscreen: boolean;
+  /** An input or select currently owns focus. */
+  editableTarget: boolean;
+  /** Tizen uses the remote Action/Enter key; web uses the Space key. */
+  tizen: boolean;
+}
+
+/**
+ * Determines whether a player shortcut should toggle playback. Fullscreen
+ * intentionally wins over focus so the TV Action key and web Space key still
+ * work while the fullscreen controls are visible.
+ */
+export function isPlayerPlaybackShortcut(key: string, context: PlayerPlaybackShortcutContext): boolean {
+  const shortcutKey = context.tizen
+    ? key === "Enter"
+    : key === " " || key === "Space" || key === "Spacebar";
+  if (!shortcutKey) return false;
+  if (context.fullscreen) return true;
+  return context.videoActive && !context.editableTarget;
+}
+
+export interface SubtitleFocusLayoutOptions {
+  subtitleAttached: boolean;
+  timingAvailable: boolean;
+  apiKeyConfigured: boolean;
+  apiKeyEditorOpen: boolean;
+  seriesSearch: boolean;
+}
+
+/** Keeps conditionally rendered player subtitle controls and result indexes aligned. */
+export function subtitleFocusLayout(options: SubtitleFocusLayoutOptions) {
+  const subtitleToggle = 9;
+  const timingStart = subtitleToggle + (options.subtitleAttached ? 1 : 0);
+  const keyActionStart = timingStart + (options.timingAvailable ? 4 : 0);
+  const keyInput = !options.apiKeyConfigured && options.apiKeyEditorOpen ? keyActionStart : null;
+  const saveKey = keyInput === null ? null : keyInput + 1;
+  const setupKey = !options.apiKeyConfigured && !options.apiKeyEditorOpen ? keyActionStart : null;
+  const search = keyActionStart + (options.apiKeyConfigured ? 0 : options.apiKeyEditorOpen ? 2 : 1);
+  const searchType = search + 1;
+  const season = searchType + 1;
+  const episode = season + 1;
+  const find = searchType + 1 + (options.seriesSearch ? 2 : 0);
+  return {
+    subtitleToggle,
+    timingStart,
+    keyInput,
+    saveKey,
+    setupKey,
+    search,
+    searchType,
+    season,
+    episode,
+    find,
+    firstResult: find + 1,
+  };
 }

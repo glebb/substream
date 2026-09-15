@@ -2,7 +2,7 @@
 
 Browse focus has one invariant: the selected item index, the DOM-focused control, and the rendered collection must refer to the same item. Directional movement calculates a destination from the current index and item count; it then updates the index and focuses and scrolls that control in the same interaction. Navigation must not infer layout by parsing computed CSS values, which differ across browser engines.
 
-Recent and category grids use four columns on wide screens and two on compact screens. These values are paired with the `800px` breakpoint in `src/app/app.css` through `browseGridColumnCount` in `src/app/remote-navigation.ts`.
+Recent and category grids use four columns on wide screens, two on compact screens, and one below the narrow `520px` breakpoint. These values are paired with the breakpoints in `src/app/app.css` through `browseGridColumnCount` in `src/app/remote-navigation.ts`. The narrow mode applies to home/category cards only; title browsing remains a one-column list on compact web and Tizen.
 
 ## TV compact title-list rules
 
@@ -10,7 +10,7 @@ On Tizen, title browsing is a single-column compact list. Left and Right move ex
 
 The eight-title stride is centralized as `TITLE_LIST_PAGE_STRIDE` and used by the pure `titleListNavigationTarget` helper. Horizontal page transitions use `titleListPageBoundaryTarget`; async page loads restore focus at the appropriate end. Keep Tizen title layout single-column; do not derive this stride from grid columns. Web retains its responsive two-column title grid on wide screens and one-column list on compact screens, with matching grid navigation. Recent and Movies/Series category cards remain responsive grids.
 
-At the top edge, Up returns from a home grid to the selected Recent / Movies / Series tab. Settings remains above the tab row; Back continues to follow the active screen hierarchy.
+At the top edge, Up returns from a home grid to the selected Recent / Movies / Series tab. In the narrow one-column home grid, Down advances exactly one item and Left/Right stop at each row edge; the final item remains vertically reachable and is scrolled into view. Settings remains above the tab row; Back continues to follow the active screen hierarchy.
 
 ## Safe navigation change checklist
 

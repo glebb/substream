@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, browseGridColumnCount, dashboardControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, playerTextEntryNavigationKey, resolveAppBackAction, titleListNavigationTarget, titleListPageBoundaryTarget } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseGridColumnCount, dashboardControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, resolveAppBackAction, subtitleFocusLayout, titleListNavigationTarget, titleListPageBoundaryTarget } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
   it("follows selected home tiles while preserving tab-row focus", () => {
@@ -23,8 +23,41 @@ describe("remote dashboard navigation", () => {
   it("uses explicit responsive home-grid column counts", () => {
     expect(browseGridColumnCount(false, false)).toBe(4);
     expect(browseGridColumnCount(false, true)).toBe(2);
+    expect(browseGridColumnCount(false, true, true)).toBe(1);
     expect(browseGridColumnCount(true, false)).toBe(2);
     expect(browseGridColumnCount(true, true)).toBe(1);
+    expect(browseGridColumnCount(true, true, true)).toBe(1);
+  });
+
+  it("moves through a narrow one-column home grid", () => {
+    expect(gridNavigationTarget("ArrowUp", 0, 5, 1)).toBeNull();
+    expect(gridNavigationTarget("ArrowDown", 0, 5, 1)).toBe(1);
+    expect(gridNavigationTarget("ArrowDown", 2, 5, 1)).toBe(3);
+    expect(gridNavigationTarget("ArrowDown", 4, 5, 1)).toBeNull();
+    expect(gridNavigationTarget("ArrowLeft", 2, 5, 1)).toBeNull();
+    expect(gridNavigationTarget("ArrowRight", 2, 5, 1)).toBeNull();
+  });
+
+  it("moves Continue Watching one title at a time and switches only within each pair", () => {
+    expect(recentNavigationTarget("ArrowDown", 0, 6)).toBe(2);
+    expect(recentNavigationTarget("ArrowDown", 1, 6)).toBe(3);
+    expect(recentNavigationTarget("ArrowUp", 4, 6)).toBe(2);
+    expect(recentNavigationTarget("ArrowUp", 5, 6)).toBe(3);
+    expect(recentNavigationTarget("ArrowUp", 0, 6)).toBeNull();
+    expect(recentNavigationTarget("ArrowUp", 1, 6)).toBeNull();
+    expect(recentNavigationTarget("ArrowDown", 4, 6)).toBeNull();
+    expect(recentNavigationTarget("ArrowDown", 5, 6)).toBeNull();
+    expect(recentNavigationTarget("ArrowRight", 0, 6)).toBe(1);
+    expect(recentNavigationTarget("ArrowLeft", 1, 6)).toBe(0);
+    expect(recentNavigationTarget("ArrowRight", 1, 6)).toBeNull();
+    expect(recentNavigationTarget("ArrowLeft", 0, 6)).toBeNull();
+  });
+
+  it("rejects an invalid or incomplete Continue Watching control list", () => {
+    expect(recentNavigationTarget("ArrowDown", 0, 0)).toBeNull();
+    expect(recentNavigationTarget("ArrowDown", 0, 3)).toBeNull();
+    expect(recentNavigationTarget("ArrowDown", -1, 4)).toBeNull();
+    expect(recentNavigationTarget("ArrowDown", 4, 4)).toBeNull();
   });
 
   it("uses compact-list title steps with a one-view vertical stride", () => {
@@ -67,6 +100,33 @@ describe("remote dashboard navigation", () => {
     expect(playerTextEntryNavigationKey("ArrowDown")).toBe(true);
     expect(playerTextEntryNavigationKey("ArrowLeft")).toBe(false);
     expect(playerTextEntryNavigationKey("ArrowRight")).toBe(false);
+  });
+
+  it("toggles playback with web Space only on the video area or in fullscreen", () => {
+    const web = { videoActive: true, fullscreen: false, editableTarget: false, tizen: false };
+    expect(isPlayerPlaybackShortcut(" ", web)).toBe(true);
+    expect(isPlayerPlaybackShortcut("Space", web)).toBe(true);
+    expect(isPlayerPlaybackShortcut(" ", { ...web, videoActive: false })).toBe(false);
+    expect(isPlayerPlaybackShortcut(" ", { ...web, editableTarget: true })).toBe(false);
+    expect(isPlayerPlaybackShortcut(" ", { ...web, fullscreen: true, videoActive: false, editableTarget: true })).toBe(true);
+    expect(isPlayerPlaybackShortcut("Enter", web)).toBe(false);
+  });
+
+  it("toggles playback with the TV Action/Enter key only on the video area or in fullscreen", () => {
+    const tv = { videoActive: true, fullscreen: false, editableTarget: false, tizen: true };
+    expect(isPlayerPlaybackShortcut("Enter", tv)).toBe(true);
+    expect(isPlayerPlaybackShortcut("Enter", { ...tv, videoActive: false })).toBe(false);
+    expect(isPlayerPlaybackShortcut("Enter", { ...tv, editableTarget: true })).toBe(false);
+    expect(isPlayerPlaybackShortcut("Enter", { ...tv, fullscreen: true, videoActive: false, editableTarget: true })).toBe(true);
+    expect(isPlayerPlaybackShortcut(" ", tv)).toBe(false);
+  });
+
+  it("skips absent configured-key setup and lands on the first subtitle result", () => {
+    const configured = subtitleFocusLayout({ subtitleAttached: false, timingAvailable: true, apiKeyConfigured: true, apiKeyEditorOpen: false, seriesSearch: false });
+    expect(configured.setupKey).toBeNull();
+    expect(configured.keyInput).toBeNull();
+    expect(configured.find).toBe(configured.search + 2);
+    expect(configured.firstResult).toBe(configured.search + 3);
   });
 
   it("resolves Back from the topmost open screen first", () => {
