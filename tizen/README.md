@@ -8,7 +8,7 @@ This folder packages a prebuilt web app for Samsung Tizen TV.
 - Entry manifest: `config.xml`
 - Web payload: `dist/`
 
-The root-level `Substream.wgt` file is not part of the normal workflow and has been removed. Use `Debug/tizen3.wgt` for the unchanged legacy-compatible build, or `Debug/tizen6.wgt` for Tizen 6.0+ TVs.
+The root-level `Substream.wgt` file is not part of the normal workflow and has been removed. Use `Debug/tizen3.wgt` for Tizen 3.0 / Chromium 47 TVs; it includes the legacy entry and static-color/flexbox UI baseline. Use `Debug/tizen6.wgt` for Tizen 6.0+ TVs.
 
 ## One-time setup
 
@@ -90,7 +90,7 @@ npm run package:tizen
 
 This signs and produces exactly these two files in `tizen/Debug/`:
 
-- `tizen3.wgt` uses the same build settings as the previous `tizen.wgt`, including its Tizen 3 fallback.
+- `tizen3.wgt` uses the legacy/SystemJS entry and the Tizen 3 static-color/flexbox UI baseline for Chromium 47.
 - `tizen6.wgt` uses the SystemJS-compatible entry directly, avoiding Tizen 6's unreliable modern-module detection while retaining a Chromium 76 CSS target. This is the package for Tizen 6.0 / 2021 TVs such as the QE65Q70AATXXH.
 
 For the local, credential-embedding workflow, use `npm run package:tizen:personal` instead. Both output packages contain the embedded values and must remain private.
@@ -126,7 +126,7 @@ This is the primary workflow on this Mac. It does not require Tizen Studio or a 
 The first connection/permit and certificate steps are one-time work unless the TV, Mac IP, certificate, or network changes. For each app change:
 
 1. Run `npm run check` from the repository root.
-2. Run `npm run prepare:tizen6:personal` for a Tizen 6+ TV, or `npm run prepare:tizen3:personal` for the unchanged legacy-compatible variant.
+2. Run `npm run prepare:tizen6:personal` for a Tizen 6+ TV, or `npm run prepare:tizen3:personal` for a Tizen 3.0 / Chromium 47 TV.
 3. In VS Code, open the `tizen/` folder and run the same Tizen signed-package action used for previous builds. It produces `tizen/Debug/tizen.wgt`.
 4. Run the matching collect command: `npm run collect:tizen6` or `npm run collect:tizen3`.
 5. Deploy the result directly by IP, for example: `npm run launch:tizen6 -- TV_IP`.

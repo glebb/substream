@@ -24,7 +24,7 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite, add your playlist from the app's setup screen, and enter an OpenSubtitles API key in the player when you want subtitle discovery.
+Open the local URL printed by Vite and add your playlist from the app's setup screen. Configure an OpenSubtitles API key from **Settings**; the player offers a compact setup action only when no key is configured.
 
 ## Commands
 
@@ -52,7 +52,7 @@ npm run collect:tizen6
 npm run launch:tizen6 -- TV_IP
 ```
 
-Use `tizen3` instead of `tizen6` when you specifically need the unchanged legacy-compatible package. Follow the complete [Tizen setup, packaging, and deployment guide](tizen/README.md) for certificates, device connection, packaging, and installation.
+Use `tizen3` for Samsung Tizen 3.0 / Chromium 47 TVs. It includes the legacy JavaScript entry and static-color/flexbox UI fallback required by those browsers. Follow the complete [Tizen setup, packaging, and deployment guide](tizen/README.md) for certificates, device connection, packaging, and installation.
 
 To avoid exporting the local Tizen SDK path for every package build, copy `.tizen-cli.local.example` to `.tizen-cli.local` and set its `TIZEN_CLI` value. The local file is ignored by Git.
 
@@ -81,4 +81,4 @@ Automated tests use synthetic data only. Run `npm run check` before making chang
 
 ## Status and roadmap
 
-For the current implementation details, constraints, and planned work, see [docs/status.md](docs/status.md) and [docs/roadmap.md](docs/roadmap.md).
+For the current implementation details, constraints, planned work, and remote-navigation contract, see [docs/status.md](docs/status.md), [docs/roadmap.md](docs/roadmap.md), and [docs/navigation.md](docs/navigation.md).

@@ -9,8 +9,8 @@ This roadmap describes the next user-facing improvements for the Samsung Tizen V
 - [x] Persist playback progress per title and offer **Resume** or **Start over**.
 - [x] Add a **Continue watching** section, ordered by most recently played unfinished titles, with an explicit option to remove an item from history.
 - [x] Prepopulate the M3U URL whenever it is bundled in a personal build or already stored locally. Do not show the setup form until the user explicitly chooses **Change playlist**.
-- [x] Add a safe settings/reset screen: change playlist URL, clear the local VOD catalogue, clear saved OpenSubtitles settings, and reset all local app data. Reset actions must require confirmation and never reveal stored secrets.
-- [x] Prepopulate the OpenSubtitles API key when it is bundled or stored locally. Do not request it on the player screen unless it is missing or the user chooses **Change subtitle settings**.
+- [x] Add a safe settings/reset screen: change playlist URL, clear the local VOD catalogue, remove the saved OpenSubtitles API key, and reset all local app data. Reset actions must require confirmation and never reveal stored secrets.
+- [x] Prepopulate the OpenSubtitles API key when it is bundled or stored locally. Manage configured keys only in Settings; the player exposes setup only when a key is missing.
 - [x] Automatically search for subtitles when playback begins, using the title, year, season, and episode already resolved by the catalogue.
 - [x] Automatically choose the best subtitle when the confidence is high; otherwise show a compact selection list without interrupting playback.
 - [x] Add possibility to disable/enable subtitles.

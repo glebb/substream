@@ -28,8 +28,14 @@ npm run inspect:m3u # credential-safe summary of the private playlist in .env
 
 - Browser playback uses the native video element. Tizen 3.0 / Chromium 47 builds use AVPlay's hardware surface when available, including its fixed 1920×1080 display coordinate system.
 - Both adapters report loading, buffering, playing, paused, ended, and error states. AVPlay preparation and stale callbacks are generation-guarded.
-- The remote UI supports arrow/Enter/Back navigation, media keys, ±60-second skips, Auto/Fit/Fill display modes, full-screen video, and subtitle-size controls.
+- The remote UI supports arrow/Enter/Back navigation, media keys, ±60-second skips, Auto/Fit/Fill display modes, full-screen video, and subtitle-size controls. Web Space and Tizen Action/Enter toggle playback when the video area is active or while fullscreen.
 - OpenSubtitles queries exact series/season/episode records where possible. Browser playback converts SRT to WebVTT; the TV renders parsed SRT cues as an app overlay because this firmware rejects AVPlay external-subtitle paths.
+
+## UI and remote focus
+
+- Continue Watching keeps Resume and Remove as a visual and navigation pair: Up/Down change titles and Left/Right changes the action for that title.
+- Settings has state-driven yellow remote focus for all actions, conditional API-key controls, and confirmations. Configured API keys are managed only from Settings; the player exposes setup only when a key is absent.
+- Tizen 3 receives a complete static-color and flexbox baseline before modern CSS enhancements. This preserves the dark UI, visible focus state, four-column category layout, and single-column TV title list on Chromium 47.
 
 ## Constraints and next work
 

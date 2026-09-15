@@ -32,7 +32,11 @@ Build and deploy with the verified VS Code flow in [`tizen/README.md`](../tizen/
 
 Browse-grid focus rules and the safe change checklist are documented in [navigation.md](navigation.md).
 
-For the UI refresh, include a visual/focus smoke pass at 1920x1080 and 1440x900, plus compact 390x844 and 320x568 sizes. Confirm the selected tab and yellow focus ring remain distinct, settings and confirmation panels stay centered and readable, Continue Watching keeps Resume/Remove pairs in interleaved remote order with visible progress, and the player shows OpenSubtitles setup only when no key is configured. At widths below 520px, verify category CSS is one column and Up/Down/Left/Right follow the one-column helper without horizontal overflow. Repeat the same focus and Back checks in a Tizen-sized browser view; AVPlay display sizing and the fixed eight-title list stride must remain unchanged.
+For the UI, include a visual/focus smoke pass at 1920x1080 and 1440x900, plus compact 390x844 and 320x568 sizes. Confirm the selected tab and yellow focus ring remain distinct, settings and confirmation panels stay centered and readable, and the player shows OpenSubtitles setup only when no key is configured. At widths below 520px, verify category CSS is one column and Up/Down/Left/Right follow the one-column helper without horizontal overflow.
+
+On Continue Watching, verify Up/Down moves to the next or previous title while preserving Resume/Remove, and Left/Right changes only within its pair. In Settings, verify every action, API-key editor control, and confirmation action carries the persistent yellow focus highlight. On web, verify Space toggles playback only from the active video area or fullscreen; on Tizen, verify the Action/Enter key does the same.
+
+On the UE75MU8005, confirm the Tizen 3 payload uses the static dark surface colors, visible yellow remote focus ring, and four-column flexbox category layout instead of native white button styling. Verify the single-column title list, AVPlay display sizing, eight-title stride, focus, and Back behavior.
 
 1. Install a freshly packaged build on the UE75MU8005 and confirm startup and the IndexedDB version-7 migration complete.
 2. Navigate categories, sorting, Previous/Next, series episodes, and Back using only the TV remote.
