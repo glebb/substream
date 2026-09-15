@@ -332,6 +332,14 @@ export function App() {
     setCatalogStatus("");
   };
 
+  const exitPlayerFullscreen = () => {
+    if (isTizen) {
+      setPlayerFullscreen(false);
+      return;
+    }
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+  };
+
   const startPlayback = (title: VodCatalogItem, resumeSeconds = 0) => {
     browseRequestRef.current.invalidate();
     resumeStartSecondsRef.current = resumeSeconds;
@@ -341,7 +349,12 @@ export function App() {
     setShowVideoInfo(false);
     setPlayerFocusIndex(0);
     setShowFullscreenControls(false);
-    setPlayerFullscreen(true);
+    // Tizen uses the app's viewport presentation. On the web, ask the browser
+    // for real fullscreen while this user action is still active.
+    setPlayerFullscreen(isTizen);
+    if (!isTizen && !document.fullscreenElement) {
+      void document.documentElement.requestFullscreen().catch(() => undefined);
+    }
     setVideoDisplayMode("auto");
     setPlaybackStatus("Loading…");
     setPlaybackProgress(null);
@@ -494,7 +507,7 @@ export function App() {
             setPlaylistDraft("");
             break;
           case "exit-fullscreen":
-            setPlayerFullscreen(false);
+            exitPlayerFullscreen();
             setShowFullscreenControls(false);
             setPlayerFocusIndex(videoAreaFocusIndex);
             break;
@@ -864,6 +877,17 @@ export function App() {
   }, [playerFullscreen, selectedTitle]);
 
   useEffect(() => {
+    if (isTizen) return;
+    const syncFullscreenState = () => {
+      const isPlayerFullscreen = document.fullscreenElement === document.documentElement;
+      setPlayerFullscreen(isPlayerFullscreen);
+      if (!isPlayerFullscreen) setShowFullscreenControls(false);
+    };
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
+  }, [isTizen]);
+
+  useEffect(() => {
     playerRef.current?.setDisplayMode(videoDisplayMode);
   }, [videoDisplayMode, selectedTitle]);
 
@@ -1090,7 +1114,13 @@ export function App() {
   };
 
   const toggleFullscreen = () => {
-    setPlayerFullscreen((current) => !current);
+    if (isTizen) {
+      setPlayerFullscreen((current) => !current);
+    } else if (document.fullscreenElement) {
+      exitPlayerFullscreen();
+    } else {
+      void document.documentElement.requestFullscreen().catch(() => undefined);
+    }
     setShowFullscreenControls(false);
     setPlayerFocusIndex(videoAreaFocusIndex);
   };
@@ -1455,7 +1485,7 @@ export function App() {
       }}>
         <div className="player-heading">
           <div className="player-title"><h2>{selectedTitle.title}</h2><p className="hint">{selectedTitle.year ?? selectedTitle.contentType}</p></div>
-          <button className={playerFocusIndex === 0 ? "remote-focused" : ""} type="button" onClick={() => { browseRequestRef.current.invalidate(); setPlayerFullscreen(false); setShowFullscreenControls(false); setSelectedTitle(null); }} ref={playerBackButtonRef}>Back to titles</button>
+          <button className={playerFocusIndex === 0 ? "remote-focused" : ""} type="button" onClick={() => { browseRequestRef.current.invalidate(); exitPlayerFullscreen(); setShowFullscreenControls(false); setSelectedTitle(null); }} ref={playerBackButtonRef}>Back to titles</button>
         </div>
         <div
           className={"player-stage " + (playerFocusIndex === videoAreaFocusIndex ? "video-area-focused" : "")}
