@@ -1,12 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, browseGridColumnCount, dashboardControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, resolveAppBackAction, subtitleFocusLayout, titleListNavigationTarget, titleListPageBoundaryTarget } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, focusFallback, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, subtitleFocusLayout, titleListNavigationTarget, titleListPageBoundaryTarget } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
+  it("keeps Settings navigation in DOM order as conditional editors appear", () => {
+    expect(settingsControlOrder({ confirmationOpen: false, apiKeyEditorOpen: false, hasSubtitleKey: false })).toEqual([
+      "back", "playlist", "subtitle-language", "api-key-edit",
+      "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
+    ]);
+    expect(settingsControlOrder({ confirmationOpen: false, apiKeyEditorOpen: true, hasSubtitleKey: true })).toEqual([
+      "back", "playlist", "subtitle-language", "api-key-input", "api-key-save", "api-key-cancel", "remove-api-key",
+      "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
+    ]);
+    expect(settingsControlOrder({ confirmationOpen: true, apiKeyEditorOpen: true, hasSubtitleKey: true })).toEqual([
+      "confirm-cancel", "confirm-confirm",
+    ]);
+  });
+
   it("follows selected home tiles while preserving tab-row focus", () => {
     expect(homeBrowseFocusTarget("tile", true)).toBe("tile");
     expect(homeBrowseFocusTarget("tab", true)).toBe("stay");
+    expect(homeBrowseFocusTarget("body", true)).toBe("tile");
     expect(homeBrowseFocusTarget("body", false)).toBe("tab");
     expect(homeBrowseFocusTarget("other", true)).toBe("stay");
+  });
+
+  it("moves a browse tab to content, then to an empty-state recovery action", () => {
+    expect(browseCollectionFocusTarget(true, true)).toBe("content");
+    expect(browseCollectionFocusTarget(false, true)).toBe("recovery");
+    expect(browseCollectionFocusTarget(false, false)).toBe("tab");
+    expect(browseCollectionFocusIndex("content", 2)).toBe(0);
+    expect(browseCollectionFocusIndex("content", 2, 99)).toBe(1);
+    expect(browseCollectionFocusIndex("recovery", 2)).toBeNull();
+    expect(focusFallback([null, "second", "third"], 0)).toBe("second");
   });
 
   it("moves from the first grid item and stops at row and list boundaries", () => {
@@ -100,6 +125,14 @@ describe("remote dashboard navigation", () => {
     expect(playerTextEntryNavigationKey("ArrowDown")).toBe(true);
     expect(playerTextEntryNavigationKey("ArrowLeft")).toBe(false);
     expect(playerTextEntryNavigationKey("ArrowRight")).toBe(false);
+  });
+
+  it("requires explicit Action/Enter to begin remote editing", () => {
+    expect(remoteEditableKeyAction("ArrowDown", false)).toBe("navigate");
+    expect(remoteEditableKeyAction("Enter", false, true)).toBe("enter-edit");
+    expect(remoteEditableKeyAction("ArrowUp", true, true)).toBe("leave-edit");
+    expect(remoteEditableKeyAction("Back", true, true)).toBe("leave-edit");
+    expect(remoteEditableKeyAction("Enter", true, true)).toBe("ignore");
   });
 
   it("toggles playback with web Space only on the video area or in fullscreen", () => {

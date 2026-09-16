@@ -1,51 +1,27 @@
-# Product roadmap
+# Product roadmap: TV UX refinement — completed
 
-This roadmap describes the next user-facing improvements for the Samsung Tizen VOD player. It is ordered to improve everyday TV use first, then expand catalogue discovery and metadata.
+The TV UX refinement delivery is complete in code and automated verification. This record replaces the active roadmap so completed work is not mistaken for remaining scope.
 
-## Phase 1: Playback and setup
+## Delivered
 
-- [x] Show video progress: elapsed time, duration, and a seek/progress bar when AVPlay provides duration and current-time events.
-- [x] Show buffering state and a visible buffer indicator when the adapter reports it.
-- [x] Persist playback progress per title and offer **Resume** or **Start over**.
-- [x] Add a **Continue watching** section, ordered by most recently played unfinished titles, with an explicit option to remove an item from history.
-- [x] Prepopulate the M3U URL whenever it is bundled in a personal build or already stored locally. Do not show the setup form until the user explicitly chooses **Change playlist**.
-- [x] Add a safe settings/reset screen: change playlist URL, clear the local VOD catalogue, remove the saved OpenSubtitles API key, and reset all local app data. Reset actions must require confirmation and never reveal stored secrets.
-- [x] Prepopulate the OpenSubtitles API key when it is bundled or stored locally. Manage configured keys only in Settings; the player exposes setup only when a key is missing.
-- [x] Automatically search for subtitles when playback begins, using the title, year, season, and episode already resolved by the catalogue.
-- [x] Automatically choose the best subtitle when the confidence is high; otherwise show a compact selection list without interrupting playback.
-- [x] Add possibility to disable/enable subtitles.
-- [x] Combine play/pause button.
-- [x] Change the behavior on the playback screen. Only skip past/forward, if the video area is "selected". Otherwise left right buttons should move the selection just like up and down. In full screen the skipping should work always with left right.
-- [x] Pressing the key i or info button from remote should display basic information about the video (like resolution). Another press hides the info.
+- [x] Added shared, Tizen-safe layout rules for page spacing, cards, action rows, forms, and focus-ring clearance. Settings credential rows now wrap safely instead of overlapping or clipping.
+- [x] Simplified group cards: provider guidance appears once at the collection level and the repeated **Open on demand** tile text is removed.
+- [x] Implemented red-key favourites. The registered Samsung red key toggles the focused group without moving focus; browser/touch users retain an accessible favourite button.
+- [x] Unified browse focus behavior. Initial and tab-transition focus now lands on the first actual content control, including Recent; empty views use their recovery action, and returning from a group restores its invoking tile.
+- [x] Added a shared `RemoteEditable` pattern. On TV, directional navigation passes through text, numeric, and select-like controls without opening the on-screen keyboard; **OK/Enter** deliberately enters editing, while Back and directional exit paths restore navigation.
+- [x] Applied remote editing to playlist setup, Settings credentials and subtitle preference, player subtitle search, player API-key setup, and title episode selection. Browser users retain native direct editing.
+- [x] Replaced fragile positional Settings refs with a keyed visible-control order. The TV remote can traverse Back, playlist, subtitle preference, OpenSubtitles actions, all TMDb controls, local catalogue actions, reset, and confirmations in a predictable sequence.
+- [x] Kept Tizen key registration/normalization in `src/platform/tizen`; shared focus decisions stay outside `src/core`.
+- [x] Added synthetic tests for focus targets, Settings control order, red-key normalization, and remote editing behavior.
 
-## Phase 2: Subtitle experience
+## Verification
 
-- [x] Add a subtitle-language preference in settings. Default search/ranking order: Finnish, then English.
-- [x] Filter subtitle results to Finnish and English and rank by exact episode/movie match, language preference, release-name similarity, and download count.
-- [x] Remember the last chosen subtitle language and font size per device.
-- [x] Add subtitle timing controls for the app-rendered Tizen overlay: quick ±0.5 s and ±2 s adjustments, an on-screen current-offset indicator, and a per-title remembered offset.
-- [x] Keep normalizing provider formatting tags such as ASS/SSA overrides and inline HTML before rendering text.
+- [x] `npm run check` passes with 147 tests.
+- [x] `npm run build:tizen` succeeds.
+- [ ] Validate the release build on the UE75MU8005 with the physical remote. Check red-key support, Settings traversal, initial focus in Recent/Movies/Series, edit activation, and 1280×720 plus native-TV layouts.
 
-## Phase 3: Catalogue discovery and browsing
+## Release safeguards
 
-- [x] Improve TV browsing layout with clearer group/title hierarchy, compact rows or poster grids, loading placeholders, empty states, and remote-friendly focus transitions.
-- [x] Add favourites for movie genres and series sources/categories, persisted locally with remote-friendly browse controls.
-- [x] Preserve efficient on-demand Xtream category loading and keep M3U import as a fallback.
-- [x] Keep favourites available as a dedicated browse view, with empty-state handling and remote-friendly focus transitions.
-
-## Phase 4: Movie and series metadata
-
-- [x] Resolve basic movie/series metadata from a suitable metadata provider: poster/thumbnail, description, release year, genres, runtime, and rating where available.
-- [x] Add a title-details screen before playback with poster, synopsis, episode/season selector, available subtitle languages, and resume state.
-- [x] Cache metadata and image thumbnails locally with expiry and size limits appropriate for the TV.
-- [x] Handle ambiguous title matches safely: show candidates or omit metadata rather than attaching incorrect artwork/descriptions.
-- [x] Add remote-friendly title-details navigation: Back and Play are focusable on movies; series use a compact Season → Episode picker before returning focus to Play selected episode.
-- [x] Keep title-details metadata useful when TMDb or subtitle lookup is unavailable by showing the catalogue title and available local/provider data.
-
-## Delivery principles
-
-- Keep private playlist URLs, API keys, tokens, and signed media URLs out of logs, UI diagnostics, Git, and distributable builds.
-- Keep platform-independent logic in `src/core`; browser and Tizen integrations stay behind adapters.
-- Test catalogue and subtitle logic using synthetic fixtures only.
-- Validate every Tizen feature on the UE75MU8005 after packaging a personal build.
-- Keep personal-build configuration in `.env` (`IPTV_M3U_URL`, `OPENSUBTITLES_API_KEY`, and `TMDB_API_READ_ACCESS_TOKEN` or `TMDB_API_KEY`) and never commit or distribute the resulting client bundle.
+- Do not log or display playlist URLs, API keys, tokens, signed media URLs, or typed credential values.
+- Keep tests synthetic; never use the private playlist or credentials.
+- Keep platform-specific integration behind adapters and preserve the Tizen 3-compatible CSS fallback.

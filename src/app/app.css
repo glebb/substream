@@ -280,3 +280,42 @@ button:disabled { cursor: default; opacity: .45; }
     flex: none; width: auto;
   }
 }
+
+/* Shared layout contract. Keep the first declarations Tizen-safe; the
+ * variable-based enhancement below only improves modern browsers. */
+.layout-section { margin-top: 24px; }
+.layout-row, .settings-actions, .subtitle-actions, .subtitle-search-options, .player-controls {
+  align-items: center; display: flex; flex-wrap: wrap; gap: 12px;
+}
+.layout-row > input, .layout-row > select, .settings-key-editor > input,
+.settings-key-editor > select, .settings-key-editor > label { flex: 1 1 240px; min-width: 0; }
+.settings-key-editor > label { display: block; max-width: 100%; overflow: hidden; }
+.settings-key-editor > label > input, .settings-key-editor > label > select { box-sizing: border-box; max-width: 100%; width: 100%; }
+.settings-key-editor > button, .settings-actions > button, .subtitle-actions > button { min-width: 140px; }
+.settings-panel, .settings-section, .subtitles, .title-details { min-width: 0; }
+.groups { margin: -6px; gap: 12px; }
+.groups > .favourite-tile { padding: 6px; }
+.favourite-tile { min-width: 0; }
+.favourite-tile > .tile { min-width: 0; }
+.remote-focused { transform: none; }
+.remote-key-hint { color: #ffd54a; font-weight: 700; margin: 0; }
+.empty-state-action { margin-top: 12px; }
+.remote-editable-trigger { min-width: 0; text-align: left; }
+.settings-section { margin-top: 20px; padding: 16px; }
+.settings-section:first-of-type { margin-top: 16px; }
+.settings-screen { max-width: 800px; }
+.settings-screen p, .settings-section p { overflow-wrap: anywhere; }
+
+@supports (display: grid) {
+  .groups { gap: 1.5rem; margin: 0; }
+  .groups > .favourite-tile { padding: .35rem; }
+  .layout-section { margin-top: 2rem; }
+  .layout-row, .settings-actions, .subtitle-actions, .subtitle-search-options, .player-controls { gap: .75rem; }
+  .settings-section { margin-top: 1.25rem; padding: 1rem 1.15rem; }
+  .remote-focused { box-shadow: 0 0 0 3px var(--page), 0 0 0 7px var(--focus) !important; }
+}
+
+@media (max-width: 800px) {
+  .settings-key-editor > input, .settings-key-editor > select,
+  .settings-key-editor > button, .settings-key-editor > label { flex-basis: 100%; width: 100%; }
+}

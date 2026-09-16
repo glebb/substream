@@ -1,8 +1,8 @@
-import { FormEvent, Fragment, useEffect, useMemo, useRef, useState, type FocusEvent } from "react";
+import { FormEvent, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent } from "react";
 import { importM3uChunks, normalizeTitle, type VodCatalogItem } from "../core/catalog/index.ts";
 import { DEFAULT_MAX_WHOLE_RESPONSE_BYTES, responseTextChunks, validateWholeResponseFallback, WholeResponseFallbackError } from "../platform/browser/fetch-chunks.ts";
 import { clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl } from "../platform/browser/playlist-config.ts";
-import { isBackKey, isTizenRuntime, normalizedRemoteKey, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
+import { isBackKey, isRedKey, isTizenRuntime, normalizedRemoteKey, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
 import { IndexedDbCatalogOpenError, IndexedDbCatalogStore, type VodGroup, type VodSort } from "../platform/web/indexed-db-catalog.ts";
 import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
 import type { MediaPlayer, PlaybackProgress, VideoDisplayMode } from "../platform/media-player.ts";
@@ -23,7 +23,8 @@ import { formatRuntime, titleDetailsFor } from "./title-details.ts";
 import { clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials } from "../platform/browser/tmdb-config.ts";
 import { TmdbClient, type TmdbMetadata } from "../platform/tmdb/client.ts";
 import { TmdbImageCache, TmdbMetadataCache } from "../platform/browser/tmdb-cache.ts";
-import { actionRowNavigationTarget, browseGridColumnCount, dashboardControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, resolveAppBackAction, subtitleFocusLayout, TITLE_LIST_PAGE_STRIDE, titleListNavigationTarget, titleListPageBoundaryTarget } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, subtitleFocusLayout, TITLE_LIST_PAGE_STRIDE, titleListNavigationTarget, titleListPageBoundaryTarget, type SettingsControlKey } from "./remote-navigation.ts";
+import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
 
 type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
@@ -31,7 +32,7 @@ const PAGE_SIZE = 100;
 const OPEN_SUBTITLES_BASE_URL = import.meta.env.DEV ? "/opensubtitles-api/api/v1" : undefined;
 type BrowseMode = "local" | "provider" | "episodes";
 type SettingsConfirmation = "clear-catalog" | "clear-subtitles" | "reset-all";
-type SettingsFocusKey = "back" | "playlist" | "subtitle-language" | "api-key-input" | "api-key-edit" | "api-key-save" | "api-key-cancel" | "remove-api-key" | "tmdb-token-input" | "tmdb-key-input" | "tmdb-save" | "tmdb-cancel" | "clear-catalog" | "reset-all" | "confirm-cancel" | "confirm-confirm";
+type SettingsFocusKey = SettingsControlKey;
 type SubtitleSearchType = "movie" | "series";
 
 function playbackHistoryItem(title: VodCatalogItem, progress: PlaybackProgress, providerSourceId?: string, updatedAt = Date.now()): PlaybackHistoryItem {
@@ -85,6 +86,7 @@ export function App() {
   const [playlistUrl, setPlaylistUrl] = useState(loadPlaylistUrl);
   const [showPlaylistForm, setShowPlaylistForm] = useState(() => !loadPlaylistUrl());
   const [playlistDraft, setPlaylistDraft] = useState(loadPlaylistUrl);
+  const [editingPlaylistUrl, setEditingPlaylistUrl] = useState(false);
   const [groups, setGroups] = useState<VodGroup[]>([]);
   const [activeGroup, setActiveGroup] = useState<VodGroup | null>(null);
   const [titles, setTitles] = useState<VodCatalogItem[]>([]);
@@ -96,6 +98,7 @@ export function App() {
   const visibleGroups = useMemo(() => browseCollection === "recent" ? [] : browseCollection === "favourites" ? groups.filter((group) => favouriteGroupIds.includes(group.id)) : browseGroupsForCollection(groups, browseCollection), [browseCollection, favouriteGroupIds, groups]);
   const [browseCount, setBrowseCount] = useState(0);
   const [focusIndex, setFocusIndex] = useState(0);
+  const [favouriteStatus, setFavouriteStatus] = useState("");
   const [playerFocusIndex, setPlayerFocusIndex] = useState(0);
   const [resumeChoiceFocusIndex, setResumeChoiceFocusIndex] = useState(0);
   const [settingsButtonFocused, setSettingsButtonFocused] = useState(false);
@@ -116,6 +119,7 @@ export function App() {
   const [detailsPosterUrl, setDetailsPosterUrl] = useState<string | null>(null);
   const [detailsEpisodes, setDetailsEpisodes] = useState<VodCatalogItem[]>([]);
   const [detailsEpisodeId, setDetailsEpisodeId] = useState("");
+  const [editingDetailsEpisode, setEditingDetailsEpisode] = useState(false);
   const [detailsFocusIndex, setDetailsFocusIndex] = useState(0);
   const [episodePickerOpen, setEpisodePickerOpen] = useState(false);
   const [episodePickerLevel, setEpisodePickerLevel] = useState<"seasons" | "episodes">("seasons");
@@ -133,12 +137,19 @@ export function App() {
   const [tmdbTokenDraft, setTmdbTokenDraft] = useState("");
   const [tmdbApiKeyDraft, setTmdbApiKeyDraft] = useState("");
   const [subtitleLanguagePreference, setSubtitleLanguagePreference] = useState<SubtitleLanguage>(() => loadSubtitlePreferences().languagePreference);
+  const [editingSubtitleLanguage, setEditingSubtitleLanguage] = useState(false);
+  const [editingTmdbToken, setEditingTmdbToken] = useState(false);
+  const [editingTmdbApiKey, setEditingTmdbApiKey] = useState(false);
   const [showPlayerApiKeyEditor, setShowPlayerApiKeyEditor] = useState(false);
   const [showSettingsApiKeyEditor, setShowSettingsApiKeyEditor] = useState(false);
   const [subtitleSearchQuery, setSubtitleSearchQuery] = useState("");
   const [subtitleSearchType, setSubtitleSearchType] = useState<SubtitleSearchType>("movie");
   const [subtitleSearchSeason, setSubtitleSearchSeason] = useState("");
   const [subtitleSearchEpisode, setSubtitleSearchEpisode] = useState("");
+  const [editingSubtitleQuery, setEditingSubtitleQuery] = useState(false);
+  const [editingSubtitleType, setEditingSubtitleType] = useState(false);
+  const [editingSubtitleSeason, setEditingSubtitleSeason] = useState(false);
+  const [editingSubtitleEpisode, setEditingSubtitleEpisode] = useState(false);
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[]>([]);
   const [subtitleStatus, setSubtitleStatus] = useState("");
   const [visibleSubtitle, setVisibleSubtitle] = useState("");
@@ -151,14 +162,20 @@ export function App() {
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const browseTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const playlistUrlRef = useRef<HTMLInputElement | null>(null);
+  const playlistControlRef = useRef<HTMLElement | null>(null);
   const importButtonRef = useRef<HTMLButtonElement | null>(null);
   const retryPlaylistRef = useRef<HTMLButtonElement | null>(null);
   const changePlaylistRef = useRef<HTMLButtonElement | null>(null);
   const settingsOpenButtonRef = useRef<HTMLButtonElement | null>(null);
-  const settingsControlsRef = useRef<Array<HTMLElement | null>>([]);
+  const browseEmptyRecoveryRef = useRef<HTMLButtonElement | null>(null);
+  const browseTabTransitionRef = useRef(false);
+  const browseReturnFocusIndexRef = useRef(0);
+  const browseReturnFocusPendingRef = useRef(false);
+  const settingsControlsRef = useRef<Partial<Record<SettingsControlKey, HTMLElement | null>>>({});
   const resumeChoiceControlsRef = useRef<Array<HTMLButtonElement | null>>([]);
   const detailsControlsRef = useRef<Array<HTMLButtonElement | null>>([]);
   const detailsEpisodeSelectRef = useRef<HTMLSelectElement | null>(null);
+  const detailsEpisodeControlRef = useRef<HTMLElement | null>(null);
   const episodePickerOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const detailsRequestRef = useRef(0);
   const sortSelectRef = useRef<HTMLSelectElement | null>(null);
@@ -179,14 +196,22 @@ export function App() {
   const subtitleTimingPlusHalfButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleTimingPlusTwoButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleKeyInputRef = useRef<HTMLInputElement | null>(null);
+  const subtitleKeyControlRef = useRef<HTMLElement | null>(null);
   const subtitleSetupButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSearchInputRef = useRef<HTMLInputElement | null>(null);
   const subtitleSearchTypeRef = useRef<HTMLSelectElement | null>(null);
   const subtitleSearchSeasonRef = useRef<HTMLInputElement | null>(null);
   const subtitleSearchEpisodeRef = useRef<HTMLInputElement | null>(null);
+  const subtitleSearchControlRef = useRef<HTMLElement | null>(null);
+  const subtitleSearchTypeControlRef = useRef<HTMLElement | null>(null);
+  const subtitleSearchSeasonControlRef = useRef<HTMLElement | null>(null);
+  const subtitleSearchEpisodeControlRef = useRef<HTMLElement | null>(null);
   const findSubtitlesButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSaveButtonRef = useRef<HTMLButtonElement | null>(null);
   const settingsApiKeyInputRef = useRef<HTMLInputElement | null>(null);
+  const subtitleLanguageControlRef = useRef<HTMLElement | null>(null);
+  const tmdbTokenControlRef = useRef<HTMLElement | null>(null);
+  const tmdbApiKeyControlRef = useRef<HTMLElement | null>(null);
   const subtitleButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const subtitleRequestRef = useRef(0);
@@ -245,11 +270,11 @@ export function App() {
         subtitleTimingPlusTwoButtonRef.current,
       ] : []),
       ...(!openSubtitlesApiKey.trim()
-        ? showPlayerApiKeyEditor ? [subtitleKeyInputRef.current, subtitleSaveButtonRef.current] : [subtitleSetupButtonRef.current]
+        ? [subtitleKeyControlRef.current, ...(showPlayerApiKeyEditor ? [subtitleSaveButtonRef.current] : [])]
         : []),
-      subtitleSearchInputRef.current,
-      subtitleSearchTypeRef.current,
-      ...(subtitleSearchType === "series" ? [subtitleSearchSeasonRef.current, subtitleSearchEpisodeRef.current] : []),
+      subtitleSearchControlRef.current,
+      subtitleSearchTypeControlRef.current,
+      ...(subtitleSearchType === "series" ? [subtitleSearchSeasonControlRef.current, subtitleSearchEpisodeControlRef.current] : []),
       findSubtitlesButtonRef.current,
       ...subtitleButtonRefs.current,
     ].filter((control): control is HTMLElement => control !== null);
@@ -304,8 +329,10 @@ export function App() {
   }, [state]);
 
   useEffect(() => {
-    if (showPlaylistForm && state !== "loading" && state !== "importing") playlistUrlRef.current?.focus();
-  }, [showPlaylistForm, state]);
+    if (showPlaylistForm && state !== "loading" && state !== "importing") {
+      (isTizen ? playlistControlRef.current : playlistUrlRef.current)?.focus();
+    }
+  }, [isTizen, showPlaylistForm, state]);
 
   const openGroup = async (group: VodGroup, targetPage: number, targetSort = sort, focusAtEnd = false) => {
     if (group.providerCategoryId && group.providerContentType) {
@@ -396,6 +423,10 @@ export function App() {
     setSubtitleSearchType(title.contentType === "series" ? "series" : "movie");
     setSubtitleSearchSeason(String(title.season ?? titleForSearch.season ?? ""));
     setSubtitleSearchEpisode(String(title.episode ?? titleForSearch.episode ?? ""));
+    setEditingSubtitleQuery(false);
+    setEditingSubtitleType(false);
+    setEditingSubtitleSeason(false);
+    setEditingSubtitleEpisode(false);
     setShowPlayerApiKeyEditor(false);
     setSelectedTitle(title);
   };
@@ -408,6 +439,7 @@ export function App() {
     setDetailsSubtitleLanguages([]);
     setDetailsPosterUrl(null);
     setDetailsEpisodes([]); setDetailsEpisodeId("");
+    setEditingDetailsEpisode(false);
     const credentials = loadTmdbCredentials();
     if (credentials.readAccessToken || credentials.apiKey) {
       const client = new TmdbClient(credentials, undefined, import.meta.env.DEV ? "/tmdb-api" : undefined);
@@ -540,6 +572,16 @@ export function App() {
     setContinueHistory(loadPlaybackHistory());
   };
 
+  const toggleFocusedFavourite = () => {
+    if (activeGroup || browseCollection === "recent") return false;
+    const group = visibleGroups[focusIndex];
+    if (!group) return false;
+    const nextFavourite = !favouriteGroupIds.includes(group.id);
+    setFavouriteGroupIds(setFavouriteGroup(group.id, nextFavourite));
+    setFavouriteStatus(`${group.name} ${nextFavourite ? "added to" : "removed from"} favourites.`);
+    return true;
+  };
+
   const chooseResumeAction = (resume: boolean) => {
     if (!resumeChoice) return;
     if (resume) startPlayback(resumeChoice.title, resumeChoice.history.currentTimeSeconds);
@@ -566,7 +608,70 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const key = normalizedRemoteKey(event);
+      if (isRedKey(event) && state === "ready" && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice && !settingsConfirmation
+        && !showPlaylistForm && !activeGroup && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
+        if (toggleFocusedFavourite()) {
+          event.preventDefault();
+          // The focused group remains the same; only its indicator/status
+          // changes, so the next remote direction starts from the same tile.
+        }
+        return;
+      }
       if (isBackKey(event)) {
+        if (editingPlaylistUrl && showPlaylistForm) {
+          event.preventDefault();
+          setEditingPlaylistUrl(false);
+          window.requestAnimationFrame(() => playlistControlRef.current?.focus());
+          return;
+        }
+        if (showSettings && (showSettingsApiKeyEditor || editingSubtitleLanguage || editingTmdbToken || editingTmdbApiKey)) {
+          event.preventDefault();
+          const target = event.target;
+          if (target === settingsApiKeyInputRef.current) {
+            setShowSettingsApiKeyEditor(false);
+            window.requestAnimationFrame(() => settingsControlsRef.current["api-key-edit"]?.focus());
+          } else if (target === subtitleLanguageControlRef.current) {
+            setEditingSubtitleLanguage(false);
+            window.requestAnimationFrame(() => subtitleLanguageControlRef.current?.focus());
+          } else if (target === tmdbTokenControlRef.current) {
+            setEditingTmdbToken(false);
+            window.requestAnimationFrame(() => tmdbTokenControlRef.current?.focus());
+          } else if (target === tmdbApiKeyControlRef.current) {
+            setEditingTmdbApiKey(false);
+            window.requestAnimationFrame(() => tmdbApiKeyControlRef.current?.focus());
+          } else {
+            setShowSettingsApiKeyEditor(false);
+            setEditingSubtitleLanguage(false);
+            setEditingTmdbToken(false);
+            setEditingTmdbApiKey(false);
+          }
+          return;
+        }
+        if (detailsTitle && editingDetailsEpisode) {
+          event.preventDefault();
+          setEditingDetailsEpisode(false);
+          window.requestAnimationFrame(() => detailsEpisodeControlRef.current?.focus());
+          return;
+        }
+        if (selectedTitle && (editingSubtitleQuery || editingSubtitleType || editingSubtitleSeason || editingSubtitleEpisode)) {
+          event.preventDefault();
+          const target = event.target;
+          const restoreControl = target === subtitleSearchInputRef.current
+            ? subtitleSearchControlRef
+            : target === subtitleSearchTypeRef.current
+              ? subtitleSearchTypeControlRef
+              : target === subtitleSearchSeasonRef.current
+                ? subtitleSearchSeasonControlRef
+                : subtitleSearchEpisodeControlRef;
+          if (target === subtitleSearchInputRef.current) setEditingSubtitleQuery(false);
+          else if (target === subtitleSearchTypeRef.current) setEditingSubtitleType(false);
+          else if (target === subtitleSearchSeasonRef.current) setEditingSubtitleSeason(false);
+          else if (target === subtitleSearchEpisodeRef.current) setEditingSubtitleEpisode(false);
+          window.requestAnimationFrame(() => {
+            restoreControl.current?.focus();
+          });
+          return;
+        }
         if (episodePickerOpen) {
           event.preventDefault();
           if (episodePickerLevel === "episodes") {
@@ -629,12 +734,13 @@ export function App() {
             break;
           case "close-group":
             remoteBrowseRef.current = null;
+            browseReturnFocusPendingRef.current = true;
             setBrowseMode("local");
             setBrowseCount(0);
             setActiveGroup(null);
             setTitles([]);
             setPage(0);
-            setFocusIndex(0);
+            setFocusIndex(browseReturnFocusIndexRef.current);
             setCatalogStatus("");
             break;
           case "cancel-browse-loading":
@@ -646,8 +752,15 @@ export function App() {
         return;
       }
       if (state !== "ready") {
+        if (editingPlaylistUrl && event.target === playlistUrlRef.current
+          && (key === "ArrowUp" || key === "ArrowDown")) {
+          event.preventDefault();
+          setEditingPlaylistUrl(false);
+          window.requestAnimationFrame(() => playlistControlRef.current?.focus());
+          return;
+        }
         const controls = (showPlaylistForm
-          ? [playlistUrlRef.current, importButtonRef.current]
+          ? [playlistControlRef.current, importButtonRef.current]
           : [retryPlaylistRef.current, changePlaylistRef.current])
           .filter((control): control is HTMLElement => control !== null);
         if (controls.length === 0) return;
@@ -722,11 +835,18 @@ export function App() {
           }
           return;
         }
-        const controls = [detailsControlsRef.current[0], ...(detailsTitle.providerSeriesId && detailsEpisodes.length ? [detailsEpisodeSelectRef.current] : []), detailsControlsRef.current[2] ?? detailsControlsRef.current[1]].filter((control): control is HTMLElement => Boolean(control));
+        const controls = [detailsControlsRef.current[0], ...(detailsTitle.providerSeriesId && detailsEpisodes.length ? [detailsEpisodeControlRef.current] : []), detailsControlsRef.current[2] ?? detailsControlsRef.current[1]].filter((control): control is HTMLElement => Boolean(control));
         if (controls.length === 0) return;
         const activeIndex = controls.indexOf(document.activeElement as HTMLElement);
         const currentIndex = activeIndex >= 0 ? activeIndex : detailsFocusIndex;
-        if (document.activeElement === detailsEpisodeSelectRef.current && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
+        if (document.activeElement === detailsEpisodeSelectRef.current && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) {
+          if (!isTizen || !editingDetailsEpisode) return;
+          event.preventDefault();
+          setEditingDetailsEpisode(false);
+          const targetIndex = Math.max(0, Math.min(controls.length - 1, currentIndex + (key === "ArrowUp" || key === "ArrowLeft" ? -1 : 1)));
+          window.requestAnimationFrame(() => controls[targetIndex]?.focus());
+          return;
+        }
         if (document.activeElement === detailsEpisodeSelectRef.current && key === "Enter") {
           if (isTizen) {
             event.preventDefault();
@@ -753,15 +873,28 @@ export function App() {
       }
       if (settingsConfirmation || showSettings) {
         const settingsTextEntry = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+        if (editingSubtitleLanguage && event.target === subtitleLanguageControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingSubtitleLanguage(false);
+        if (editingTmdbToken && event.target === tmdbTokenControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingTmdbToken(false);
+        if (editingTmdbApiKey && event.target === tmdbApiKeyControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingTmdbApiKey(false);
         if (settingsTextEntry && !["ArrowUp", "ArrowDown"].includes(key)) return;
-        const controls = settingsControlsRef.current.filter((control): control is HTMLElement => Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled));
+        const order = settingsControlOrder({
+          confirmationOpen: Boolean(settingsConfirmation),
+          apiKeyEditorOpen: showSettingsApiKeyEditor,
+          hasSubtitleKey,
+        });
+        const controls = order
+          .map((controlKey) => settingsControlsRef.current[controlKey])
+          .filter((control): control is HTMLElement => Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled));
         if (controls.length === 0) return;
         const activeIndex = controls.indexOf(document.activeElement as HTMLButtonElement);
-        const currentIndex = activeIndex >= 0 ? activeIndex : 0;
+        const focusIndex = order.indexOf(settingsFocusKey);
+        const currentIndex = activeIndex >= 0 ? activeIndex : Math.max(0, focusIndex);
         if (["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(key)) {
           event.preventDefault();
           const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
-          controls[Math.max(0, Math.min(controls.length - 1, currentIndex + delta))]?.focus();
+          const targetIndex = Math.max(0, Math.min(controls.length - 1, currentIndex + delta));
+          setSettingsFocusKey(order[targetIndex] ?? settingsFocusKey);
+          controls[targetIndex]?.focus();
           return;
         }
         if (key === "Enter") {
@@ -777,6 +910,22 @@ export function App() {
         const currentIndex = activeIndex >= 0 ? activeIndex : Math.max(0, Math.min(controls.length - 1, playerFocusIndex));
         const isTextEntry = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
         const isEditableTarget = isTextEntry || event.target instanceof HTMLSelectElement;
+        const editingRemoteField = (editingSubtitleQuery && event.target === subtitleSearchInputRef.current)
+          || (editingSubtitleType && event.target === subtitleSearchTypeRef.current)
+          || (editingSubtitleSeason && event.target === subtitleSearchSeasonRef.current)
+          || (editingSubtitleEpisode && event.target === subtitleSearchEpisodeRef.current);
+        const editableAction = remoteEditableKeyAction(key, editingRemoteField, isTizen);
+        if (editableAction === "leave-edit") {
+          event.preventDefault();
+          if (event.target === subtitleSearchInputRef.current) setEditingSubtitleQuery(false);
+          else if (event.target === subtitleSearchTypeRef.current) setEditingSubtitleType(false);
+          else if (event.target === subtitleSearchSeasonRef.current) setEditingSubtitleSeason(false);
+          else if (event.target === subtitleSearchEpisodeRef.current) setEditingSubtitleEpisode(false);
+          // Continue through the direction handler below so Up/Down also
+          // return to the surrounding remote controls.
+        } else if (editableAction === "ignore" && editingRemoteField && key === "Enter") {
+          return;
+        }
         if (isPlayerPlaybackShortcut(key, {
           videoActive: controls[currentIndex] === playerStageRef.current,
           fullscreen: playerFullscreen,
@@ -857,6 +1006,7 @@ export function App() {
           event.preventDefault();
           const nextTab = Math.max(0, Math.min(tabs.length - 1, currentTab + (key === "ArrowLeft" ? -1 : 1)));
           const nextCollection: BrowseCollection[] = ["recent", "movies", "series", "favourites"];
+          browseTabTransitionRef.current = true;
           setFocusIndex(0);
           setBrowseCollection(nextCollection[nextTab] ?? "recent");
           tabs[nextTab]?.focus();
@@ -971,6 +1121,7 @@ export function App() {
           const group = visibleGroups[focusIndex - continueActionCount];
           if (!group) return;
           event.preventDefault();
+          browseReturnFocusIndexRef.current = focusIndex - continueActionCount;
           void openGroup(group, 0);
           return;
         }
@@ -982,12 +1133,50 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, episodePickerFocusIndex, episodePickerOpen, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlaylistForm, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
+  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingDetailsEpisode, editingPlaylistUrl, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlaylistForm, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
+
+  useLayoutEffect(() => {
+    if (!browseTabTransitionRef.current || activeGroup || selectedTitle || detailsTitle || resumeChoice || showSettings || settingsConfirmation) return;
+    browseTabTransitionRef.current = false;
+    const itemCount = browseCollection === "recent" ? continueHistory.length * 2 : visibleGroups.length;
+    const target = browseCollectionFocusTarget(itemCount > 0, Boolean(browseEmptyRecoveryRef.current));
+    if (target === "content") {
+      const targetIndex = browseCollectionFocusIndex(target, itemCount);
+      if (targetIndex === null) return;
+      // A tab transition can replace a different number of tiles.  Never use
+      // an old ref as a fallback here: doing so moves DOM focus to a tile that
+      // does not match focusIndex (and therefore the highlighted tile).  The
+      // layout effect normally sees all callback refs, while the frame retry
+      // covers TV engines that commit refs a tick after their React update.
+      const focusFirstTile = () => {
+        const tile = tileRefs.current[targetIndex];
+        if (!tile) return false;
+        tile.focus();
+        tile.scrollIntoView({ block: "nearest", inline: "nearest" });
+        return true;
+      };
+      if (focusFirstTile()) return;
+      const frame = window.requestAnimationFrame(focusFirstTile);
+      return () => window.cancelAnimationFrame(frame);
+    }
+    if (target === "recovery") {
+      browseEmptyRecoveryRef.current?.focus();
+    }
+  }, [activeGroup, browseCollection, continueHistory.length, detailsTitle, resumeChoice, selectedTitle, settingsConfirmation, showSettings, visibleGroups.length]);
 
   useEffect(() => {
     if (selectedTitle || detailsTitle || resumeChoice || showSettings || settingsConfirmation) return;
     setSettingsButtonFocused(false);
     if (!activeGroup) {
+      if (browseReturnFocusPendingRef.current) {
+        browseReturnFocusPendingRef.current = false;
+        const frame = window.requestAnimationFrame(() => {
+          const tile = tileRefs.current[browseReturnFocusIndexRef.current];
+          tile?.focus();
+          tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        });
+        return () => window.cancelAnimationFrame(frame);
+      }
       const activeElement = document.activeElement;
       const tile = tileRefs.current[focusIndex];
       const activeFocus = activeElement === document.body
@@ -1020,8 +1209,9 @@ export function App() {
 
   useEffect(() => {
     if (!showSettings && !settingsConfirmation) return;
-    setSettingsFocusKey(settingsConfirmation ? "confirm-cancel" : "back");
-    window.requestAnimationFrame(() => settingsControlsRef.current.filter((control): control is HTMLElement => Boolean(control))[0]?.focus());
+    const firstKey = settingsConfirmation ? "confirm-cancel" : "back";
+    setSettingsFocusKey(firstKey);
+    window.requestAnimationFrame(() => settingsControlsRef.current[firstKey]?.focus());
   }, [settingsConfirmation, showSettings]);
 
   useEffect(() => {
@@ -1034,7 +1224,7 @@ export function App() {
     // The editor's input/save/cancel controls are conditionally mounted. Return
     // to the API-key action after closing it so Tizen never retains a dead focus.
     setSettingsFocusKey("api-key-edit");
-    window.requestAnimationFrame(() => settingsControlsRef.current[settingsApiKeyStartIndex]?.focus());
+    window.requestAnimationFrame(() => settingsControlsRef.current["api-key-edit"]?.focus());
   }, [showSettingsApiKeyEditor]);
 
   useEffect(() => {
@@ -1048,7 +1238,7 @@ export function App() {
     const controls = playerControls();
     const control = controls[Math.min(playerFocusIndex, Math.max(0, controls.length - 1))];
     control?.focus();
-  }, [openSubtitlesApiKey, isSubtitleAttached, playerFocusIndex, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, subtitleResults.length, subtitleSearchType]);
+  }, [editingSubtitleEpisode, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, openSubtitlesApiKey, isSubtitleAttached, playerFocusIndex, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, subtitleResults.length, subtitleSearchType]);
 
   useEffect(() => {
     if (selectedTitle) window.scrollTo(0, 0);
@@ -1394,6 +1584,8 @@ export function App() {
     saveTmdbCredentials({ readAccessToken, apiKey });
     setTmdbCredentials({ readAccessToken, apiKey });
     setTmdbTokenDraft(""); setTmdbApiKeyDraft("");
+    setEditingTmdbToken(false);
+    setEditingTmdbApiKey(false);
     setSettingsStatus("TMDb settings saved securely.");
   };
 
@@ -1563,10 +1755,10 @@ export function App() {
   };
 
   const hasSubtitleKey = Boolean(openSubtitlesApiKey.trim());
-  const settingsApiKeyStartIndex = 3;
-  const settingsRemoveApiKeyIndex = showSettingsApiKeyEditor ? 6 : 4;
-  const settingsClearCatalogIndex = showSettingsApiKeyEditor ? (hasSubtitleKey ? 7 : 6) : (hasSubtitleKey ? 5 : 4);
-  const settingsResetIndex = settingsClearCatalogIndex + 1;
+  const registerSettingsControl = (key: SettingsControlKey, element: HTMLElement | null) => {
+    if (element) settingsControlsRef.current[key] = element;
+    else delete settingsControlsRef.current[key];
+  };
   const settingsFocusClass = (key: SettingsFocusKey): string => settingsFocusKey === key ? "remote-focused" : "";
   const handleSettingsFocusCapture = (event: FocusEvent<HTMLElement>) => {
     const focusKey = (event.target as HTMLElement).dataset.settingsFocus as SettingsFocusKey | undefined;
@@ -1623,8 +1815,15 @@ export function App() {
   if (state === "importing" || state === "auto-import") return <main className="screen"><h1>Importing library</h1><p role="status" aria-live="polite">{progress}</p></main>;
 
   const playlistSetupForm = <form onSubmit={importPlaylist}>
-    <label htmlFor="playlist-url">M3U playlist URL</label>
-    <input id="playlist-url" type="password" value={playlistDraft} onChange={(event) => setPlaylistDraft(event.target.value)} autoComplete="off" ref={playlistUrlRef} />
+    <RemoteEditable
+      label="M3U playlist URL"
+      value="Stored privately"
+      editing={editingPlaylistUrl}
+      remoteMode={isTizen}
+      controlRef={(element) => { playlistControlRef.current = element; }}
+      onBeginEdit={() => { setEditingPlaylistUrl(true); window.requestAnimationFrame(() => playlistUrlRef.current?.focus()); }}
+      renderEditor={(controlRef) => <label htmlFor="playlist-url">M3U playlist URL<input id="playlist-url" type="password" value={playlistDraft} onChange={(event) => setPlaylistDraft(event.target.value)} autoComplete="off" ref={(element) => { playlistUrlRef.current = element; controlRef(element); }} /></label>}
+    />
     <p className="hint">Stored only in this app’s private local data. Do not use a VITE environment variable for this URL.</p>
     <div className="settings-actions">
       <button type="submit" ref={importButtonRef}>Import VOD library</button>
@@ -1655,63 +1854,57 @@ export function App() {
               ? "This removes only the OpenSubtitles API key saved by this app. Other local catalogue and subtitle timing data remain."
               : "This removes the local catalogue, playback history, saved playlist and subtitle settings, and subtitle timing offsets. Defaults bundled into this app build remain available."}</p>
           <div className="settings-actions">
-            <button className={settingsFocusClass("confirm-cancel")} data-settings-focus="confirm-cancel" type="button" ref={(element) => { settingsControlsRef.current[0] = element; }} onClick={() => setSettingsConfirmation(null)}>Cancel</button>
-            <button className={`danger-button ${settingsFocusClass("confirm-confirm")}`} data-settings-focus="confirm-confirm" type="button" ref={(element) => { settingsControlsRef.current[1] = element; }} onClick={() => void performSettingsConfirmation()}>Confirm</button>
+            <button className={settingsFocusClass("confirm-cancel")} data-settings-focus="confirm-cancel" type="button" ref={(element) => registerSettingsControl("confirm-cancel", element)} onClick={() => setSettingsConfirmation(null)}>Cancel</button>
+            <button className={`danger-button ${settingsFocusClass("confirm-confirm")}`} data-settings-focus="confirm-confirm" type="button" ref={(element) => registerSettingsControl("confirm-confirm", element)} onClick={() => void performSettingsConfirmation()}>Confirm</button>
           </div>
         </section></div> : <>
           <h2>Settings</h2>
           <p className="hint">Playlist URLs and subtitle keys are masked on entry and are never displayed on this screen.</p>
           <div className="settings-actions settings-primary-actions">
-              <button className={settingsFocusClass("back")} data-settings-focus="back" type="button" ref={(element) => { settingsControlsRef.current[0] = element; }} onClick={() => setShowSettings(false)}>Back to library</button>
+              <button className={settingsFocusClass("back")} data-settings-focus="back" type="button" ref={(element) => registerSettingsControl("back", element)} onClick={() => setShowSettings(false)}>Back to library</button>
           </div>
           <section className="settings-section">
             <h3>Navigation and playlist</h3>
             <p className="hint">Your playlist URL is stored locally and remains masked.</p>
-            <button className={settingsFocusClass("playlist")} data-settings-focus="playlist" type="button" ref={(element) => { settingsControlsRef.current[1] = element; }} onClick={changePlaylist}>Change playlist URL</button>
+            <button className={settingsFocusClass("playlist")} data-settings-focus="playlist" type="button" ref={(element) => registerSettingsControl("playlist", element)} onClick={changePlaylist}>Change playlist URL</button>
           </section>
           <section className="settings-section">
             <h3>Subtitle language</h3>
             <p className="hint">Search and ranking prefer this language, then fall back to the other supported language.</p>
-            <label htmlFor="subtitle-language-preference">Preferred subtitle language</label>
-            <select className={settingsFocusClass("subtitle-language")} data-settings-focus="subtitle-language" id="subtitle-language-preference" value={subtitleLanguagePreference} ref={(element) => { settingsControlsRef.current[2] = element; }} onChange={(event) => { const value = event.target.value as SubtitleLanguage; setSubtitleLanguagePreference(value); saveSubtitleLanguagePreference(value); }}>
-              <option value="fi">Finnish (then English)</option>
-              <option value="en">English (then Finnish)</option>
-            </select>
+            <RemoteEditable label="Preferred subtitle language" value={subtitleLanguagePreference === "fi" ? "Finnish (then English)" : "English (then Finnish)"} editing={editingSubtitleLanguage} remoteMode={isTizen} className={settingsFocusClass("subtitle-language")} controlRef={(element) => { subtitleLanguageControlRef.current = element; registerSettingsControl("subtitle-language", element); }} onBeginEdit={() => { setEditingSubtitleLanguage(true); window.requestAnimationFrame(() => (subtitleLanguageControlRef.current as HTMLSelectElement | null)?.focus()); }} renderEditor={(controlRef) => <label htmlFor="subtitle-language-preference">Preferred subtitle language<select className={settingsFocusClass("subtitle-language")} data-settings-focus="subtitle-language" id="subtitle-language-preference" value={subtitleLanguagePreference} ref={(element) => { controlRef(element); subtitleLanguageControlRef.current = element; registerSettingsControl("subtitle-language", element); }} onChange={(event) => { const value = event.target.value as SubtitleLanguage; setSubtitleLanguagePreference(value); saveSubtitleLanguagePreference(value); }}><option value="fi">Finnish (then English)</option><option value="en">English (then Finnish)</option></select></label>} />
           </section>
           <section className="settings-section">
             <h3>OpenSubtitles</h3>
             <p className="hint" role="status">API key: {hasSubtitleKey ? "Configured (hidden)" : "Not configured"}</p>
             {showSettingsApiKeyEditor && <div className="subtitle-actions settings-key-editor">
               <label className="sr-only" htmlFor="settings-opensubtitles-api-key">New OpenSubtitles API key</label>
-              <input className={settingsFocusClass("api-key-input")} data-settings-focus="api-key-input" id="settings-opensubtitles-api-key" type="password" value={settingsApiKeyDraft} onChange={(event) => setSettingsApiKeyDraft(event.target.value)} autoComplete="off" ref={(element) => { settingsApiKeyInputRef.current = element; settingsControlsRef.current[settingsApiKeyStartIndex] = element; }} />
-              <button className={settingsFocusClass("api-key-save")} data-settings-focus="api-key-save" type="button" ref={(element) => { settingsControlsRef.current[settingsApiKeyStartIndex + 1] = element; }} onClick={saveSettingsApiKey}>Save API key</button>
-              <button className={settingsFocusClass("api-key-cancel")} data-settings-focus="api-key-cancel" type="button" ref={(element) => { settingsControlsRef.current[settingsApiKeyStartIndex + 2] = element; }} onClick={() => setShowSettingsApiKeyEditor(false)}>Cancel</button>
+              <input className={settingsFocusClass("api-key-input")} data-settings-focus="api-key-input" id="settings-opensubtitles-api-key" type="password" value={settingsApiKeyDraft} onChange={(event) => setSettingsApiKeyDraft(event.target.value)} autoComplete="off" ref={(element) => { settingsApiKeyInputRef.current = element; registerSettingsControl("api-key-input", element); }} />
+              <button className={settingsFocusClass("api-key-save")} data-settings-focus="api-key-save" type="button" ref={(element) => registerSettingsControl("api-key-save", element)} onClick={saveSettingsApiKey}>Save API key</button>
+              <button className={settingsFocusClass("api-key-cancel")} data-settings-focus="api-key-cancel" type="button" ref={(element) => registerSettingsControl("api-key-cancel", element)} onClick={() => setShowSettingsApiKeyEditor(false)}>Cancel</button>
             </div>}
-            {!showSettingsApiKeyEditor && <button className={settingsFocusClass("api-key-edit")} data-settings-focus="api-key-edit" type="button" ref={(element) => { settingsControlsRef.current[settingsApiKeyStartIndex] = element; }} onClick={editSettingsApiKey}>{hasSubtitleKey ? "Change OpenSubtitles API key" : "Add OpenSubtitles API key"}</button>}
-            {hasSubtitleKey && <button className={`quiet-danger ${settingsFocusClass("remove-api-key")}`} data-settings-focus="remove-api-key" type="button" ref={(element) => { settingsControlsRef.current[settingsRemoveApiKeyIndex] = element; }} onClick={() => setSettingsConfirmation("clear-subtitles")}>Remove saved API key</button>}
+            {!showSettingsApiKeyEditor && <button className={settingsFocusClass("api-key-edit")} data-settings-focus="api-key-edit" type="button" ref={(element) => registerSettingsControl("api-key-edit", element)} onClick={editSettingsApiKey}>{hasSubtitleKey ? "Change OpenSubtitles API key" : "Add OpenSubtitles API key"}</button>}
+            {hasSubtitleKey && <button className={`quiet-danger ${settingsFocusClass("remove-api-key")}`} data-settings-focus="remove-api-key" type="button" ref={(element) => registerSettingsControl("remove-api-key", element)} onClick={() => setSettingsConfirmation("clear-subtitles")}>Remove saved API key</button>}
           </section>
           <section className="settings-section">
             <h3>TMDb metadata</h3>
             <p className="hint">Read Access Token is preferred; the API key is an optional fallback. Credentials stay hidden.</p>
             <p className="hint" role="status">Read Access Token: {tmdbCredentials.readAccessToken ? "Configured (hidden)" : "Not configured"} · API key: {tmdbCredentials.apiKey ? "Configured (hidden)" : "Not configured"}</p>
             <div className="subtitle-actions settings-key-editor">
-              <label className="sr-only" htmlFor="tmdb-read-token">TMDb Read Access Token</label>
-              <input className={settingsFocusClass("tmdb-token-input")} data-settings-focus="tmdb-token-input" id="tmdb-read-token" type="password" placeholder="New Read Access Token" value={tmdbTokenDraft} onChange={(event) => setTmdbTokenDraft(event.target.value)} autoComplete="off" ref={(element) => { settingsControlsRef.current[8] = element; }} />
-              <label className="sr-only" htmlFor="tmdb-api-key">TMDb API key fallback</label>
-              <input className={settingsFocusClass("tmdb-key-input")} data-settings-focus="tmdb-key-input" id="tmdb-api-key" type="password" placeholder="Optional API key fallback" value={tmdbApiKeyDraft} onChange={(event) => setTmdbApiKeyDraft(event.target.value)} autoComplete="off" ref={(element) => { settingsControlsRef.current[9] = element; }} />
-              <button className={settingsFocusClass("tmdb-save")} data-settings-focus="tmdb-save" type="button" ref={(element) => { settingsControlsRef.current[10] = element; }} onClick={saveTmdbSettings}>Save TMDb settings</button>
-              <button className={settingsFocusClass("tmdb-cancel")} data-settings-focus="tmdb-cancel" type="button" ref={(element) => { settingsControlsRef.current[11] = element; }} onClick={() => { setTmdbTokenDraft(""); setTmdbApiKeyDraft(""); }}>Clear edits</button>
+              <RemoteEditable label="TMDb Read Access Token" value={tmdbCredentials.readAccessToken ? "Configured (hidden)" : "Not configured"} editing={editingTmdbToken} remoteMode={isTizen} className={settingsFocusClass("tmdb-token-input")} controlRef={(element) => { tmdbTokenControlRef.current = element; registerSettingsControl("tmdb-token-input", element); }} onBeginEdit={() => { setEditingTmdbToken(true); window.requestAnimationFrame(() => settingsControlsRef.current["tmdb-token-input"]?.focus()); }} renderEditor={(controlRef) => <label htmlFor="tmdb-read-token">TMDb Read Access Token<input className={settingsFocusClass("tmdb-token-input")} data-settings-focus="tmdb-token-input" id="tmdb-read-token" type="password" placeholder="New Read Access Token" value={tmdbTokenDraft} onChange={(event) => setTmdbTokenDraft(event.target.value)} autoComplete="off" ref={(element) => { tmdbTokenControlRef.current = element; registerSettingsControl("tmdb-token-input", element); controlRef(element); }} /></label>} />
+              <RemoteEditable label="TMDb API key fallback" value={tmdbCredentials.apiKey ? "Configured (hidden)" : "Not configured"} editing={editingTmdbApiKey} remoteMode={isTizen} className={settingsFocusClass("tmdb-key-input")} controlRef={(element) => { tmdbApiKeyControlRef.current = element; registerSettingsControl("tmdb-key-input", element); }} onBeginEdit={() => { setEditingTmdbApiKey(true); window.requestAnimationFrame(() => settingsControlsRef.current["tmdb-key-input"]?.focus()); }} renderEditor={(controlRef) => <label htmlFor="tmdb-api-key">TMDb API key fallback<input className={settingsFocusClass("tmdb-key-input")} data-settings-focus="tmdb-key-input" id="tmdb-api-key" type="password" placeholder="Optional API key fallback" value={tmdbApiKeyDraft} onChange={(event) => setTmdbApiKeyDraft(event.target.value)} autoComplete="off" ref={(element) => { tmdbApiKeyControlRef.current = element; registerSettingsControl("tmdb-key-input", element); controlRef(element); }} /></label>} />
+              <button className={settingsFocusClass("tmdb-save")} data-settings-focus="tmdb-save" type="button" ref={(element) => registerSettingsControl("tmdb-save", element)} onClick={saveTmdbSettings}>Save TMDb settings</button>
+              <button className={settingsFocusClass("tmdb-cancel")} data-settings-focus="tmdb-cancel" type="button" ref={(element) => registerSettingsControl("tmdb-cancel", element)} onClick={() => { setTmdbTokenDraft(""); setTmdbApiKeyDraft(""); }}>Clear edits</button>
             </div>
           </section>
           <section className="settings-section">
             <h3>Local catalogue data</h3>
             <p className="hint">Playback history and per-title subtitle timing are kept separately from your playlist.</p>
-            <button className={settingsFocusClass("clear-catalog")} data-settings-focus="clear-catalog" type="button" ref={(element) => { settingsControlsRef.current[settingsClearCatalogIndex] = element; }} onClick={() => setSettingsConfirmation("clear-catalog")}>Clear local VOD catalogue</button>
+            <button className={settingsFocusClass("clear-catalog")} data-settings-focus="clear-catalog" type="button" ref={(element) => registerSettingsControl("clear-catalog", element)} onClick={() => setSettingsConfirmation("clear-catalog")}>Clear local VOD catalogue</button>
           </section>
           <section className="settings-section danger-zone">
             <h3>Danger zone</h3>
             <p className="hint">Resetting removes all local app data and cannot be undone.</p>
-            <button className={`danger-button ${settingsFocusClass("reset-all")}`} data-settings-focus="reset-all" type="button" ref={(element) => { settingsControlsRef.current[settingsResetIndex] = element; }} onClick={() => setSettingsConfirmation("reset-all")}>Reset all local app data</button>
+            <button className={`danger-button ${settingsFocusClass("reset-all")}`} data-settings-focus="reset-all" type="button" ref={(element) => registerSettingsControl("reset-all", element)} onClick={() => setSettingsConfirmation("reset-all")}>Reset all local app data</button>
           </section>
           {settingsStatus && <p className="hint" role="status" aria-live="polite">{settingsStatus}</p>}
         </>}
@@ -1732,11 +1925,7 @@ export function App() {
             <p className="details-synopsis">{details.synopsis ?? "Synopsis unavailable for this title."}</p>
             {details.subtitleLanguages.length > 0 ? <p className="hint">Subtitles available: {details.subtitleLanguages.join(", ")}</p> : <p className="hint">Subtitle languages will appear after searching OpenSubtitles.</p>}
             {detailsHistory && <p className="details-resume" role="status">Resume available at {formatPlaybackTime(detailsHistory.currentTimeSeconds)} of {formatPlaybackTime(detailsHistory.durationSeconds)}</p>}
-            {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <label className="details-episode-picker">Season / episode
-              <select className={detailsFocusIndex === 1 ? "remote-focused" : ""} ref={detailsEpisodeSelectRef} onFocus={() => setDetailsFocusIndex(1)} value={detailsEpisodeId} onChange={(event) => setDetailsEpisodeId(event.target.value)} aria-label="Choose season and episode">
-                {detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}
-              </select>
-            </label>}
+            {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `Season ${episode.season}, ` : ""}${episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}` : "Choose episode"; })()} editing={editingDetailsEpisode} remoteMode={isTizen} className={detailsFocusIndex === 1 ? "remote-focused" : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? "remote-focused" : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => setDetailsFocusIndex(1)} value={detailsEpisodeId} onChange={(event) => setDetailsEpisodeId(event.target.value)} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
           </div>
         </div>
         {episodePickerOpen && isTizen && <div className="episode-picker-backdrop" role="presentation">
@@ -1830,32 +2019,17 @@ export function App() {
               <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 3 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(2)} ref={subtitleTimingPlusTwoButtonRef}>+2 s</button>
             </div>
           </div>}
-          {!hasSubtitleKey && showPlayerApiKeyEditor && <>
-            <label htmlFor="opensubtitles-api-key">OpenSubtitles API key</label>
-            <div className="subtitle-actions">
-              <input id="opensubtitles-api-key" type="password" value={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={(element) => { openSubtitlesApiKeyRef.current = element; subtitleKeyInputRef.current = element; }} />
-              <button className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} type="button" onClick={saveSubtitleSettings} ref={subtitleSaveButtonRef}>Save settings</button>
-            </div>
-          </>}
-          {!hasSubtitleKey && !showPlayerApiKeyEditor && <button className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} type="button" onClick={showPlayerApiKeySetup} ref={subtitleSetupButtonRef}>Set up OpenSubtitles API key</button>}
+          {!hasSubtitleKey && <div className="subtitle-actions">
+            <RemoteEditable label="OpenSubtitles API key" value="Not configured" editing={showPlayerApiKeyEditor} remoteMode={isTizen} className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleKeyControlRef.current = element; }} onBeginEdit={showPlayerApiKeySetup} renderEditor={(controlRef) => <label htmlFor="opensubtitles-api-key">OpenSubtitles API key<input id="opensubtitles-api-key" type="password" value={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={(element) => { openSubtitlesApiKeyRef.current = element; subtitleKeyInputRef.current = element; controlRef(element); }} /></label>} />
+            {showPlayerApiKeyEditor && <button className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} type="button" onClick={saveSubtitleSettings} ref={subtitleSaveButtonRef}>Save settings</button>}
+          </div>}
           <p className="subtitle-search-heading">Subtitle search</p>
           <div className="subtitle-search-options">
-            <label className="subtitle-search-query" htmlFor="subtitle-search-query">Title
-              <input id="subtitle-search-query" type="search" value={subtitleSearchQuery} onChange={(event) => setSubtitleSearchQuery(event.target.value)} autoComplete="off" enterKeyHint="search" aria-label="Subtitle search term" ref={subtitleSearchInputRef} />
-            </label>
-            <label htmlFor="subtitle-search-type">Type
-              <select id="subtitle-search-type" value={subtitleSearchType} onChange={(event) => setSubtitleSearchType(event.target.value as SubtitleSearchType)} ref={subtitleSearchTypeRef}>
-                <option value="movie">Movie</option>
-                <option value="series">Series</option>
-              </select>
-            </label>
+            <RemoteEditable label="Title" value={subtitleSearchQuery} editing={editingSubtitleQuery} remoteMode={isTizen} className={`subtitle-search-query ${playerFocusIndex === subtitleSearchFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleQuery(true); window.requestAnimationFrame(() => subtitleSearchInputRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-query" htmlFor="subtitle-search-query">Title<input id="subtitle-search-query" type="search" value={subtitleSearchQuery} onChange={(event) => setSubtitleSearchQuery(event.target.value)} autoComplete="off" enterKeyHint="search" aria-label="Subtitle search term" ref={(element) => { subtitleSearchInputRef.current = element; controlRef(element); }} /></label>} />
+            <RemoteEditable label="Type" value={subtitleSearchType === "movie" ? "Movie" : "Series"} editing={editingSubtitleType} remoteMode={isTizen} className={playerFocusIndex === subtitleSearchTypeFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleSearchTypeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleType(true); window.requestAnimationFrame(() => subtitleSearchTypeRef.current?.focus()); }} renderEditor={(controlRef) => <label htmlFor="subtitle-search-type">Type<select id="subtitle-search-type" value={subtitleSearchType} onChange={(event) => setSubtitleSearchType(event.target.value as SubtitleSearchType)} ref={(element) => { subtitleSearchTypeRef.current = element; controlRef(element); }}><option value="movie">Movie</option><option value="series">Series</option></select></label>} />
             {subtitleSearchType === "series" && <>
-              <label className="subtitle-search-number" htmlFor="subtitle-search-season">Season
-                <input id="subtitle-search-season" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchSeason} onChange={(event) => setSubtitleSearchSeason(event.target.value)} ref={subtitleSearchSeasonRef} />
-              </label>
-              <label className="subtitle-search-number" htmlFor="subtitle-search-episode">Episode
-                <input id="subtitle-search-episode" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchEpisode} onChange={(event) => setSubtitleSearchEpisode(event.target.value)} ref={subtitleSearchEpisodeRef} />
-              </label>
+              <RemoteEditable label="Season" value={subtitleSearchSeason} editing={editingSubtitleSeason} remoteMode={isTizen} className={`subtitle-search-number ${playerFocusIndex === subtitleSeasonFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchSeasonControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleSeason(true); window.requestAnimationFrame(() => subtitleSearchSeasonRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-season">Season<input id="subtitle-search-season" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchSeason} onChange={(event) => setSubtitleSearchSeason(event.target.value)} ref={(element) => { subtitleSearchSeasonRef.current = element; controlRef(element); }} /></label>} />
+              <RemoteEditable label="Episode" value={subtitleSearchEpisode} editing={editingSubtitleEpisode} remoteMode={isTizen} className={`subtitle-search-number ${playerFocusIndex === subtitleEpisodeFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleEpisode(true); window.requestAnimationFrame(() => subtitleSearchEpisodeRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-episode">Episode<input id="subtitle-search-episode" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchEpisode} onChange={(event) => setSubtitleSearchEpisode(event.target.value)} ref={(element) => { subtitleSearchEpisodeRef.current = element; controlRef(element); }} /></label>} />
             </>}
             <button className={playerFocusIndex === findSubtitleFocusIndex ? "remote-focused" : ""} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
           </div>
@@ -1883,7 +2057,7 @@ export function App() {
               <option value="year">Release year (newest)</option>
             </select>
           </label>
-          <button type="button" ref={backToGroupsRef} onClick={() => { browseRequestRef.current.invalidate(); remoteBrowseRef.current = null; setBrowseMode("local"); setBrowseCount(0); setActiveGroup(null); setTitles([]); setPage(0); setFocusIndex(0); setCatalogStatus(""); }}>Back to groups</button>
+          <button type="button" ref={backToGroupsRef} onClick={() => { browseRequestRef.current.invalidate(); remoteBrowseRef.current = null; browseReturnFocusPendingRef.current = true; setBrowseMode("local"); setBrowseCount(0); setActiveGroup(null); setTitles([]); setPage(0); setFocusIndex(browseReturnFocusIndexRef.current); setCatalogStatus(""); }}>Back to groups</button>
         </div>
         <div className={"groups title-grid" + (isTizen ? " tv-title-list" : "")}>
           {catalogStatus && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
@@ -1902,7 +2076,7 @@ export function App() {
             aria-selected={browseCollection === collection}
             className={"browse-tab " + (browseCollection === collection ? "selected" : "")}
             key={collection}
-            onClick={() => { setFocusIndex(0); setBrowseCollection(collection); }}
+            onClick={() => { browseTabTransitionRef.current = true; setFocusIndex(0); setBrowseCollection(collection); }}
             ref={(element) => { browseTabRefs.current[index] = element; }}
             role="tab"
             type="button"
@@ -1927,14 +2101,14 @@ export function App() {
             </Fragment>)}
           </div>
         </>}
-        {browseCollection === "recent" && continueHistory.length === 0 && <div className="empty-state"><h2>Nothing here yet</h2><p>Titles you start watching will appear here so you can pick up where you left off.</p></div>}
+        {browseCollection === "recent" && continueHistory.length === 0 && <div className="empty-state"><h2>Nothing here yet</h2><p>Titles you start watching will appear here so you can pick up where you left off.</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = true; setBrowseCollection("movies"); setFocusIndex(0); }}>Browse movies</button></div>}
         {browseCollection !== "recent" && <>
-          <div className="collection-heading"><h2>{browseCollection === "favourites" ? "Favourite groups" : browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">{browseCollection === "favourites" ? "Your saved movie genres and series categories." : "Choose a group to browse its titles."}</p></div>
+          <div className="collection-heading"><h2>{browseCollection === "favourites" ? "Favourite groups" : browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">{browseCollection === "favourites" ? "Your saved movie genres and series categories." : "Choose a group to browse its titles. Provider groups load when selected."}</p><p className="remote-key-hint">Press the red remote key to toggle the focused group as a favourite.</p>{favouriteStatus && <p className="hint" role="status" aria-live="polite">{favouriteStatus}</p>}</div>
           <div className="groups group-grid">
-          {visibleGroups.map((group, index) => <div className="favourite-tile" key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} onClick={() => { setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
-            <strong title={group.name} aria-label={group.name}>{formatGroupDisplayName(group.name)}</strong><span>{group.providerCategoryId ? "Open on demand" : group.count.toLocaleString() + " titles"}</span>
-          </button><button className="quiet-button favourite-toggle" type="button" aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onClick={() => setFavouriteGroupIds(setFavouriteGroup(group.id, !favouriteGroupIds.includes(group.id)))}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button></div>)}
-          {!visibleGroups.length && <div className="empty-state"><h2>{browseCollection === "favourites" ? "No favourite groups yet" : `No ${browseCollection === "movies" ? "movie" : "series"} groups found`}</h2><p>{browseCollection === "favourites" ? "Use Add favourite on a genre or category to keep it on this device." : `Import a library with ${browseCollection === "movies" ? "movies" : "series"} to browse titles here.`}</p></div>}
+          {visibleGroups.map((group, index) => <div className="favourite-tile" key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
+            <strong title={group.name} aria-label={group.name}>{formatGroupDisplayName(group.name)}</strong><span>{group.count.toLocaleString()} titles</span>
+          </button><button className="quiet-button favourite-toggle" type="button" tabIndex={isTizen ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTizen) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => { const next = !favouriteGroupIds.includes(group.id); setFavouriteGroupIds(setFavouriteGroup(group.id, next)); setFavouriteStatus(`${group.name} ${next ? "added to" : "removed from"} favourites.`); }}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button></div>)}
+          {!visibleGroups.length && <div className="empty-state"><h2>{browseCollection === "favourites" ? "No favourite groups yet" : `No ${browseCollection === "movies" ? "movie" : "series"} groups found`}</h2><p>{browseCollection === "favourites" ? "Use the red remote key on a group, or the button on a card, to save it on this device." : `Import a library with ${browseCollection === "movies" ? "movies" : "series"} to browse titles here.`}</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = true; setBrowseCollection("recent"); setFocusIndex(0); }}>Browse recent</button></div>}
           </div>
         </>}
       </>}

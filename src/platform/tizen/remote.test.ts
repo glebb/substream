@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "./remote.ts";
+import { isBackKey, isRedKey, isTizenRuntime, normalizedRemoteKey } from "./remote.ts";
 
 describe("normalizedRemoteKey", () => {
   it("detects the Tizen runtime independently from browser playback globals", () => {
@@ -25,6 +25,9 @@ describe("normalizedRemoteKey", () => {
     expect(normalizedRemoteKey({ key: "i", keyCode: 0 } as KeyboardEvent)).toBe("Info");
     expect(normalizedRemoteKey({ key: "", keyCode: 457 } as KeyboardEvent)).toBe("Info");
     expect(normalizedRemoteKey({ key: "Info", keyCode: 0 } as KeyboardEvent)).toBe("Info");
+    expect(normalizedRemoteKey({ key: "ColorF0Red", keyCode: 0 } as KeyboardEvent)).toBe("Red");
+    expect(normalizedRemoteKey({ key: "", keyCode: 403 } as KeyboardEvent)).toBe("Red");
+    expect(isRedKey({ key: "Red", keyCode: 0 } as KeyboardEvent)).toBe(true);
   });
 
   it.each([

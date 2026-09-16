@@ -1,4 +1,8 @@
-const TV_INPUT_PRIVILEGE_KEYS = ["MediaPlayPause", "MediaPlay", "MediaPause", "MediaRewind", "MediaFastForward", "Info"];
+/** Samsung colour keys are privileged on Tizen and must be registered before
+ * the browser receives them.  The red key is used for the app's favourite
+ * shortcut.  Some models expose it as ColorF0Red while older firmware uses
+ * Red, so both names are attempted by the normalisation layer below. */
+const TV_INPUT_PRIVILEGE_KEYS = ["MediaPlayPause", "MediaPlay", "MediaPause", "MediaRewind", "MediaFastForward", "Info", "ColorF0Red"];
 
 interface TizenInputDevice {
   registerKeyBatch(keys: string[], onSuccess?: () => void, onError?: (error: unknown) => void): void;
@@ -29,6 +33,11 @@ export function isBackKey(event: KeyboardEvent): boolean {
   return normalizedRemoteKey(event) === "Back";
 }
 
+/** True for the Samsung red colour key (including legacy key-code variants). */
+export function isRedKey(event: KeyboardEvent): boolean {
+  return normalizedRemoteKey(event) === "Red";
+}
+
 /** Older Samsung web engines use Left/Right/Up/Down and keyCode values. */
 export function normalizedRemoteKey(event: KeyboardEvent): string {
   const key = event.key ?? "";
@@ -49,6 +58,8 @@ export function normalizedRemoteKey(event: KeyboardEvent): string {
     415: "MediaPlay",
     417: "MediaFastForward",
     10252: "MediaPlayPause",
+    // Samsung colour keys: red, green, yellow, blue.
+    403: "Red",
   };
   const namedKeys: Record<string, string> = {
     Left: "ArrowLeft",
@@ -59,6 +70,9 @@ export function normalizedRemoteKey(event: KeyboardEvent): string {
     XF86AudioPlay: "MediaPlayPause",
     XF86AudioPause: "MediaPause",
     Info: "Info",
+    Red: "Red",
+    ColorF0Red: "Red",
+    ColorRed: "Red",
   };
   const legacyKeyCode = event.keyCode || event.which;
   return namedKeys[key] ?? namedKeys[code]
