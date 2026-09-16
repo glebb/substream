@@ -1,6 +1,8 @@
 export interface PackageDefaults {
   playlistUrl?: string;
   openSubtitlesApiKey?: string;
+  tmdbApiReadAccessToken?: string;
+  tmdbApiKey?: string;
 }
 
 declare const __SUBSTREAM_PACKAGE_DEFAULTS__: PackageDefaults;

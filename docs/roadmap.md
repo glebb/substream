@@ -20,26 +20,27 @@ This roadmap describes the next user-facing improvements for the Samsung Tizen V
 
 ## Phase 2: Subtitle experience
 
-- [ ] Add a subtitle-language preference in settings. Default search/ranking order: Finnish, then English.
+- [x] Add a subtitle-language preference in settings. Default search/ranking order: Finnish, then English.
 - [x] Filter subtitle results to Finnish and English and rank by exact episode/movie match, language preference, release-name similarity, and download count.
-- [ ] Remember the last chosen subtitle language and font size per device.
+- [x] Remember the last chosen subtitle language and font size per device.
 - [x] Add subtitle timing controls for the app-rendered Tizen overlay: quick ±0.5 s and ±2 s adjustments, an on-screen current-offset indicator, and a per-title remembered offset.
-- [ ] Keep normalizing provider formatting tags such as ASS/SSA overrides and inline HTML before rendering text.
+- [x] Keep normalizing provider formatting tags such as ASS/SSA overrides and inline HTML before rendering text.
 
 ## Phase 3: Catalogue discovery and browsing
 
-- [ ] Add VOD search across titles, normalized names, release year, and series/episode identifiers.
-- [ ] Add browse filters for content type, group, language/region, release year, and favourites/history.
 - [x] Improve TV browsing layout with clearer group/title hierarchy, compact rows or poster grids, loading placeholders, empty states, and remote-friendly focus transitions.
-- [ ] Add favourites
-- [ ] Preserve efficient on-demand Xtream category loading and keep M3U import as a fallback.
+- [x] Add favourites for movie genres and series sources/categories, persisted locally with remote-friendly browse controls.
+- [x] Preserve efficient on-demand Xtream category loading and keep M3U import as a fallback.
+- [x] Keep favourites available as a dedicated browse view, with empty-state handling and remote-friendly focus transitions.
 
 ## Phase 4: Movie and series metadata
 
-- [ ] Resolve basic movie/series metadata from a suitable metadata provider: poster/thumbnail, description, release year, genres, runtime, and rating where available.
-- [ ] Add a title-details screen before playback with poster, synopsis, episode/season selector, available subtitle languages, and resume state.
-- [ ] Cache metadata and image thumbnails locally with expiry and size limits appropriate for the TV.
-- [ ] Handle ambiguous title matches safely: show candidates or omit metadata rather than attaching incorrect artwork/descriptions.
+- [x] Resolve basic movie/series metadata from a suitable metadata provider: poster/thumbnail, description, release year, genres, runtime, and rating where available.
+- [x] Add a title-details screen before playback with poster, synopsis, episode/season selector, available subtitle languages, and resume state.
+- [x] Cache metadata and image thumbnails locally with expiry and size limits appropriate for the TV.
+- [x] Handle ambiguous title matches safely: show candidates or omit metadata rather than attaching incorrect artwork/descriptions.
+- [x] Add remote-friendly title-details navigation: Back and Play are focusable on movies; series use a compact Season → Episode picker before returning focus to Play selected episode.
+- [x] Keep title-details metadata useful when TMDb or subtitle lookup is unavailable by showing the catalogue title and available local/provider data.
 
 ## Delivery principles
 
@@ -47,3 +48,4 @@ This roadmap describes the next user-facing improvements for the Samsung Tizen V
 - Keep platform-independent logic in `src/core`; browser and Tizen integrations stay behind adapters.
 - Test catalogue and subtitle logic using synthetic fixtures only.
 - Validate every Tizen feature on the UE75MU8005 after packaging a personal build.
+- Keep personal-build configuration in `.env` (`IPTV_M3U_URL`, `OPENSUBTITLES_API_KEY`, and `TMDB_API_READ_ACCESS_TOKEN` or `TMDB_API_KEY`) and never commit or distribute the resulting client bundle.

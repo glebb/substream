@@ -1,7 +1,7 @@
 import type { VodCatalogItem } from "../core/catalog/index.ts";
 import type { VodGroup, VodSort } from "../platform/web/indexed-db-catalog.ts";
 
-export type BrowseCollection = "recent" | "movies" | "series";
+export type BrowseCollection = "recent" | "movies" | "series" | "favourites";
 
 /** Mixed local groups remain reachable from either typed collection. */
 export function browseGroupsForCollection(groups: readonly VodGroup[], collection: Exclude<BrowseCollection, "recent">): VodGroup[] {

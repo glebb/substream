@@ -30,6 +30,14 @@ npm run inspect:m3u # credential-safe summary of the private playlist in .env
 - Both adapters report loading, buffering, playing, paused, ended, and error states. AVPlay preparation and stale callbacks are generation-guarded.
 - The remote UI supports arrow/Enter/Back navigation, media keys, ±60-second skips, Auto/Fit/Fill display modes, full-screen video, and subtitle-size controls. Web Space and Tizen Action/Enter toggle playback when the video area is active or while fullscreen.
 - OpenSubtitles queries exact series/season/episode records where possible. Browser playback converts SRT to WebVTT; the TV renders parsed SRT cues as an app overlay because this firmware rejects AVPlay external-subtitle paths.
+- Subtitle preferences retain the preferred language order (Finnish/English by default), the last selected language, font size, and per-title timing offsets. Provider formatting such as ASS/SSA overrides and inline HTML is normalized before rendering.
+
+## Metadata, favourites, and title details
+
+- TMDb supplies cached title metadata and artwork when a confident match is available. Finnish search is preferred with English fallback; ambiguous matches do not attach potentially incorrect metadata.
+- Movie and series details are shown before playback. Series details load episodes on demand and expose a compact Season → Episode picker, avoiding a long combined list for multi-season shows.
+- On Tizen, title-details controls use explicit yellow remote focus. Arrow keys move Back → Season/Episode → Play selected episode; Action/Enter opens or confirms the picker and starts playback only from the Play control. Back returns from episodes to seasons and then to details.
+- Movie genres and series provider categories can be marked as favourites and are available through the dedicated Favourites browse view.
 
 ## UI and remote focus
 

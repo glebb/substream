@@ -5,16 +5,18 @@ import legacy from "@vitejs/plugin-legacy";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const apiKey = env.OPENSUBTITLES_API_KEY;
+  const tmdbApiReadAccessToken = env.TMDB_API_READ_ACCESS_TOKEN;
+  const tmdbApiKey = env.TMDB_API_KEY;
   const isPersonalBuild = process.env.PERSONAL_BUILD === "1";
   const tizenCompatibilityTarget = process.env.TIZEN_COMPAT_TARGET;
   if (tizenCompatibilityTarget !== undefined && tizenCompatibilityTarget !== "tizen6") {
     throw new Error("TIZEN_COMPAT_TARGET must be tizen6 when it is set");
   }
-  if (isPersonalBuild && (!env.IPTV_M3U_URL || !apiKey)) {
-    throw new Error("Personal builds require IPTV_M3U_URL and OPENSUBTITLES_API_KEY in .env");
+  if (isPersonalBuild && (!env.IPTV_M3U_URL || !apiKey || (!tmdbApiReadAccessToken && !tmdbApiKey))) {
+    throw new Error("Personal builds require IPTV_M3U_URL, OPENSUBTITLES_API_KEY, and TMDB_API_READ_ACCESS_TOKEN or TMDB_API_KEY in .env");
   }
   const packageDefaults = isPersonalBuild
-    ? { playlistUrl: env.IPTV_M3U_URL, openSubtitlesApiKey: apiKey }
+    ? { playlistUrl: env.IPTV_M3U_URL, openSubtitlesApiKey: apiKey, tmdbApiReadAccessToken, tmdbApiKey }
     : {};
   return {
     base: "./",
@@ -46,7 +48,17 @@ export default defineConfig(({ mode }) => {
       }),
     ],
     server: {
-      proxy: apiKey ? {
+      proxy: {
+        // TMDb does not permit browser-origin requests in all environments.
+        // This development-only proxy keeps the browser request same-origin;
+        // the client still supplies its bearer token/API key in the request.
+        "/tmdb-api": {
+          changeOrigin: true,
+          followRedirects: true,
+          rewrite: (path) => path.replace(/^\/tmdb-api/, "/3"),
+          target: "https://api.themoviedb.org",
+        },
+        ...(apiKey ? {
         "/opensubtitles-api": {
           changeOrigin: true,
           followRedirects: true,
@@ -59,7 +71,8 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/opensubtitles-api/, ""),
           target: "https://api.opensubtitles.com",
         },
-      } : {},
+        } : {}),
+    },
     },
   };
 });

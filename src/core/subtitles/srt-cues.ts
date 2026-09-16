@@ -3,6 +3,7 @@ export interface SubtitleCue {
   endMs: number;
   text: string;
 }
+import { normalizeSubtitleText } from "./normalize.ts";
 
 /** Parses the common SRT subset returned by OpenSubtitles into timed cues. */
 export function parseSrtCues(subtitleText: string): SubtitleCue[] {
@@ -13,11 +14,7 @@ export function parseSrtCues(subtitleText: string): SubtitleCue[] {
     const [startText, endText] = (lines[timingIndex] ?? "").split("-->");
     const startMs = parseTimestamp(startText ?? "");
     const endMs = parseTimestamp(endText ?? "");
-    const text = lines.slice(timingIndex + 1).join("\n")
-      .replace(/\{\\[^}]*\}/g, "")
-      .replace(/<br\s*\/?\s*>/gi, "\n")
-      .replace(/<\/?[^>]+>/g, "")
-      .trim();
+    const text = normalizeSubtitleText(lines.slice(timingIndex + 1).join("\n")).trim();
     return startMs === undefined || endMs === undefined || !text ? [] : [{ startMs, endMs, text }];
   });
 }

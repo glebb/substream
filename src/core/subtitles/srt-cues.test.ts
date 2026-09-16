@@ -20,4 +20,9 @@ describe("parseSrtCues", () => {
       { startMs: 1_000, endMs: 2_000, text: "Hei\nmaailma" },
     ]);
   });
+
+  it("normalizes mixed ASS escapes, tags, and entities", () => {
+    expect(parseSrtCues("1\n00:00:01,000 --> 00:00:02,000\n{\\pos(1,2)}<font color='red'>Hei\\N&amp; <b>moi</b></font>\\h!"))
+      .toEqual([{ startMs: 1_000, endMs: 2_000, text: "Hei\n& moi !" }]);
+  });
 });

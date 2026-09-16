@@ -1,5 +1,7 @@
+import { normalizeSubtitleText } from "./normalize.ts";
+
 export function srtToWebVtt(subtitleText: string): string {
-  const normalized = subtitleText.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const normalized = normalizeSubtitleText(subtitleText.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n"));
   if (normalized.trimStart().startsWith("WEBVTT")) return normalized;
 
   const cueText = normalized.replace(

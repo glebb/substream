@@ -5,6 +5,8 @@ export type SubtitleMatchTarget = {
   season?: number;
   episode?: number;
   parentFeatureId?: number;
+  /** Preferred language is ranked first; the other supported language follows. */
+  languagePreference?: "fi" | "en";
 };
 
 export type SubtitleCandidate = {
@@ -30,7 +32,10 @@ export type RankedSubtitleResult = SubtitleCandidate & {
   highConfidence: boolean;
 };
 
-const LANGUAGE_RANK: Record<string, number> = { fi: 0, en: 1 };
+function languageRank(language: string, preferred: "fi" | "en" = "fi"): number {
+  if (language !== "fi" && language !== "en") return Number.POSITIVE_INFINITY;
+  return language === preferred ? 0 : 1;
+}
 const RELEASE_NOISE = new Set([
   "1080p", "2160p", "720p", "480p", "bluray", "brrip", "dvdrip", "web", "webdl", "webrip",
   "h264", "h265", "x264", "x265", "hevc", "aac", "dts", "proper", "repack", "limited", "extended",
@@ -77,8 +82,8 @@ function compareRanked(a: RankedSubtitleResult, b: RankedSubtitleResult): number
 export function rankSubtitleResults(target: SubtitleMatchTarget, results: SubtitleCandidate[]): RankedSubtitleResult[] {
   const targetTitle = target.title.trim();
   return results.flatMap((result) => {
-    const languageRank = LANGUAGE_RANK[result.language.toLowerCase()];
-    if (languageRank === undefined) return [];
+    const resultLanguageRank = languageRank(result.language.toLowerCase(), target.languagePreference);
+    if (!Number.isFinite(resultLanguageRank)) return [];
 
     const featureType = result.featureType?.toLowerCase();
     if (target.contentType === "movie" && featureType && /episode|tvshow|series/.test(featureType)) return [];
@@ -109,6 +114,6 @@ export function rankSubtitleResults(target: SubtitleMatchTarget, results: Subtit
       ? episodeKnown && (exactParent || featureTitleMatches)
       : movieYearMatches && (featureTitleMatches || (releaseTitleMatches && target.year !== null && releaseHasYear(result.releaseName, target.year)));
 
-    return [{ ...result, metadataMatch, releaseSimilarity, languageRank, highConfidence }];
+    return [{ ...result, metadataMatch, releaseSimilarity, languageRank: resultLanguageRank, highConfidence }];
   }).sort(compareRanked);
 }

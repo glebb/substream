@@ -5,6 +5,8 @@
 **Substream** is a subtitle-first IPTV VOD player for Samsung Tizen TVs. It turns an M3U or Xtream-compatible provider into a browsable on-demand library, then helps viewers find, select, size, and time subtitles during playback.
 
 > OpenSubtitles is an external service. Substream uses its API when you provide a key; it is not affiliated with or endorsed by OpenSubtitles.
+>
+> Movie and series metadata is provided by [TMDb](https://www.themoviedb.org/). Substream uses the TMDb API but is not endorsed or certified by TMDb.
 
 ## Highlights
 
@@ -12,7 +14,9 @@
 - Use Xtream-compatible `get.php` sources efficiently: load categories first, then fetch titles and episodes only when needed.
 - Search and download subtitle choices through the OpenSubtitles API, with TV subtitle overlays and browser-native subtitle tracks.
 - Adjust subtitle size and timing, and retain per-title timing offsets on the device.
-- Resume playback, sort and page through a local catalogue, and use a TV-remote-friendly interface.
+- Resume playback, sort and page through a local catalogue, and use a TV-remote-friendly interface with visible focus states.
+- Browse and manage local favourites for movie genres and series provider categories.
+- View TMDb title details before playback, including artwork, synopsis, rating, genres, runtime, subtitle availability, and series episode selection.
 - Play through the browser's native video element or Samsung AVPlay on Tizen 3.0-compatible TVs.
 
 ## Quick start
@@ -24,7 +28,11 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite and add your playlist from the app's setup screen. Configure an OpenSubtitles API key from **Settings**; the player offers a compact setup action only when no key is configured.
+Open the local URL printed by Vite and add your playlist from the app's setup screen. Configure an OpenSubtitles API key and optional TMDb credentials from **Settings**; TMDb's read access token is preferred, with its API key accepted as a fallback.
+
+For personal builds, copy the variable names from `.env.example` into a local, ignored `.env` file. `dev:personal`, `build:personal`, and the personal Tizen build commands require the playlist URL, OpenSubtitles API key, and either `TMDB_API_READ_ACCESS_TOKEN` or `TMDB_API_KEY`. The commands read these values at build startup; they do not load credentials from the app at runtime.
+
+TMDb credentials are used for metadata and artwork only. The app uses the TMDb API with a development proxy in local Vite development and the configured credentials in a personal build. Keep the required [TMDb attribution](https://www.themoviedb.org/documentation/api/terms-of-use) visible in any distributed product.
 
 ## Commands
 
@@ -60,9 +68,9 @@ The app's Tizen ID is `Substream0.Substream`; it installs separately from the pr
 
 ## Personal configuration and security
 
-Substream keeps playlist URLs and API keys in local device storage when entered through the UI. Do not commit `.env`, playlist URLs, API keys, signed media URLs, or packaged personal builds.
+Substream keeps playlist URLs and provider credentials in local device storage when entered through the UI. Do not commit `.env`, playlist URLs, API keys, read access tokens, signed media URLs, or packaged personal builds.
 
-The `dev:personal`, `build:personal`, and `build:tizen:personal` commands deliberately embed values from `.env` into a client bundle for personal development. Anyone able to inspect that bundle can recover those values, so never share or distribute its output. A production deployment needs a server-side proxy to protect an OpenSubtitles API key.
+The `dev:personal`, `build:personal`, and `build:tizen:personal` commands deliberately embed values from `.env` into a client bundle for personal development. Anyone able to inspect that bundle can recover those values, so never share or distribute its output. This applies equally to the TMDb read access token/API key and the OpenSubtitles key. A production deployment needs a server-side proxy to protect provider credentials.
 
 ## Project layout
 
