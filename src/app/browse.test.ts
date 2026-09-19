@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BrowseRequestGate, browseGroupsForCollection, browsePageCount, sortAndPageBrowseItems } from "./browse.ts";
+import { BROWSE_COLLECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, sortAndPageBrowseItems } from "./browse.ts";
 import type { VodCatalogItem } from "../core/catalog/index.ts";
 
 function deferred<T>() {
@@ -25,6 +25,34 @@ function items(prefix: string, count: number): VodCatalogItem[] {
 }
 
 describe("browse helpers", () => {
+  it("keeps favourites first without changing the existing order of either group", () => {
+    const groups = [
+      { id: "a", name: "A", count: 1, contentType: "movie" as const },
+      { id: "b", name: "B", count: 1, contentType: "movie" as const },
+      { id: "c", name: "C", count: 1, contentType: "movie" as const },
+    ];
+    expect(favouriteGroupsFirst(groups, ["c", "a"]).map((group) => group.id)).toEqual(["a", "c", "b"]);
+    expect(BROWSE_COLLECTION_ORDER).toEqual(["favourites", "recent", "movies", "series"]);
+  });
+
+  it("keeps focus on a toggled group after it moves in a typed collection", () => {
+    const groups = [
+      { id: "a", name: "A", count: 1, contentType: "movie" as const },
+      { id: "b", name: "B", count: 1, contentType: "movie" as const },
+      { id: "c", name: "C", count: 1, contentType: "movie" as const },
+    ];
+    expect(favouriteToggleFocusIndex(groups, "movies", ["b", "c"], "c", 2)).toBe(1);
+  });
+
+  it("clamps focus when toggling removes a group from Favourites", () => {
+    const groups = [
+      { id: "a", name: "A", count: 1, contentType: "movie" as const },
+      { id: "b", name: "B", count: 1, contentType: "movie" as const },
+    ];
+    expect(favouriteToggleFocusIndex(groups, "favourites", ["a"], "b", 1)).toBe(0);
+    expect(favouriteToggleFocusIndex(groups, "favourites", [], "a", 0)).toBe(0);
+  });
+
   it("shows matching provider/local groups and keeps mixed groups reachable", () => {
     const groups = [
       { id: "movie", name: "Films", count: 3, contentType: "movie" as const },

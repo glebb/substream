@@ -15,9 +15,9 @@ import { XtreamClient } from "../platform/xtream/client.ts";
 import { clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimingOffset } from "../platform/browser/subtitle-timing-config.ts";
 import { clearSubtitlePreferences, loadSubtitlePreferences, saveLastSubtitleLanguage, saveSubtitleFontSize, saveSubtitleLanguagePreference, type SubtitleLanguage } from "../platform/browser/subtitle-preferences.ts";
 import { clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared } from "../platform/browser/catalog-preferences.ts";
-import { clearFavouriteGroups, loadFavouriteGroupIds, setFavouriteGroup } from "../platform/browser/favourites-config.ts";
+import { clearFavouriteGroups, defaultFavouriteGroupIds, hasSavedFavouriteGroupIds, loadFavouriteGroupIds, saveFavouriteGroupIds, setFavouriteGroup } from "../platform/browser/favourites-config.ts";
 import { clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, type PlaybackHistoryItem } from "../platform/browser/playback-progress-config.ts";
-import { BrowseRequestGate, browseGroupsForCollection, browsePageCount, sortAndPageBrowseItems, type BrowseCollection } from "./browse.ts";
+import { BROWSE_COLLECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, sortAndPageBrowseItems, type BrowseCollection } from "./browse.ts";
 import { formatGroupDisplayName } from "./display-formatting.ts";
 import { formatRuntime, titleDetailsFor } from "./title-details.ts";
 import { clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials } from "../platform/browser/tmdb-config.ts";
@@ -95,10 +95,16 @@ export function App() {
   const [browseMode, setBrowseMode] = useState<BrowseMode>("local");
   const [browseCollection, setBrowseCollection] = useState<BrowseCollection>("recent");
   const [favouriteGroupIds, setFavouriteGroupIds] = useState<string[]>(loadFavouriteGroupIds);
-  const visibleGroups = useMemo(() => browseCollection === "recent" ? [] : browseCollection === "favourites" ? groups.filter((group) => favouriteGroupIds.includes(group.id)) : browseGroupsForCollection(groups, browseCollection), [browseCollection, favouriteGroupIds, groups]);
+  const visibleGroups = useMemo(() => browseCollection === "recent" ? [] : favouriteGroupsFirst(browseCollection === "favourites" ? groups.filter((group) => favouriteGroupIds.includes(group.id)) : browseGroupsForCollection(groups, browseCollection), favouriteGroupIds), [browseCollection, favouriteGroupIds, groups]);
   const [browseCount, setBrowseCount] = useState(0);
   const [focusIndex, setFocusIndex] = useState(0);
   const [favouriteStatus, setFavouriteStatus] = useState("");
+  useEffect(() => {
+    if (!groups.length || hasSavedFavouriteGroupIds()) return;
+    const defaults = defaultFavouriteGroupIds(groups);
+    saveFavouriteGroupIds(defaults);
+    setFavouriteGroupIds(defaults);
+  }, [groups]);
   const [playerFocusIndex, setPlayerFocusIndex] = useState(0);
   const [resumeChoiceFocusIndex, setResumeChoiceFocusIndex] = useState(0);
   const [settingsButtonFocused, setSettingsButtonFocused] = useState(false);
@@ -572,13 +578,21 @@ export function App() {
     setContinueHistory(loadPlaybackHistory());
   };
 
+  const toggleFavouriteForGroup = (group: VodGroup) => {
+    const nextFavourite = !favouriteGroupIds.includes(group.id);
+    const nextIds = setFavouriteGroup(group.id, nextFavourite);
+    setFavouriteGroupIds(nextIds);
+    if (browseCollection !== "recent") {
+      setFocusIndex(favouriteToggleFocusIndex(groups, browseCollection, nextIds, group.id, focusIndex));
+    }
+    setFavouriteStatus(`${group.name} ${nextFavourite ? "added to" : "removed from"} favourites.`);
+  };
+
   const toggleFocusedFavourite = () => {
     if (activeGroup || browseCollection === "recent") return false;
     const group = visibleGroups[focusIndex];
     if (!group) return false;
-    const nextFavourite = !favouriteGroupIds.includes(group.id);
-    setFavouriteGroupIds(setFavouriteGroup(group.id, nextFavourite));
-    setFavouriteStatus(`${group.name} ${nextFavourite ? "added to" : "removed from"} favourites.`);
+    toggleFavouriteForGroup(group);
     return true;
   };
 
@@ -1005,7 +1019,7 @@ export function App() {
         if (key === "ArrowLeft" || key === "ArrowRight") {
           event.preventDefault();
           const nextTab = Math.max(0, Math.min(tabs.length - 1, currentTab + (key === "ArrowLeft" ? -1 : 1)));
-          const nextCollection: BrowseCollection[] = ["recent", "movies", "series", "favourites"];
+          const nextCollection = BROWSE_COLLECTION_ORDER;
           browseTabTransitionRef.current = true;
           setFocusIndex(0);
           setBrowseCollection(nextCollection[nextTab] ?? "recent");
@@ -1030,7 +1044,7 @@ export function App() {
       if (targetButton && !targetButton.classList.contains("tile")) {
         if (dashboardControlNavigationTarget(key, targetButton === settingsOpenButtonRef.current) === "tabs") {
           event.preventDefault();
-          browseTabRefs.current[["recent", "movies", "series", "favourites"].indexOf(browseCollection)]?.focus();
+          browseTabRefs.current[BROWSE_COLLECTION_ORDER.indexOf(browseCollection)]?.focus();
           return;
         }
         const browseControls = [settingsOpenButtonRef.current, sortSelectRef.current, backToGroupsRef.current, previousPageRef.current, nextPageRef.current, changePlaylistRef.current]
@@ -1083,7 +1097,7 @@ export function App() {
           }
         }
         if (!activeGroup && key === "ArrowUp" && targetIndex === null && (browseCollection === "recent" ? focusIndex < 2 : focusIndex < homeColumns)) {
-          browseTabRefs.current[["recent", "movies", "series", "favourites"].indexOf(browseCollection)]?.focus();
+          browseTabRefs.current[BROWSE_COLLECTION_ORDER.indexOf(browseCollection)]?.focus();
           return;
         }
         if (activeGroup && key === "ArrowUp" && targetIndex === null && (isTizen ? focusIndex < TITLE_LIST_PAGE_STRIDE : focusIndex < titleColumns)) {
@@ -1191,7 +1205,7 @@ export function App() {
         return;
       }
       if (focusTarget === "tab") {
-        const index = ["recent", "movies", "series", "favourites"].indexOf(browseCollection);
+        const index = BROWSE_COLLECTION_ORDER.indexOf(browseCollection);
         browseTabRefs.current[index]?.focus();
       }
       return;
@@ -2072,7 +2086,7 @@ export function App() {
         </div>
       </> : <>
         <nav className="browse-tabs" role="tablist" aria-label="Browse your library">
-          {(["recent", "movies", "series", "favourites"] as BrowseCollection[]).map((collection, index) => <button
+          {BROWSE_COLLECTION_ORDER.map((collection, index) => <button
             aria-selected={browseCollection === collection}
             className={"browse-tab " + (browseCollection === collection ? "selected" : "")}
             key={collection}
@@ -2107,7 +2121,7 @@ export function App() {
           <div className="groups group-grid">
           {visibleGroups.map((group, index) => <div className="favourite-tile" key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
             <strong title={group.name} aria-label={group.name}>{formatGroupDisplayName(group.name)}</strong><span>{group.count.toLocaleString()} titles</span>
-          </button><button className="quiet-button favourite-toggle" type="button" tabIndex={isTizen ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTizen) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => { const next = !favouriteGroupIds.includes(group.id); setFavouriteGroupIds(setFavouriteGroup(group.id, next)); setFavouriteStatus(`${group.name} ${next ? "added to" : "removed from"} favourites.`); }}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button></div>)}
+          </button><button className="quiet-button favourite-toggle" type="button" tabIndex={isTizen ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTizen) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => toggleFavouriteForGroup(group)}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button></div>)}
           {!visibleGroups.length && <div className="empty-state"><h2>{browseCollection === "favourites" ? "No favourite groups yet" : `No ${browseCollection === "movies" ? "movie" : "series"} groups found`}</h2><p>{browseCollection === "favourites" ? "Use the red remote key on a group, or the button on a card, to save it on this device." : `Import a library with ${browseCollection === "movies" ? "movies" : "series"} to browse titles here.`}</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = true; setBrowseCollection("recent"); setFocusIndex(0); }}>Browse recent</button></div>}
           </div>
         </>}

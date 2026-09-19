@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearFavouriteGroups, loadFavouriteGroupIds, saveFavouriteGroupIds, setFavouriteGroup } from "./favourites-config.ts";
+import { clearFavouriteGroups, defaultFavouriteGroupIds, hasSavedFavouriteGroupIds, loadFavouriteGroupIds, saveFavouriteGroupIds, setFavouriteGroup } from "./favourites-config.ts";
 
 function storage() {
   const values = new Map<string, string>();
@@ -25,5 +25,23 @@ describe("favourite group persistence", () => {
     saveFavouriteGroupIds(["local:Drama"], local);
     clearFavouriteGroups(local);
     expect(loadFavouriteGroupIds(local)).toEqual([]);
+  });
+
+  it("distinguishes no saved selection from an explicitly empty selection", () => {
+    const local = storage();
+    expect(hasSavedFavouriteGroupIds(local)).toBe(false);
+    saveFavouriteGroupIds([], local);
+    expect(hasSavedFavouriteGroupIds(local)).toBe(true);
+    expect(loadFavouriteGroupIds(local)).toEqual([]);
+  });
+
+  it("resolves first-run defaults from both single and double-prefixed provider names", () => {
+    const groups = [
+      { id: "movie-action", name: "Movies: Movies: Action", providerContentType: "movie" as const },
+      { id: "series-netflix", name: "Series: Series: Netflix", providerContentType: "series" as const },
+      { id: "movie-uncategorized", name: "Movies: Other", providerContentType: "movie" as const },
+      { id: "local-action", name: "Action", contentType: "movie" as const },
+    ];
+    expect(defaultFavouriteGroupIds(groups)).toEqual(["movie-action", "series-netflix", "local-action"]);
   });
 });
