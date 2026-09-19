@@ -23,7 +23,8 @@ import { formatRuntime, titleDetailsFor } from "./title-details.ts";
 import { clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials } from "../platform/browser/tmdb-config.ts";
 import { TmdbClient, type TmdbMetadata } from "../platform/tmdb/client.ts";
 import { TmdbImageCache, TmdbMetadataCache } from "../platform/browser/tmdb-cache.ts";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, subtitleFocusLayout, TITLE_LIST_PAGE_STRIDE, titleListNavigationTarget, titleListPageBoundaryTarget, type SettingsControlKey } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, titleListEndpointAction, titleListNavigationTarget, titleListPageNavigationTarget, type HeldTitleKeyState, type SettingsControlKey } from "./remote-navigation.ts";
+import { focusTitleListItem } from "./title-list-focus.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
 
@@ -98,6 +99,8 @@ export function App() {
   const visibleGroups = useMemo(() => browseCollection === "recent" ? [] : favouriteGroupsFirst(browseCollection === "favourites" ? groups.filter((group) => favouriteGroupIds.includes(group.id)) : browseGroupsForCollection(groups, browseCollection), favouriteGroupIds), [browseCollection, favouriteGroupIds, groups]);
   const [browseCount, setBrowseCount] = useState(0);
   const [focusIndex, setFocusIndex] = useState(0);
+  const titleListViewportRef = useRef<HTMLDivElement | null>(null);
+  const heldTitleKeyRef = useRef<HeldTitleKeyState | null>(null);
   const [favouriteStatus, setFavouriteStatus] = useState("");
   useEffect(() => {
     if (!groups.length || hasSavedFavouriteGroupIds()) return;
@@ -261,9 +264,14 @@ export function App() {
       playerAspectButtonRef.current,
       playerInfoButtonRef.current,
     ];
-    // Subtitle settings are intentionally hidden in fullscreen, so keep them
-    // out of the remote-focus loop there as well.
-    if (playerFullscreen) return playbackControls.filter((control): control is HTMLElement => control !== null);
+    // The compact subtitle size/toggle buttons remain in the fullscreen
+    // control bar, so include them in the focus loop when that bar is shown.
+    if (playerFullscreen) return [
+      ...playbackControls,
+      subtitleSmallerButtonRef.current,
+      subtitleLargerButtonRef.current,
+      ...(isSubtitleAttached ? [subtitleToggleButtonRef.current] : []),
+    ].filter((control): control is HTMLElement => control !== null);
     return [
       ...playbackControls,
       subtitleSmallerButtonRef.current,
@@ -620,8 +628,37 @@ export function App() {
   };
 
   useEffect(() => {
+    const focusBrowseIndex = (index: number) => {
+      setFocusIndex(index);
+      const tile = tileRefs.current[index];
+      if (activeGroup && isTizen) focusTitleListItem(tile, titleListViewportRef.current);
+      else {
+        tile?.focus();
+        tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    };
+    const navigateTizenTitleList = (key: string, allowEndpointExit = true) => {
+      const itemCount = titles.length;
+      if (!itemCount) return;
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        const pageJump = titleListPageNavigationTarget(key, page, browsePageCount(browseCount, PAGE_SIZE));
+        if (pageJump) changeBrowsePage(pageJump.page, sort, pageJump.focusAtEnd);
+        return;
+      }
+      const targetIndex = titleListNavigationTarget(key, focusIndex, itemCount);
+      if (targetIndex !== null) {
+        focusBrowseIndex(targetIndex);
+      } else if (titleListEndpointAction(key, focusIndex, itemCount, allowEndpointExit) === "sort") {
+        setFocusIndex(0);
+        sortSelectRef.current?.focus();
+      } else if (titleListEndpointAction(key, focusIndex, itemCount, allowEndpointExit) === "pagination") {
+        if (page + 1 < browsePageCount(browseCount, PAGE_SIZE) && nextPageRef.current) nextPageRef.current.focus();
+        else if (page > 0 && previousPageRef.current) previousPageRef.current.focus();
+      }
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       const key = normalizedRemoteKey(event);
+      if (key !== "ArrowUp" && key !== "ArrowDown") heldTitleKeyRef.current = null;
       if (isRedKey(event) && state === "ready" && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice && !settingsConfirmation
         && !showPlaylistForm && !activeGroup && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
         if (toggleFocusedFavourite()) {
@@ -686,6 +723,10 @@ export function App() {
           });
           return;
         }
+        if (selectedTitle && playerFullscreen && showFullscreenControls) {
+          const target = event.target;
+          if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
+        }
         if (episodePickerOpen) {
           event.preventDefault();
           if (episodePickerLevel === "episodes") {
@@ -706,7 +747,10 @@ export function App() {
           event.preventDefault();
           detailsRequestRef.current += 1;
           setDetailsTitle(null);
-          window.requestAnimationFrame(() => tileRefs.current[focusIndex]?.focus());
+          window.requestAnimationFrame(() => {
+            if (activeGroup && isTizen) focusTitleListItem(tileRefs.current[focusIndex], titleListViewportRef.current);
+            else tileRefs.current[focusIndex]?.focus();
+          });
           return;
         }
         const errorFormOpen = state === "error" && showPlaylistForm;
@@ -718,6 +762,7 @@ export function App() {
           errorFormOpen,
           selectedTitle: Boolean(selectedTitle),
           playerFullscreen,
+          playerFullscreenControlsVisible: showFullscreenControls,
           activeGroup: Boolean(activeGroup),
           browseLoading: state === "ready" && catalogStatus.startsWith("Loading "),
         });
@@ -740,6 +785,10 @@ export function App() {
             break;
           case "exit-fullscreen":
             exitPlayerFullscreen();
+            setShowFullscreenControls(false);
+            setPlayerFocusIndex(videoAreaFocusIndex);
+            break;
+          case "hide-fullscreen-controls":
             setShowFullscreenControls(false);
             setPlayerFocusIndex(videoAreaFocusIndex);
             break;
@@ -943,6 +992,7 @@ export function App() {
         if (isPlayerPlaybackShortcut(key, {
           videoActive: controls[currentIndex] === playerStageRef.current,
           fullscreen: playerFullscreen,
+          fullscreenControlsVisible: showFullscreenControls,
           editableTarget: isEditableTarget,
           tizen: isTizen,
         })) {
@@ -983,7 +1033,13 @@ export function App() {
         }
         if (key === "ArrowLeft" || key === "ArrowRight") {
           event.preventDefault();
-          if (playerFullscreen || controls[currentIndex] === playerStageRef.current) {
+          if (playerFullscreen && showFullscreenControls) {
+            const targetIndex = fullscreenControlNavigationTarget(key, currentIndex, controls.length, videoAreaFocusIndex);
+            if (targetIndex !== null) {
+              setPlayerFocusIndex(targetIndex);
+              controls[targetIndex]?.focus();
+            }
+          } else if (playerFullscreen || controls[currentIndex] === playerStageRef.current) {
             skipVideo(key === "ArrowLeft" ? -60 : 60);
           } else {
             setPlayerFocusIndex(Math.max(0, Math.min(controls.length - 1, currentIndex + (key === "ArrowLeft" ? -1 : 1))));
@@ -992,7 +1048,20 @@ export function App() {
         }
         if (key === "ArrowDown" || key === "ArrowUp") {
           event.preventDefault();
-          if (playerFullscreen) setShowFullscreenControls(true);
+          if (playerFullscreen && showFullscreenControls) {
+            const targetIndex = fullscreenControlNavigationTarget(key, currentIndex, controls.length, videoAreaFocusIndex);
+            if (targetIndex !== null) {
+              setPlayerFocusIndex(targetIndex);
+              controls[targetIndex]?.focus();
+            }
+            return;
+          }
+          if (playerFullscreen) {
+            setShowFullscreenControls(true);
+            setPlayerFocusIndex(playbackToggleFocusIndex);
+            window.requestAnimationFrame(() => playerTogglePlaybackButtonRef.current?.focus());
+            return;
+          }
           setPlayerFocusIndex(Math.max(0, Math.min(controls.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1))));
           return;
         }
@@ -1004,11 +1073,17 @@ export function App() {
       }
       if (event.target instanceof HTMLInputElement) return;
       if (event.target instanceof HTMLSelectElement) {
-        if (key === "ArrowRight") {
+        if (activeGroup && isTizen && (key === "ArrowUp" || key === "ArrowDown")
+          && event.repeat && heldTitleKeyRef.current?.key === key) {
+          event.preventDefault();
+        } else if (key === "ArrowRight") {
           event.preventDefault();
           backToGroupsRef.current?.focus();
         } else if (key === "Enter") {
-          window.requestAnimationFrame(() => tileRefs.current[focusIndex]?.focus());
+          window.requestAnimationFrame(() => {
+            if (activeGroup && isTizen) focusBrowseIndex(focusIndex);
+            else tileRefs.current[focusIndex]?.focus();
+          });
         }
         return;
       }
@@ -1058,16 +1133,22 @@ export function App() {
         }
         if (key === "ArrowDown" && index <= 2) {
           event.preventDefault();
-          setFocusIndex(0);
-          tileRefs.current[0]?.focus();
+          if (activeGroup && isTizen) focusBrowseIndex(0);
+          else {
+            setFocusIndex(0);
+            tileRefs.current[0]?.focus();
+          }
           return;
         }
         if (key === "ArrowUp" && (targetButton === previousPageRef.current || targetButton === nextPageRef.current)) {
           event.preventDefault();
           const columns = isTizen ? 1 : browseGridColumnCount(true, window.innerWidth <= 800, window.innerWidth < 520);
           const lastTitleIndex = isTizen ? Math.max(0, titles.length - 1) : Math.floor(Math.max(0, titles.length - 1) / columns) * columns;
-          setFocusIndex(lastTitleIndex);
-          tileRefs.current[lastTitleIndex]?.focus();
+          if (isTizen) focusBrowseIndex(lastTitleIndex);
+          else {
+            setFocusIndex(lastTitleIndex);
+            tileRefs.current[lastTitleIndex]?.focus();
+          }
           return;
         }
         return;
@@ -1076,31 +1157,41 @@ export function App() {
       const continueActionCount = browseCollection === "recent" ? continueHistory.length * 2 : 0;
       const itemCount = activeGroup ? titles.length : continueActionCount + visibleGroups.length;
       if (itemCount === 0) return;
+      if (activeGroup && isTizen && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
+        event.preventDefault();
+        const verticalKey = key === "ArrowUp" || key === "ArrowDown";
+        if (event.repeat) {
+          if (verticalKey && shouldHandleHeldTitleKeyRepeat(key, Date.now(), heldTitleKeyRef.current)) {
+            heldTitleKeyRef.current = { key, lastHandledAt: Date.now() };
+            navigateTizenTitleList(key, false);
+          }
+        } else if (verticalKey && heldTitleKeyRef.current?.key === key) {
+          if (shouldHandleHeldTitleKeyRepeat(key, Date.now(), heldTitleKeyRef.current)) {
+            heldTitleKeyRef.current = { key, lastHandledAt: Date.now() };
+            navigateTizenTitleList(key, false);
+          }
+        } else {
+          if (verticalKey) heldTitleKeyRef.current = { key, lastHandledAt: Date.now() };
+          else heldTitleKeyRef.current = null;
+          navigateTizenTitleList(key);
+        }
+        return;
+      }
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
         event.preventDefault();
         const compactViewport = window.innerWidth <= 800;
         const narrowViewport = window.innerWidth < 520;
         const homeColumns = browseGridColumnCount(false, compactViewport, narrowViewport);
-        const titleColumns = isTizen ? TITLE_LIST_PAGE_STRIDE : browseGridColumnCount(true, compactViewport, narrowViewport);
         const targetIndex = activeGroup
-          ? isTizen
-            ? titleListNavigationTarget(key, focusIndex, itemCount)
-            : gridNavigationTarget(key, focusIndex, itemCount, browseGridColumnCount(true, compactViewport, narrowViewport))
+          ? gridNavigationTarget(key, focusIndex, itemCount, browseGridColumnCount(true, compactViewport, narrowViewport))
           : browseCollection === "recent"
             ? recentNavigationTarget(key, focusIndex, itemCount)
           : gridNavigationTarget(key, focusIndex, itemCount, homeColumns);
-        if (activeGroup && isTizen) {
-          const pageBoundary = titleListPageBoundaryTarget(key, focusIndex, itemCount, page, browsePageCount(browseCount, PAGE_SIZE));
-          if (pageBoundary) {
-            changeBrowsePage(pageBoundary.page, sort, pageBoundary.focusAtEnd);
-            return;
-          }
-        }
         if (!activeGroup && key === "ArrowUp" && targetIndex === null && (browseCollection === "recent" ? focusIndex < 2 : focusIndex < homeColumns)) {
           browseTabRefs.current[BROWSE_COLLECTION_ORDER.indexOf(browseCollection)]?.focus();
           return;
         }
-        if (activeGroup && key === "ArrowUp" && targetIndex === null && (isTizen ? focusIndex < TITLE_LIST_PAGE_STRIDE : focusIndex < titleColumns)) {
+        if (activeGroup && key === "ArrowUp" && targetIndex === null && focusIndex < browseGridColumnCount(true, compactViewport, narrowViewport)) {
           sortSelectRef.current?.focus();
           return;
         }
@@ -1115,10 +1206,7 @@ export function App() {
           }
         }
         if (targetIndex !== null) {
-          setFocusIndex(targetIndex);
-          const targetTile = tileRefs.current[targetIndex];
-          targetTile?.focus();
-          targetTile?.scrollIntoView({ block: "nearest", inline: "nearest" });
+          focusBrowseIndex(targetIndex);
         }
         return;
       }
@@ -1148,6 +1236,20 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingDetailsEpisode, editingPlaylistUrl, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlaylistForm, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
+
+  useEffect(() => {
+    const onKeyUp = (event: KeyboardEvent) => {
+      const key = normalizedRemoteKey(event);
+      if (heldTitleKeyRef.current?.key === key) heldTitleKeyRef.current = null;
+    };
+    const onBlur = () => { heldTitleKeyRef.current = null; };
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     if (!browseTabTransitionRef.current || activeGroup || selectedTitle || detailsTitle || resumeChoice || showSettings || settingsConfirmation) return;
@@ -1211,9 +1313,14 @@ export function App() {
       return;
     }
     const tile = tileRefs.current[focusIndex];
-    tile?.focus();
-    tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeGroup, browseCollection, detailsTitle, focusIndex, groups.length, page, resumeChoice, selectedTitle, settingsConfirmation, showSettings, state, titles.length, continueHistory.length]);
+    if (isTizen) {
+      if (document.activeElement !== tile) focusTitleListItem(tile, titleListViewportRef.current);
+    }
+    else {
+      tile?.focus();
+      tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }, [activeGroup, browseCollection, detailsTitle, focusIndex, groups.length, isTizen, page, resumeChoice, selectedTitle, settingsConfirmation, showSettings, state, titles.length, continueHistory.length]);
 
   useEffect(() => {
     if (!detailsTitle) return;
@@ -1249,10 +1356,15 @@ export function App() {
 
   useEffect(() => {
     if (!selectedTitle) return;
+    if (playerFullscreen && !showFullscreenControls) {
+      setPlayerFocusIndex(videoAreaFocusIndex);
+      playerStageRef.current?.focus();
+      return;
+    }
     const controls = playerControls();
     const control = controls[Math.min(playerFocusIndex, Math.max(0, controls.length - 1))];
     control?.focus();
-  }, [editingSubtitleEpisode, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, openSubtitlesApiKey, isSubtitleAttached, playerFocusIndex, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, subtitleResults.length, subtitleSearchType]);
+  }, [editingSubtitleEpisode, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, openSubtitlesApiKey, isSubtitleAttached, playerFocusIndex, playerFullscreen, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, subtitleResults.length, subtitleSearchType]);
 
   useEffect(() => {
     if (selectedTitle) window.scrollTo(0, 0);
@@ -1846,7 +1958,8 @@ export function App() {
     {error && <p className="error" role="alert">{error}</p>}
   </form>;
 
-  return <main className="screen">
+  const isTvTitleBrowse = state === "ready" && isTizen && Boolean(activeGroup) && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice && !showPlaylistForm;
+  return <main className={"screen" + (isTvTitleBrowse ? " tv-title-screen" : "")}>
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
       {state === "ready" && !selectedTitle && !showPlaylistForm && !showSettings && <button className={settingsButtonFocused ? "remote-focused" : ""} type="button" ref={settingsOpenButtonRef} onBlur={() => setSettingsButtonFocused(false)} onFocus={() => setSettingsButtonFocused(true)} onClick={openSettings}>Settings</button>}
     </header>
@@ -1924,7 +2037,7 @@ export function App() {
         </>}
       </section> : detailsTitle && details ? <section className="title-details" aria-labelledby="title-details-heading">
         <div className="details-actions">
-          <button className={`secondary-button ${detailsFocusIndex === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { detailsControlsRef.current[0] = element; }} onFocus={() => setDetailsFocusIndex(0)} onClick={() => { detailsRequestRef.current += 1; setDetailsTitle(null); window.requestAnimationFrame(() => tileRefs.current[focusIndex]?.focus()); }}>Back to titles</button>
+          <button className={`secondary-button ${detailsFocusIndex === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { detailsControlsRef.current[0] = element; }} onFocus={() => setDetailsFocusIndex(0)} onClick={() => { detailsRequestRef.current += 1; setDetailsTitle(null); window.requestAnimationFrame(() => { if (activeGroup && isTizen) focusTitleListItem(tileRefs.current[focusIndex], titleListViewportRef.current); else tileRefs.current[focusIndex]?.focus(); }); }}>Back to titles</button>
           <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : detailsHistory ? "Resume or start" : "Play"}</button>
         </div>
         <div className="details-layout">
@@ -2073,6 +2186,8 @@ export function App() {
           </label>
           <button type="button" ref={backToGroupsRef} onClick={() => { browseRequestRef.current.invalidate(); remoteBrowseRef.current = null; browseReturnFocusPendingRef.current = true; setBrowseMode("local"); setBrowseCount(0); setActiveGroup(null); setTitles([]); setPage(0); setFocusIndex(browseReturnFocusIndexRef.current); setCatalogStatus(""); }}>Back to groups</button>
         </div>
+        {isTizen && <p className="remote-key-hint tv-title-list-hint">Up/Down: previous or next title · Left/Right: previous or next page</p>}
+        <div className={isTizen ? "tv-title-list-viewport" : ""} ref={isTizen ? titleListViewportRef : undefined}>
         <div className={"groups title-grid" + (isTizen ? " tv-title-list" : "")}>
           {catalogStatus && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
           {titles.map((title, index) => <button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} key={title.id} onClick={() => { setFocusIndex(index); void openTitle(title); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
@@ -2080,9 +2195,10 @@ export function App() {
           </button>)}
           {!titles.length && !catalogStatus.startsWith("Loading ") && <p className="empty-state">No titles are available in this group yet.</p>}
         </div>
+        </div>
         <div className="pagination">
-          <button disabled={page === 0} ref={previousPageRef} onClick={() => changeBrowsePage(page - 1)} type="button">Previous</button>
-          <button disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onClick={() => changeBrowsePage(page + 1)} type="button">Next</button>
+          <button aria-label={isTizen ? "Previous page (Left)" : "Previous page"} disabled={page === 0} ref={previousPageRef} onClick={() => changeBrowsePage(page - 1)} type="button">{isTizen ? "Previous page · ←" : "Previous"}</button>
+          <button aria-label={isTizen ? "Next page (Right)" : "Next page"} disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onClick={() => changeBrowsePage(page + 1)} type="button">{isTizen ? "Next page · →" : "Next"}</button>
         </div>
       </> : <>
         <nav className="browse-tabs" role="tablist" aria-label="Browse your library">

@@ -36,7 +36,9 @@ For the UI, include a visual/focus smoke pass at 1920x1080 and 1440x900, plus co
 
 On Continue Watching, verify Up/Down moves to the next or previous title while preserving Resume/Remove, and Left/Right changes only within its pair. In Settings, verify every action, API-key editor control, and confirmation action carries the persistent yellow focus highlight. On web, verify Space toggles playback only from the active video area or fullscreen; on Tizen, verify the Action/Enter key does the same.
 
-On the UE75MU8005, confirm the Tizen 3 payload uses the static dark surface colors, visible yellow remote focus ring, and four-column flexbox category layout instead of native white button styling. Verify the single-column title list, AVPlay display sizing, eight-title stride, focus, and Back behavior.
+On the UE75MU8005, confirm the Tizen 3 payload uses the static dark surface colors, visible yellow remote focus ring, and four-column flexbox category layout instead of native white button styling. Verify the bounded single-column title-list viewport, adjacent Up/Down movement, throttled held-key repeat, Left/Right page jumps, AVPlay display sizing, focus, and Back behavior.
+
+On a synthetic title, verify fullscreen controls hidden: Left/Right seek, Up/Down reveal controls with Play/Pause focused, Enter toggles playback, and Back exits fullscreen. With controls visible, verify arrows move through visible controls, Enter activates the highlighted button, Back hides controls and returns focus to video, and dedicated media keys still work. Confirm editable subtitle fields keep their text cursor and editing behavior.
 
 1. Install a freshly packaged build on the UE75MU8005 and confirm startup and the IndexedDB version-7 migration complete.
 2. Navigate categories, sorting, Previous/Next, series episodes, and Back using only the TV remote.

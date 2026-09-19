@@ -203,6 +203,19 @@ button:disabled { cursor: default; opacity: .45; }
 .collection-heading .hint { margin: .3rem 0 0; }
 .title-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .title-grid.tv-title-list { grid-template-columns: 1fr; }
+.tv-title-list-viewport {
+  border: 1px solid #273349; border-radius: .65rem; flex: 1 1 auto; height: 560px;
+  max-height: 650px; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 14px 16px;
+}
+.screen.tv-title-screen { box-sizing: border-box; display: flex; flex-direction: column; height: 100vh; min-height: 0; overflow: hidden; }
+.screen.tv-title-screen > .app-header { flex: 0 0 auto; }
+.screen.tv-title-screen > section { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.screen.tv-title-screen .catalogue-heading, .screen.tv-title-screen .tv-title-list-hint, .screen.tv-title-screen .pagination { flex: 0 0 auto; }
+.screen.tv-title-screen .tv-title-list-viewport { height: auto; max-height: 650px; min-height: 0; }
+.tv-title-list-viewport .title-grid.tv-title-list { display: block; margin: 0; }
+.tv-title-list-viewport .title-grid.tv-title-list > .tile { flex: 0 0 auto; margin: 0 0 8px; width: 100%; }
+.tv-title-list-viewport .title-grid.tv-title-list > .tile:last-child { margin-bottom: 14px; }
+.tv-title-list-hint { margin: 0 0 .5rem; }
 .title-grid .tile { align-items: center; flex-direction: row; justify-content: space-between; min-height: 0; padding: .9rem 1rem; transition: background-color .14s ease, box-shadow .14s ease, transform .14s ease; }
 .title-grid .tile strong { line-height: 1.35; overflow-wrap: anywhere; }
 .tile-meta { background: rgba(130, 183, 255, .1); border: 1px solid rgba(130, 183, 255, .25); border-radius: 999px; color: var(--muted); flex: 0 0 auto; font-size: .78rem; padding: .2rem .5rem; text-align: right; }
@@ -273,6 +286,8 @@ button:disabled { cursor: default; opacity: .45; }
  */
 @supports (display: grid) {
   .groups { margin: 0; }
+  .tv-title-list-viewport .groups.title-grid.tv-title-list { display: block; margin: 0; }
+  .tv-title-list-viewport .groups.title-grid.tv-title-list > .tile { flex: none; margin: 0 0 .5rem; width: 100%; }
   .groups > .tile, .groups > .skeleton-tile, .groups > .favourite-tile, .groups > .browse-status, .groups > .empty-state {
     flex: none; margin: 0; width: auto;
   }

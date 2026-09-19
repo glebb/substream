@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, focusFallback, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, subtitleFocusLayout, titleListNavigationTarget, titleListPageBoundaryTarget } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, titleListEndpointAction, titleListNavigationTarget, titleListPageNavigationTarget } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
   it("keeps Settings navigation in DOM order as conditional editors appear", () => {
@@ -85,26 +85,39 @@ describe("remote dashboard navigation", () => {
     expect(recentNavigationTarget("ArrowDown", 4, 4)).toBeNull();
   });
 
-  it("uses compact-list title steps with a one-view vertical stride", () => {
-    expect(titleListNavigationTarget("ArrowRight", 0, 20)).toBe(1);
-    expect(titleListNavigationTarget("ArrowLeft", 1, 20)).toBe(0);
-    expect(titleListNavigationTarget("ArrowUp", 8, 20)).toBe(0);
-    expect(titleListNavigationTarget("ArrowDown", 0, 20)).toBe(8);
-    expect(titleListNavigationTarget("ArrowLeft", 0, 20)).toBeNull();
-    expect(titleListNavigationTarget("ArrowUp", 7, 20)).toBe(0);
-    expect(titleListNavigationTarget("ArrowRight", 19, 20)).toBeNull();
-    expect(titleListNavigationTarget("ArrowDown", 12, 20)).toBe(19);
+  it("moves through the vertical title list one item at a time", () => {
+    expect(titleListNavigationTarget("ArrowDown", 0, 20)).toBe(1);
+    expect(titleListNavigationTarget("ArrowUp", 1, 20)).toBe(0);
+    expect(titleListNavigationTarget("ArrowDown", 18, 20)).toBe(19);
     expect(titleListNavigationTarget("ArrowDown", 19, 20)).toBeNull();
     expect(titleListNavigationTarget("ArrowUp", 0, 20)).toBeNull();
-    expect(titleListNavigationTarget("ArrowDown", 0, 20, 3)).toBe(3);
+    expect(titleListNavigationTarget("ArrowLeft", 0, 20)).toBeNull();
+    expect(titleListNavigationTarget("ArrowRight", 19, 20)).toBeNull();
+    expect(titleListNavigationTarget("ArrowDown", 0, 1)).toBeNull();
+    expect(titleListNavigationTarget("ArrowDown", -1, 20)).toBeNull();
+    expect(titleListEndpointAction("ArrowUp", 0, 20)).toBe("sort");
+    expect(titleListEndpointAction("ArrowUp", 0, 20, false)).toBeNull();
+    expect(titleListEndpointAction("ArrowDown", 19, 20)).toBe("pagination");
+    expect(titleListEndpointAction("ArrowDown", 19, 20, false)).toBeNull();
   });
 
-  it("continues TV title navigation across pages at the horizontal endpoints", () => {
-    expect(titleListPageBoundaryTarget("ArrowRight", 7, 8, 0, 3)).toEqual({ page: 1, focusAtEnd: false });
-    expect(titleListPageBoundaryTarget("ArrowLeft", 0, 8, 1, 3)).toEqual({ page: 0, focusAtEnd: true });
-    expect(titleListPageBoundaryTarget("ArrowRight", 7, 8, 2, 3)).toBeNull();
-    expect(titleListPageBoundaryTarget("ArrowLeft", 1, 8, 1, 3)).toBeNull();
-    expect(titleListPageBoundaryTarget("ArrowRight", 6, 8, 0, 3)).toBeNull();
+  it("uses Left and Right for page jumps from any selected title", () => {
+    expect(titleListPageNavigationTarget("ArrowRight", 0, 3)).toEqual({ page: 1, focusAtEnd: false });
+    expect(titleListPageNavigationTarget("ArrowLeft", 1, 3)).toEqual({ page: 0, focusAtEnd: true });
+    expect(titleListPageNavigationTarget("ArrowRight", 2, 3)).toBeNull();
+    expect(titleListPageNavigationTarget("ArrowLeft", 0, 3)).toBeNull();
+    expect(titleListPageNavigationTarget("ArrowUp", 1, 3)).toBeNull();
+    expect(titleListPageNavigationTarget("ArrowRight", -1, 3)).toBeNull();
+  });
+
+  it("throttles native held-key repeats and stops accepting them after release", () => {
+    const held = { key: "ArrowDown", lastHandledAt: 1_000 };
+    expect(shouldHandleHeldTitleKeyRepeat("ArrowDown", 1_050, held, 90)).toBe(false);
+    expect(shouldHandleHeldTitleKeyRepeat("ArrowDown", 1_090, held, 90)).toBe(true);
+    expect(shouldHandleHeldTitleKeyRepeat("ArrowUp", 1_500, held, 90)).toBe(false);
+    expect(shouldHandleHeldTitleKeyRepeat("ArrowLeft", 1_500, held, 90)).toBe(false);
+    // keyup clears the held state, so any late repeat event is ignored.
+    expect(shouldHandleHeldTitleKeyRepeat("ArrowDown", 1_500, null, 90)).toBe(false);
   });
 
   it("routes between Settings and the browse tabs", () => {
@@ -145,13 +158,26 @@ describe("remote dashboard navigation", () => {
     expect(isPlayerPlaybackShortcut("Enter", web)).toBe(false);
   });
 
-  it("toggles playback with the TV Action/Enter key only on the video area or in fullscreen", () => {
+  it("toggles playback with TV Enter on the video area or while fullscreen controls are hidden", () => {
     const tv = { videoActive: true, fullscreen: false, editableTarget: false, tizen: true };
     expect(isPlayerPlaybackShortcut("Enter", tv)).toBe(true);
     expect(isPlayerPlaybackShortcut("Enter", { ...tv, videoActive: false })).toBe(false);
     expect(isPlayerPlaybackShortcut("Enter", { ...tv, editableTarget: true })).toBe(false);
-    expect(isPlayerPlaybackShortcut("Enter", { ...tv, fullscreen: true, videoActive: false, editableTarget: true })).toBe(true);
+    expect(isPlayerPlaybackShortcut("Enter", { ...tv, fullscreen: true, fullscreenControlsVisible: false, videoActive: false, editableTarget: true })).toBe(true);
+    expect(isPlayerPlaybackShortcut("Enter", { ...tv, fullscreen: true, fullscreenControlsVisible: true, videoActive: false, editableTarget: false })).toBe(false);
     expect(isPlayerPlaybackShortcut(" ", tv)).toBe(false);
+  });
+
+  it("moves fullscreen focus among visible buttons while skipping the video surface", () => {
+    expect(fullscreenControlNavigationTarget("ArrowDown", 1, 7)).toBe(2);
+    expect(fullscreenControlNavigationTarget("ArrowUp", 1, 7)).toBe(0);
+    expect(fullscreenControlNavigationTarget("ArrowRight", 2, 7)).toBe(3);
+    expect(fullscreenControlNavigationTarget("ArrowLeft", 2, 7)).toBe(0);
+    expect(fullscreenControlNavigationTarget("ArrowLeft", 0, 7)).toBeNull();
+    expect(fullscreenControlNavigationTarget("ArrowRight", 6, 10)).toBe(7);
+    expect(fullscreenControlNavigationTarget("ArrowRight", 8, 10)).toBe(9);
+    expect(fullscreenControlNavigationTarget("ArrowRight", 9, 10)).toBeNull();
+    expect(fullscreenControlNavigationTarget("Enter", 2, 7)).toBeNull();
   });
 
   it("skips absent configured-key setup and lands on the first subtitle result", () => {
@@ -192,6 +218,8 @@ describe("remote dashboard navigation", () => {
       browseLoading: false,
     };
     expect(resolveAppBackAction({ ...context, selectedTitle: true, playerFullscreen: true })).toBe("exit-fullscreen");
+    expect(resolveAppBackAction({ ...context, selectedTitle: true, playerFullscreen: true, playerFullscreenControlsVisible: false })).toBe("exit-fullscreen");
+    expect(resolveAppBackAction({ ...context, selectedTitle: true, playerFullscreen: true, playerFullscreenControlsVisible: true })).toBe("hide-fullscreen-controls");
     expect(resolveAppBackAction({ ...context, selectedTitle: true })).toBe("close-player");
     expect(resolveAppBackAction({ ...context, activeGroup: true })).toBe("close-group");
     expect(resolveAppBackAction({ ...context, browseLoading: true })).toBe("cancel-browse-loading");

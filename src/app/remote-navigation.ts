@@ -3,6 +3,7 @@ export type AppBackAction =
   | "close-resume-choice"
   | "close-settings"
   | "close-playlist-form"
+  | "hide-fullscreen-controls"
   | "exit-fullscreen"
   | "close-player"
   | "close-group"
@@ -17,6 +18,7 @@ export interface AppBackContext {
   errorFormOpen: boolean;
   selectedTitle: boolean;
   playerFullscreen: boolean;
+  playerFullscreenControlsVisible?: boolean;
   activeGroup: boolean;
   browseLoading: boolean;
 }
@@ -26,7 +28,9 @@ export function resolveAppBackAction(context: AppBackContext): AppBackAction {
   if (context.settingsConfirmationOpen) return "cancel-settings-confirmation";
   if (context.resumeChoiceOpen) return "close-resume-choice";
   if (context.settingsOpen) return "close-settings";
-  if (context.selectedTitle) return context.playerFullscreen ? "exit-fullscreen" : "close-player";
+  if (context.selectedTitle) return context.playerFullscreen
+    ? context.playerFullscreenControlsVisible ? "hide-fullscreen-controls" : "exit-fullscreen"
+    : "close-player";
   if (context.playlistFormOpen && !context.errorFormOpen) return "close-playlist-form";
   if (context.activeGroup) return "close-group";
   if (context.browseLoading) return "cancel-browse-loading";
@@ -171,23 +175,55 @@ export function recentNavigationTarget(key: string, currentIndex: number, itemCo
   return null;
 }
 
-export const TITLE_LIST_PAGE_STRIDE = 8;
-
-/** Title-list movement: horizontal steps visit neighbors; vertical steps advance one visible-page stride. */
-export function titleListNavigationTarget(key: string, currentIndex: number, itemCount: number, pageStride = TITLE_LIST_PAGE_STRIDE): number | null {
-  if (itemCount <= 0 || currentIndex < 0 || currentIndex >= itemCount || pageStride <= 0) return null;
-  if (key === "ArrowLeft") return currentIndex > 0 ? currentIndex - 1 : null;
-  if (key === "ArrowRight") return currentIndex + 1 < itemCount ? currentIndex + 1 : null;
-  if (key === "ArrowUp") return currentIndex > 0 ? Math.max(0, currentIndex - pageStride) : null;
-  if (key === "ArrowDown") return currentIndex < itemCount - 1 ? Math.min(itemCount - 1, currentIndex + pageStride) : null;
+/** Title-list movement follows its vertical layout: Up/Down visit adjacent titles. */
+export function titleListNavigationTarget(key: string, currentIndex: number, itemCount: number): number | null {
+  if (itemCount <= 0 || currentIndex < 0 || currentIndex >= itemCount) return null;
+  if (key === "ArrowUp") return currentIndex > 0 ? currentIndex - 1 : null;
+  if (key === "ArrowDown") return currentIndex + 1 < itemCount ? currentIndex + 1 : null;
   return null;
 }
 
-export function titleListPageBoundaryTarget(key: string, currentIndex: number, itemCount: number, page: number, pageCount: number): { page: number; focusAtEnd: boolean } | null {
-  if (itemCount <= 0 || page < 0 || page >= pageCount) return null;
-  if (key === "ArrowRight" && currentIndex === itemCount - 1 && page + 1 < pageCount) return { page: page + 1, focusAtEnd: false };
-  if (key === "ArrowLeft" && currentIndex === 0 && page > 0) return { page: page - 1, focusAtEnd: true };
+/** Left/Right jump pages; focus lands at the first/last title of the new page. */
+export function titleListPageNavigationTarget(key: string, page: number, pageCount: number): { page: number; focusAtEnd: boolean } | null {
+  if (pageCount <= 0 || page < 0 || page >= pageCount) return null;
+  if (key === "ArrowRight" && page + 1 < pageCount) return { page: page + 1, focusAtEnd: false };
+  if (key === "ArrowLeft" && page > 0) return { page: page - 1, focusAtEnd: true };
   return null;
+}
+
+/** Only a fresh endpoint press leaves the title list for its adjacent toolbar control. */
+export function titleListEndpointAction(key: string, currentIndex: number, itemCount: number, allowExit = true): "sort" | "pagination" | null {
+  if (!allowExit || itemCount <= 0 || currentIndex < 0 || currentIndex >= itemCount) return null;
+  if (key === "ArrowUp" && currentIndex === 0) return "sort";
+  if (key === "ArrowDown" && currentIndex === itemCount - 1) return "pagination";
+  return null;
+}
+
+export const TITLE_LIST_REPEAT_MIN_INTERVAL_MS = 90;
+
+export interface HeldTitleKeyState {
+  key: string;
+  lastHandledAt: number;
+}
+
+/** Accepts native key-repeat events at a steady rate while keyup remains the stop signal. */
+export function shouldHandleHeldTitleKeyRepeat(key: string, now: number, held: HeldTitleKeyState | null, minimumIntervalMs = TITLE_LIST_REPEAT_MIN_INTERVAL_MS): boolean {
+  if ((key !== "ArrowUp" && key !== "ArrowDown") || !held || held.key !== key) return false;
+  return now - held.lastHandledAt >= minimumIntervalMs;
+}
+
+/** Steps through fullscreen controls while skipping the video surface. */
+export function fullscreenControlNavigationTarget(key: string, currentIndex: number, controlCount: number, stageIndex = 1): number | null {
+  if (controlCount <= 0 || currentIndex < 0 || currentIndex >= controlCount) return null;
+  const direction = key === "ArrowLeft" || key === "ArrowUp" ? -1 : key === "ArrowRight" || key === "ArrowDown" ? 1 : 0;
+  if (direction === 0) return null;
+  const controls: number[] = [];
+  for (let index = 0; index < controlCount; index += 1) {
+    if (index !== stageIndex) controls.push(index);
+  }
+  const current = controls.indexOf(currentIndex);
+  if (current < 0) return controls.find((index) => direction > 0 ? index > currentIndex : index < currentIndex) ?? null;
+  return controls[current + direction] ?? null;
 }
 
 /** Moves through a row of dialog actions without letting focus escape the dialog. */
@@ -207,6 +243,8 @@ export interface PlayerPlaybackShortcutContext {
   videoActive: boolean;
   /** The player is in its fullscreen presentation. */
   fullscreen: boolean;
+  /** Tizen Enter activates visible controls; hidden fullscreen Enter toggles playback. */
+  fullscreenControlsVisible?: boolean;
   /** An input or select currently owns focus. */
   editableTarget: boolean;
   /** Tizen uses the remote Action/Enter key; web uses the Space key. */
@@ -214,16 +252,16 @@ export interface PlayerPlaybackShortcutContext {
 }
 
 /**
- * Determines whether a player shortcut should toggle playback. Fullscreen
- * intentionally wins over focus so the TV Action key and web Space key still
- * work while the fullscreen controls are visible.
+ * Determines whether a player shortcut should toggle playback. Web Space
+ * retains its fullscreen shortcut; on Tizen Enter toggles playback only while
+ * fullscreen controls are hidden so visible buttons can receive activation.
  */
 export function isPlayerPlaybackShortcut(key: string, context: PlayerPlaybackShortcutContext): boolean {
   const shortcutKey = context.tizen
     ? key === "Enter"
     : key === " " || key === "Space" || key === "Spacebar";
   if (!shortcutKey) return false;
-  if (context.fullscreen) return true;
+  if (context.fullscreen) return context.tizen ? !context.fullscreenControlsVisible : true;
   return context.videoActive && !context.editableTarget;
 }
 
