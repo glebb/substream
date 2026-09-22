@@ -82,6 +82,8 @@ export type RemoteEditableKeyAction = "enter-edit" | "leave-edit" | "navigate" |
 export type SettingsControlKey =
   | "back"
   | "playlist"
+  | "companion-url"
+  | "companion-start"
   | "subtitle-language"
   | "api-key-input"
   | "api-key-edit"
@@ -109,6 +111,8 @@ export function settingsControlOrder(options: SettingsControlOrderOptions): Sett
 
   return [
     "back",
+    "companion-url",
+    "companion-start",
     "playlist",
     "subtitle-language",
     ...(options.apiKeyEditorOpen ? ["api-key-input", "api-key-save", "api-key-cancel"] as const : ["api-key-edit"] as const),

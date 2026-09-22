@@ -39,6 +39,12 @@ npm run inspect:m3u # credential-safe summary of the private playlist in .env
 - On Tizen, title-details controls use explicit yellow remote focus. Arrow keys move Back → Season/Episode → Play selected episode; Action/Enter opens or confirms the picker and starts playback only from the Play control. Back returns from episodes to seasons and then to details.
 - Movie genres and series provider categories can be marked as favourites and are available through the dedicated Favourites browse view.
 
+## LAN companion search
+
+- The optional LAN companion service searches a full Xtream provider catalogue for a paired phone or computer. The TV keeps provider credentials and final stream URL derivation; the browser caches only safe catalogue metadata in IndexedDB.
+- A pairing listener remains active after Settings closes, so companion selections always move the TV to title details. This remains a trusted-LAN development feature: six-digit sessions expire after 30 minutes, M3U-only sources are unsupported, and selection relay requires the local service to be online.
+- See [companion-search.md](companion-search.md) for operation and security constraints.
+
 ## UI and remote focus
 
 - Continue Watching keeps Resume and Remove as a visual and navigation pair: Up/Down change titles and Left/Right changes the action for that title.

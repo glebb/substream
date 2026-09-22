@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Substream companion search</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #080a10; color: #eef4ff; }
+      body { margin: 0 auto; max-width: 48rem; padding: 1.5rem; }
+      input, button { border: 1px solid #405a7d; border-radius: .5rem; box-sizing: border-box; font: inherit; padding: .75rem; }
+      input { background: #121b2b; color: inherit; width: 100%; }
+      button { background: #ffd54a; color: #080a10; cursor: pointer; font-weight: 700; }
+      form, .result { display: grid; gap: .7rem; margin: 1rem 0; }
+      .result { background: #121b2b; border-radius: .6rem; color: #f4f7ff; padding: .8rem; text-align: left; }
+      .result span { color: #f4f7ff; font-size: 1rem; }
+      .result small, .hint { color: #b6c7e5; }
+      .error { color: #ff9f9f; }
+    </style>
+  </head>
+  <body>
+    <h1>Companion search</h1>
+    <p class="hint">Searches the paired provider catalogue on the LAN. Provider credentials and stream URLs stay on the TV/local service.</p>
+    <form id="pair-form"><label for="code">TV pairing code</label><input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required><button>Connect to TV</button></form>
+    <section id="search" hidden><form id="search-form"><label for="query">Search the full catalogue</label><input id="query" autocomplete="off" placeholder="Movie or series title"><button>Search</button></form><button id="refresh" type="button">Refresh catalogue</button><p id="status" class="hint" role="status"></p><div id="results"></div></section>
+    <p id="error" class="error" role="alert"></p>
+    <script type="module" src="/companion.js"></script>
+  </body>
+</html>

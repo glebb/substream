@@ -30,6 +30,18 @@ npm run dev
 
 Open the local URL printed by Vite and add your playlist from the app's setup screen. Configure an OpenSubtitles API key and optional TMDb credentials from **Settings**; TMDb's read access token is preferred, with its API key accepted as a fallback.
 
+### LAN companion search (development)
+
+The TV's IndexedDB catalogue is intentionally not used for companion search. Run the local service on a computer on the same LAN as the TV and phone:
+
+```sh
+npm run companion:dev
+```
+
+The service listens on port `8787` (`COMPANION_PORT` can change it). Set `COMPANION_SERVER_URL` to its LAN address in `.env`, rebuild the TV app, then select **Settings → Companion search → Start pairing**. The companion browser caches credential-free catalogue metadata in IndexedDB and continues to search its latest saved catalogue when the local service goes down; it needs the service and paired TV online to send a selection. This development service currently supports Xtream `get.php` URLs only.
+
+See [the companion-search guide](docs/companion-search.md) for setup, pairing, remote behavior, caching, security boundaries, and troubleshooting.
+
 For personal builds, copy the variable names from `.env.example` into a local, ignored `.env` file. `dev:personal`, `build:personal`, and the personal Tizen build commands require the playlist URL, OpenSubtitles API key, and either `TMDB_API_READ_ACCESS_TOKEN` or `TMDB_API_KEY`. The commands read these values at build startup; they do not load credentials from the app at runtime.
 
 TMDb credentials are used for metadata and artwork only. The app uses the TMDb API with a development proxy in local Vite development and the configured credentials in a personal build. Keep the required [TMDb attribution](https://www.themoviedb.org/documentation/api/terms-of-use) visible in any distributed product.
@@ -47,6 +59,7 @@ TMDb credentials are used for metadata and artwork only. The app uses the TMDb A
 | `npm run collect:tizen3` / `collect:tizen6` | Rename the extension-produced package to its compatibility-specific name. |
 | `npm run launch:tizen3 -- TV_IP` / `launch:tizen6 -- TV_IP` | Install and launch a signed package on a TV without changing VS Code settings. |
 | `npm run inspect:m3u` | Print a credential-safe summary of the private playlist configured in `.env`. |
+| `npm run companion:dev` | Start the LAN-only development companion search service on port `8787`. |
 
 ## Tizen TV build and deployment
 

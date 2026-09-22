@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../package-defaults.ts", () => ({ packageDefaults: {
   playlistUrl: "https://package-default.invalid/playlist",
   openSubtitlesApiKey: "package-default-key",
+  companionServerUrl: "http://companion-default.invalid:8787",
 } }));
 import { clearSavedOpenSubtitlesSettings, loadOpenSubtitlesApiKey, saveOpenSubtitlesApiKey } from "./opensubtitles-config.ts";
 import { clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl } from "./playlist-config.ts";

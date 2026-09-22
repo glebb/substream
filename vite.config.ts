@@ -7,6 +7,7 @@ export default defineConfig(({ mode }) => {
   const apiKey = env.OPENSUBTITLES_API_KEY;
   const tmdbApiReadAccessToken = env.TMDB_API_READ_ACCESS_TOKEN;
   const tmdbApiKey = env.TMDB_API_KEY;
+  const companionServerUrl = env.COMPANION_SERVER_URL;
   const isPersonalBuild = process.env.PERSONAL_BUILD === "1";
   const tizenCompatibilityTarget = process.env.TIZEN_COMPAT_TARGET;
   if (tizenCompatibilityTarget !== undefined && tizenCompatibilityTarget !== "tizen6") {
@@ -15,9 +16,12 @@ export default defineConfig(({ mode }) => {
   if (isPersonalBuild && (!env.IPTV_M3U_URL || !apiKey || (!tmdbApiReadAccessToken && !tmdbApiKey))) {
     throw new Error("Personal builds require IPTV_M3U_URL, OPENSUBTITLES_API_KEY, and TMDB_API_READ_ACCESS_TOKEN or TMDB_API_KEY in .env");
   }
-  const packageDefaults = isPersonalBuild
-    ? { playlistUrl: env.IPTV_M3U_URL, openSubtitlesApiKey: apiKey, tmdbApiReadAccessToken, tmdbApiKey }
-    : {};
+  const packageDefaults = {
+    ...(companionServerUrl ? { companionServerUrl } : {}),
+    ...(isPersonalBuild
+      ? { playlistUrl: env.IPTV_M3U_URL, openSubtitlesApiKey: apiKey, tmdbApiReadAccessToken, tmdbApiKey }
+      : {}),
+  };
   return {
     base: "./",
     // Keep the default build unchanged for the existing Tizen 3 package. The

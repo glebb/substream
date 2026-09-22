@@ -4,11 +4,11 @@ import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollection
 describe("remote dashboard navigation", () => {
   it("keeps Settings navigation in DOM order as conditional editors appear", () => {
     expect(settingsControlOrder({ confirmationOpen: false, apiKeyEditorOpen: false, hasSubtitleKey: false })).toEqual([
-      "back", "playlist", "subtitle-language", "api-key-edit",
+      "back", "companion-url", "companion-start", "playlist", "subtitle-language", "api-key-edit",
       "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
     ]);
     expect(settingsControlOrder({ confirmationOpen: false, apiKeyEditorOpen: true, hasSubtitleKey: true })).toEqual([
-      "back", "playlist", "subtitle-language", "api-key-input", "api-key-save", "api-key-cancel", "remove-api-key",
+      "back", "companion-url", "companion-start", "playlist", "subtitle-language", "api-key-input", "api-key-save", "api-key-cancel", "remove-api-key",
       "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
     ]);
     expect(settingsControlOrder({ confirmationOpen: true, apiKeyEditorOpen: true, hasSubtitleKey: true })).toEqual([

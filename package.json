@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "companion:dev": "node scripts/companion-server.mjs",
     "dev:personal": "PERSONAL_BUILD=1 vite",
     "build": "vite build",
     "build:personal": "PERSONAL_BUILD=1 vite build",

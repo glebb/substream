@@ -27,6 +27,7 @@ import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollection
 import { focusTitleListItem } from "./title-list-focus.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
+import { CompanionPanel } from "./CompanionPanel.tsx";
 
 type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 100;
@@ -139,6 +140,7 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsConfirmation, setSettingsConfirmation] = useState<SettingsConfirmation | null>(null);
   const [settingsStatus, setSettingsStatus] = useState("");
+  const [editingCompanionServer, setEditingCompanionServer] = useState(false);
   const [showVideoInfo, setShowVideoInfo] = useState(false);
   const [openSubtitlesApiKey, setOpenSubtitlesApiKey] = useState(loadOpenSubtitlesApiKey);
   const [settingsApiKeyDraft, setSettingsApiKeyDraft] = useState("");
@@ -675,12 +677,15 @@ export function App() {
           window.requestAnimationFrame(() => playlistControlRef.current?.focus());
           return;
         }
-        if (showSettings && (showSettingsApiKeyEditor || editingSubtitleLanguage || editingTmdbToken || editingTmdbApiKey)) {
+        if (showSettings && (showSettingsApiKeyEditor || editingCompanionServer || editingSubtitleLanguage || editingTmdbToken || editingTmdbApiKey)) {
           event.preventDefault();
           const target = event.target;
           if (target === settingsApiKeyInputRef.current) {
             setShowSettingsApiKeyEditor(false);
             window.requestAnimationFrame(() => settingsControlsRef.current["api-key-edit"]?.focus());
+          } else if (target === settingsControlsRef.current["companion-url"]) {
+            setEditingCompanionServer(false);
+            window.requestAnimationFrame(() => settingsControlsRef.current["companion-url"]?.focus());
           } else if (target === subtitleLanguageControlRef.current) {
             setEditingSubtitleLanguage(false);
             window.requestAnimationFrame(() => subtitleLanguageControlRef.current?.focus());
@@ -692,6 +697,7 @@ export function App() {
             window.requestAnimationFrame(() => tmdbApiKeyControlRef.current?.focus());
           } else {
             setShowSettingsApiKeyEditor(false);
+            setEditingCompanionServer(false);
             setEditingSubtitleLanguage(false);
             setEditingTmdbToken(false);
             setEditingTmdbApiKey(false);
@@ -936,6 +942,7 @@ export function App() {
       }
       if (settingsConfirmation || showSettings) {
         const settingsTextEntry = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+        if (editingCompanionServer && event.target === settingsControlsRef.current["companion-url"] && (key === "ArrowUp" || key === "ArrowDown")) setEditingCompanionServer(false);
         if (editingSubtitleLanguage && event.target === subtitleLanguageControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingSubtitleLanguage(false);
         if (editingTmdbToken && event.target === tmdbTokenControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingTmdbToken(false);
         if (editingTmdbApiKey && event.target === tmdbApiKeyControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingTmdbApiKey(false);
@@ -1235,7 +1242,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingDetailsEpisode, editingPlaylistUrl, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlaylistForm, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
+  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingCompanionServer, editingDetailsEpisode, editingPlaylistUrl, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, page, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlaylistForm, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
 
   useEffect(() => {
     const onKeyUp = (event: KeyboardEvent) => {
@@ -1691,6 +1698,7 @@ export function App() {
     setSettingsStatus("");
     setSettingsConfirmation(null);
     setShowSettingsApiKeyEditor(false);
+    setEditingCompanionServer(false);
     setShowSettings(true);
   };
 
@@ -1959,6 +1967,18 @@ export function App() {
   </form>;
 
   const isTvTitleBrowse = state === "ready" && isTizen && Boolean(activeGroup) && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice && !showPlaylistForm;
+  const openCompanionTitle = (title: VodCatalogItem) => {
+    // A paired companion is a global input source. Its selection must win over
+    // whatever transient TV screen is open, including the player.
+    setSettingsConfirmation(null);
+    setShowSettings(false);
+    setShowPlaylistForm(false);
+    setResumeChoice(null);
+    setSelectedTitle(null);
+    setPlayerFullscreen(false);
+    setShowFullscreenControls(false);
+    void openTitle(title);
+  };
   return <main className={"screen" + (isTvTitleBrowse ? " tv-title-screen" : "")}>
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
       {state === "ready" && !selectedTitle && !showPlaylistForm && !showSettings && <button className={settingsButtonFocused ? "remote-focused" : ""} type="button" ref={settingsOpenButtonRef} onBlur={() => setSettingsButtonFocused(false)} onFocus={() => setSettingsButtonFocused(true)} onClick={openSettings}>Settings</button>}
@@ -1971,6 +1991,9 @@ export function App() {
         <button type="button" ref={changePlaylistRef} onClick={() => { setError(""); setPlaylistDraft(""); setShowPlaylistForm(true); }}>Change playlist</button>
       </div>
     </section>}
+    {state === "ready" && <div hidden={!showSettings}>
+      <CompanionPanel playlistUrl={playlistUrl} onSelected={openCompanionTitle} editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTizen} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />
+    </div>}
     {state === "ready" && <section>
       {showSettings ? <section className="settings-screen settings-panel" onFocusCapture={handleSettingsFocusCapture}>
         {settingsConfirmation ? <div className="modal-backdrop"><section className="confirmation-panel modal-panel" role="dialog" aria-modal="true" aria-labelledby="settings-confirm-title">
@@ -1988,7 +2011,7 @@ export function App() {
           <h2>Settings</h2>
           <p className="hint">Playlist URLs and subtitle keys are masked on entry and are never displayed on this screen.</p>
           <div className="settings-actions settings-primary-actions">
-              <button className={settingsFocusClass("back")} data-settings-focus="back" type="button" ref={(element) => registerSettingsControl("back", element)} onClick={() => setShowSettings(false)}>Back to library</button>
+              <button className={settingsFocusClass("back")} data-settings-focus="back" type="button" ref={(element) => registerSettingsControl("back", element)} onClick={() => { setEditingCompanionServer(false); setShowSettings(false); }}>Back to library</button>
           </div>
           <section className="settings-section">
             <h3>Navigation and playlist</h3>

@@ -314,6 +314,8 @@ button:disabled { cursor: default; opacity: .45; }
 .favourite-tile > .tile { min-width: 0; }
 .remote-focused { transform: none; }
 .remote-key-hint { color: #ffd54a; font-weight: 700; margin: 0; }
+.companion-code { background: #121b2b; border: 1px solid #405a7d; border-radius: .5rem; padding: .8rem; }
+.companion-code strong { color: #ffd54a; font-size: 1.6rem; letter-spacing: .18em; }
 .empty-state-action { margin-top: 12px; }
 .remote-editable-trigger { min-width: 0; text-align: left; }
 .settings-section { margin-top: 20px; padding: 16px; }
