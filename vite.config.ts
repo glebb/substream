@@ -53,6 +53,13 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       proxy: {
+        // Keep local web development convenient while the actual TV relay runs
+        // as a separate process. Browser Settings can still point at any LAN
+        // relay explicitly; that address bypasses this same-origin proxy.
+        "/api": {
+          changeOrigin: true,
+          target: companionServerUrl || "http://127.0.0.1:8787",
+        },
         // TMDb does not permit browser-origin requests in all environments.
         // This development-only proxy keeps the browser request same-origin;
         // the client still supplies its bearer token/API key in the request.

@@ -17,7 +17,7 @@ import { clearSubtitlePreferences, loadSubtitlePreferences, saveLastSubtitleLang
 import { clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared } from "../platform/browser/catalog-preferences.ts";
 import { clearFavouriteGroups, defaultFavouriteGroupIds, hasSavedFavouriteGroupIds, loadFavouriteGroupIds, saveFavouriteGroupIds, setFavouriteGroup } from "../platform/browser/favourites-config.ts";
 import { clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, type PlaybackHistoryItem } from "../platform/browser/playback-progress-config.ts";
-import { BROWSE_COLLECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, sortAndPageBrowseItems, type BrowseCollection } from "./browse.ts";
+import { APP_SECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, sortAndPageBrowseItems, type AppSection } from "./browse.ts";
 import { formatGroupDisplayName } from "./display-formatting.ts";
 import { formatRuntime, titleDetailsFor } from "./title-details.ts";
 import { clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials } from "../platform/browser/tmdb-config.ts";
@@ -28,6 +28,8 @@ import { focusTitleListItem } from "./title-list-focus.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
 import { CompanionPanel } from "./CompanionPanel.tsx";
+import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../platform/companion/search-catalog.ts";
+import { companionServerUrl, CompanionConnectionError, getCompanionConnection, saveCompanionServerUrl, sendCompanionPlayback, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
 
 type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 100;
@@ -83,9 +85,12 @@ function positiveInteger(value: string): number | undefined {
 export function App() {
   const subtitleTimingAvailable = true;
   const isTizen = isTizenRuntime();
+  const sectionOrder = isTizen ? APP_SECTION_ORDER.filter((section) => section !== "search") : APP_SECTION_ORDER;
   const [state, setState] = useState<ScreenState>("loading");
   const [startupStatus, setStartupStatus] = useState("Opening catalogue…");
   const [playlistUrl, setPlaylistUrl] = useState(loadPlaylistUrl);
+  const latestPlaylistUrlRef = useRef(playlistUrl);
+  latestPlaylistUrlRef.current = playlistUrl;
   const [showPlaylistForm, setShowPlaylistForm] = useState(() => !loadPlaylistUrl());
   const [playlistDraft, setPlaylistDraft] = useState(loadPlaylistUrl);
   const [editingPlaylistUrl, setEditingPlaylistUrl] = useState(false);
@@ -95,9 +100,36 @@ export function App() {
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState<VodSort>("playlist");
   const [browseMode, setBrowseMode] = useState<BrowseMode>("local");
-  const [browseCollection, setBrowseCollection] = useState<BrowseCollection>("recent");
+  const [browseCollection, setBrowseCollection] = useState<AppSection>("recent");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchRecords, setSearchRecords] = useState<SafeSearchRecord[]>([]);
+  const [localSearchRecords, setLocalSearchRecords] = useState<VodCatalogItem[]>([]);
+  const [localSearchSourceUrl, setLocalSearchSourceUrl] = useState("");
+  const [searchStatus, setSearchStatus] = useState("");
+  const [searchRefreshLoading, setSearchRefreshLoading] = useState(false);
+  const [detailsOrigin, setDetailsOrigin] = useState<{ kind: "browse" | "search"; focusIndex: number } | null>(null);
+  const [detailsSearchRecord, setDetailsSearchRecord] = useState<SafeSearchRecord | null>(null);
+  const [tvPlaybackStatus, setTvPlaybackStatus] = useState("");
+  const searchRefreshRequestRef = useRef(0);
+  const searchRefreshControllerRef = useRef<AbortController | null>(null);
   const [favouriteGroupIds, setFavouriteGroupIds] = useState<string[]>(loadFavouriteGroupIds);
-  const visibleGroups = useMemo(() => browseCollection === "recent" ? [] : favouriteGroupsFirst(browseCollection === "favourites" ? groups.filter((group) => favouriteGroupIds.includes(group.id)) : browseGroupsForCollection(groups, browseCollection), favouriteGroupIds), [browseCollection, favouriteGroupIds, groups]);
+  const visibleGroups = useMemo(() => browseCollection === "recent" || browseCollection === "search" ? [] : favouriteGroupsFirst(browseCollection === "favourites" ? groups.filter((group) => favouriteGroupIds.includes(group.id)) : browseGroupsForCollection(groups, browseCollection), favouriteGroupIds), [browseCollection, favouriteGroupIds, groups]);
+  const searchProviderFingerprint = XtreamClient.fromPlaylistUrl(playlistUrl)?.pairingFingerprint() ?? "";
+  const visibleSearchRecords = useMemo(() => searchProviderFingerprint
+    ? searchSafeRecords(searchRecords.filter((record) => record.sourceFingerprint === searchProviderFingerprint), searchQuery)
+    : [], [searchProviderFingerprint, searchRecords, searchQuery]);
+  const visibleSearchItems = useMemo(() => [
+    ...visibleSearchRecords.flatMap((record) => {
+      const item = toVodCatalogItem(record);
+      if (!item) return [];
+      if (record.kind === "movie") {
+        const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
+        if (provider) item.streamUrl = provider.streamUrlFor("movie", record.id, record.extension);
+      }
+      return [{ key: `provider:${record.kind}:${record.id}`, title: record.title, kind: record.kind, year: record.year, category: record.category, item, record }];
+    }),
+    ...(localSearchSourceUrl === playlistUrl ? localSearchRecords : []).map((item) => ({ key: `local:${item.id}`, title: item.title, kind: item.contentType, year: item.year, category: item.group, item, record: null as SafeSearchRecord | null })),
+  ], [localSearchRecords, localSearchSourceUrl, playlistUrl, visibleSearchRecords]);
   const [browseCount, setBrowseCount] = useState(0);
   const [focusIndex, setFocusIndex] = useState(0);
   const titleListViewportRef = useRef<HTMLDivElement | null>(null);
@@ -141,6 +173,8 @@ export function App() {
   const [settingsConfirmation, setSettingsConfirmation] = useState<SettingsConfirmation | null>(null);
   const [settingsStatus, setSettingsStatus] = useState("");
   const [editingCompanionServer, setEditingCompanionServer] = useState(false);
+  const [companionServerDraft, setCompanionServerDraft] = useState(companionServerUrl);
+  const [webTvConnectionStatus, setWebTvConnectionStatus] = useState("");
   const [showVideoInfo, setShowVideoInfo] = useState(false);
   const [openSubtitlesApiKey, setOpenSubtitlesApiKey] = useState(loadOpenSubtitlesApiKey);
   const [settingsApiKeyDraft, setSettingsApiKeyDraft] = useState("");
@@ -172,6 +206,7 @@ export function App() {
   const [catalogStatus, setCatalogStatus] = useState("");
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const browseTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const playlistUrlRef = useRef<HTMLInputElement | null>(null);
   const playlistControlRef = useRef<HTMLElement | null>(null);
   const importButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -273,7 +308,7 @@ export function App() {
       subtitleSmallerButtonRef.current,
       subtitleLargerButtonRef.current,
       ...(isSubtitleAttached ? [subtitleToggleButtonRef.current] : []),
-    ].filter((control): control is HTMLElement => control !== null);
+    ].filter(Boolean) as HTMLElement[];
     return [
       ...playbackControls,
       subtitleSmallerButtonRef.current,
@@ -293,7 +328,7 @@ export function App() {
       ...(subtitleSearchType === "series" ? [subtitleSearchSeasonControlRef.current, subtitleSearchEpisodeControlRef.current] : []),
       findSubtitlesButtonRef.current,
       ...subtitleButtonRefs.current,
-    ].filter((control): control is HTMLElement => control !== null);
+    ].filter(Boolean) as HTMLElement[];
   };
 
   const refreshCatalog = async () => {
@@ -333,6 +368,36 @@ export function App() {
     registerTizenPlaybackKeys();
     void refreshCatalog();
   }, []);
+
+  useEffect(() => {
+    if (browseCollection !== "search" || state !== "ready" || searchQuery.trim().length < 2) {
+      setLocalSearchRecords([]);
+      setLocalSearchSourceUrl(playlistUrl);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        let store: IndexedDbCatalogStore | undefined;
+        try {
+          store = await IndexedDbCatalogStore.open();
+          const results = await store.search(searchQuery, 50);
+          if (!cancelled) { setLocalSearchRecords(results); setLocalSearchSourceUrl(playlistUrl); }
+        } catch {
+          if (!cancelled) { setLocalSearchRecords([]); setLocalSearchSourceUrl(playlistUrl); }
+        } finally { store?.close(); }
+      })();
+    }, 120);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [browseCollection, playlistUrl, searchQuery, state]);
+
+  useEffect(() => {
+    searchRefreshRequestRef.current += 1;
+    searchRefreshControllerRef.current?.abort();
+    searchRefreshControllerRef.current = null;
+    setSearchRefreshLoading(false);
+    setSearchStatus("");
+  }, [playlistUrl]);
 
   useEffect(() => {
     if (state !== "auto-import" || startupImportStartedRef.current) return;
@@ -435,7 +500,7 @@ export function App() {
     setSubtitleTimingOffsetSeconds(loadSubtitleTimingOffset(title.id));
     setSubtitleFontSize(loadSubtitlePreferences().fontSize);
     const titleForSearch = normalizeTitle(title.title);
-    setSubtitleSearchQuery(title.searchTitle || titleForSearch.searchTitle);
+    setSubtitleSearchQuery(titleForSearch.searchTitle || title.searchTitle);
     setSubtitleSearchType(title.contentType === "series" ? "series" : "movie");
     setSubtitleSearchSeason(String(title.season ?? titleForSearch.season ?? ""));
     setSubtitleSearchEpisode(String(title.episode ?? titleForSearch.episode ?? ""));
@@ -447,8 +512,10 @@ export function App() {
     setSelectedTitle(title);
   };
 
-  const openTitle = async (title: VodCatalogItem) => {
+  const openTitle = async (title: VodCatalogItem, origin: { kind: "browse" | "search"; focusIndex: number } | null = null, searchRecord: SafeSearchRecord | null = null) => {
     const request = ++detailsRequestRef.current;
+    setDetailsOrigin(origin);
+    setDetailsSearchRecord(searchRecord);
     setDetailsTitle(title);
     setDetailsMetadata(null);
     setDetailsMetadataStatus("");
@@ -461,7 +528,8 @@ export function App() {
       const client = new TmdbClient(credentials, undefined, import.meta.env.DEV ? "/tmdb-api" : undefined);
       const mediaType = title.contentType === "series" ? "tv" : "movie";
       try {
-      const resolved = await client.resolve(title.searchTitle || title.title, mediaType, title.year);
+      const normalized = normalizeTitle(title.title);
+      const resolved = await client.resolve(normalized.searchTitle || title.searchTitle || title.title, mediaType, title.year);
       if (resolved.kind !== "match") {
         if (resolved.kind === "ambiguous") setDetailsMetadataStatus("TMDb found multiple possible matches; artwork and synopsis were withheld.");
         return;
@@ -485,7 +553,7 @@ export function App() {
       try {
         const normalized = normalizeTitle(title.title);
         const results = await new OpenSubtitlesClient(subtitleKey, undefined, OPEN_SUBTITLES_BASE_URL).search({
-          query: title.searchTitle || normalized.searchTitle,
+          query: normalized.searchTitle || title.searchTitle,
           languages: ["fi", "en"],
           ...(title.year ?? normalized.year ? { year: title.year ?? normalized.year! } : {}),
           ...(title.season !== undefined ? { season: title.season } : {}),
@@ -496,6 +564,187 @@ export function App() {
       } catch { /* Details remain useful when subtitle lookup is unavailable. */ }
     }
   };
+
+  const companionOrigin = () => {
+    try { return companionServerUrl() || (!isTizen && import.meta.env.DEV ? window.location.origin : ""); }
+    catch { return !isTizen && import.meta.env.DEV ? window.location.origin : ""; }
+  };
+
+  const saveWebTvRelay = () => {
+    try {
+      const origin = saveCompanionServerUrl(companionServerDraft);
+      setCompanionServerDraft(origin);
+      setWebTvConnectionStatus(origin ? `Relay address saved: ${origin}` : "Relay address cleared. Configure a relay to send playback to TV.");
+    } catch (error) {
+      setWebTvConnectionStatus(error instanceof Error ? error.message : "Relay address could not be saved.");
+    }
+  };
+
+  const checkWebTvConnection = async () => {
+    const server = companionOrigin();
+    if (!server) {
+      setWebTvConnectionStatus("Set the LAN relay address here before checking for a TV.");
+      return;
+    }
+    try {
+      const active = await getCompanionConnection(server);
+      const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
+      if (active.expiresAt <= Date.now()) setWebTvConnectionStatus("TV connection has expired. Reconnect Substream on the TV.");
+      else if (!provider || active.sourceFingerprint !== provider.pairingFingerprint()) setWebTvConnectionStatus("TV is connected, but its provider does not match this browser playlist.");
+      else setWebTvConnectionStatus("TV is connected and the provider matches.");
+    } catch (error) {
+      setWebTvConnectionStatus(error instanceof CompanionConnectionError && error.kind === "no-tv"
+        ? "Relay is reachable, but no TV is connected. Open Substream on the TV and connect it in Settings."
+        : error instanceof CompanionConnectionError && error.kind === "unreachable"
+          ? "TV relay is unreachable. Check the address and that the relay is running on your network."
+          : "Relay returned an invalid TV connection response.");
+    }
+  };
+
+  const openSearchRecord = (record: SafeSearchRecord, index: number) => {
+    const client = XtreamClient.fromPlaylistUrl(playlistUrl);
+    if (!client || record.sourceFingerprint !== client.pairingFingerprint()) {
+      setSearchStatus("This result belongs to a different provider connection.");
+      return;
+    }
+    const candidate = toVodCatalogItem(record);
+    if (!candidate) return;
+    if (record.kind === "movie") candidate.streamUrl = client.streamUrlFor("movie", record.id, record.extension);
+    setFocusIndex(index);
+    void openTitle(candidate, { kind: "search", focusIndex: index }, record);
+  };
+
+  const openLocalSearchItem = (title: VodCatalogItem, index: number) => {
+    setFocusIndex(index);
+    void openTitle(title, { kind: "search", focusIndex: index });
+  };
+
+  const playSearchResultOnTv = async (title: VodCatalogItem) => {
+    const sourceTitle = detailsTitle?.providerSeriesId ? detailsTitle : title;
+    const providerMatch = sourceTitle.id.match(/^xtream:(movie|series):(\d{1,20})$/)
+      ?? (sourceTitle.providerSeriesId ? ["", "series", String(sourceTitle.providerSeriesId)] : null);
+    const extensionFromUrl = title.streamUrl.match(/\.([a-z0-9]{1,10})(?:[?#]|$)/i)?.[1]?.toLowerCase();
+    const record = detailsSearchRecord ?? (providerMatch ? {
+      kind: providerMatch[1] as "movie" | "series", id: providerMatch[2], title: title.title,
+      year: title.year ?? null, extension: extensionFromUrl ?? "mkv", category: title.group,
+      sourceFingerprint: XtreamClient.fromPlaylistUrl(playlistUrl)?.pairingFingerprint() ?? "",
+      searchTitle: title.searchTitle ?? title.title,
+    } : null);
+    const server = companionOrigin();
+    const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
+    if (!server) {
+      setTvPlaybackStatus("Set the LAN relay address in Settings before sending playback to TV.");
+      return;
+    }
+    if (!record || !provider || record.sourceFingerprint !== provider.pairingFingerprint()) {
+      setTvPlaybackStatus("This title cannot be sent to the connected TV.");
+      return;
+    }
+    let active;
+    try { active = await getCompanionConnection(server); }
+    catch (error) {
+      setTvPlaybackStatus(error instanceof CompanionConnectionError && error.kind === "no-tv"
+        ? "Relay is reachable, but no TV is connected."
+        : error instanceof CompanionConnectionError && error.kind === "unreachable"
+          ? "TV relay is unreachable. Check its address and that it is running."
+          : "TV connection could not be read. Check the relay response.");
+      return;
+    }
+    if (active.expiresAt <= Date.now()) {
+      setTvPlaybackStatus("TV connection has expired. Reconnect Substream on the TV.");
+      return;
+    }
+    if (active.sourceFingerprint !== record.sourceFingerprint) {
+      setTvPlaybackStatus("TV is connected, but its provider does not match this title.");
+      return;
+    }
+    const episodeMatch = title.id.match(/^xtream:episode:(\d{1,20})$/);
+    const kind = episodeMatch ? "episode" : "movie";
+    const extension = kind === "episode"
+      ? title.streamUrl.match(/\.([a-z0-9]{1,10})(?:[?#]|$)/i)?.[1]?.toLowerCase() ?? record.extension
+      : record.extension;
+    const selectionId = episodeMatch?.[1] ?? record.id;
+    if (!selectionId) {
+      setTvPlaybackStatus("This title cannot be sent to the connected TV.");
+      return;
+    }
+    const selectionDetails = {
+      id: selectionId,
+      title: title.title,
+      year: title.year ?? null,
+      ...(title.season !== undefined ? { season: title.season } : {}),
+      ...(title.episode !== undefined ? { episode: title.episode } : {}),
+      extension,
+      sourceFingerprint: record.sourceFingerprint,
+    };
+    const selection: CompanionPlaybackSelection = episodeMatch
+      ? { ...selectionDetails, kind: "episode", seriesId: String(detailsTitle?.providerSeriesId ?? record.id) }
+      : { ...selectionDetails, kind: "movie" };
+    try {
+      await sendCompanionPlayback(server, active.sessionId, selection);
+      setTvPlaybackStatus(`Sent “${title.title}” to TV.`);
+    } catch {
+      setTvPlaybackStatus("Could not send playback to the TV. Check the connection and try again.");
+    }
+  };
+
+  const closeDetails = () => {
+    detailsRequestRef.current += 1;
+    setDetailsTitle(null);
+    setTvPlaybackStatus("");
+    window.requestAnimationFrame(() => {
+      if (detailsOrigin?.kind === "search") {
+        const index = detailsOrigin.focusIndex;
+        setBrowseCollection("search");
+        setFocusIndex(index);
+        tileRefs.current[index]?.focus();
+      } else if (activeGroup && isTizen) focusTitleListItem(tileRefs.current[focusIndex] ?? null, titleListViewportRef.current);
+      else tileRefs.current[focusIndex]?.focus();
+    });
+  };
+
+  const refreshSearchCatalogue = async () => {
+    if (!searchProviderFingerprint) {
+      setSearchStatus("Full catalogue refresh requires an Xtream playlist. Your imported M3U titles are searchable here.");
+      return;
+    }
+    searchRefreshControllerRef.current?.abort();
+    const controller = new AbortController();
+    searchRefreshControllerRef.current = controller;
+    const request = ++searchRefreshRequestRef.current;
+    setSearchRefreshLoading(true);
+    setSearchStatus("Loading the provider catalogue…");
+    try {
+      const result = await createBrowserSearchClient({ playlistUrl }).refresh({
+        signal: controller.signal,
+        onProgress: ({ completed, total }) => {
+          if (request === searchRefreshRequestRef.current && latestPlaylistUrlRef.current === playlistUrl) setSearchStatus(`Loading ${completed} of ${total} categories…`);
+        },
+      });
+      if (request !== searchRefreshRequestRef.current || latestPlaylistUrlRef.current !== playlistUrl) return;
+      setSearchRecords(result.records);
+      setSearchStatus(`${result.records.length.toLocaleString()} titles loaded from your provider.`);
+    } catch {
+      if (request !== searchRefreshRequestRef.current || latestPlaylistUrlRef.current !== playlistUrl) return;
+      const cached = await createBrowserSearchClient({ playlistUrl }).loadCached(searchProviderFingerprint);
+      if (request !== searchRefreshRequestRef.current || latestPlaylistUrlRef.current !== playlistUrl) return;
+      setSearchRecords(cached);
+      setSearchStatus(cached.length ? `Provider refresh failed. Searching ${cached.length.toLocaleString()} saved titles.` : "Provider catalogue could not be loaded. Check the playlist and browser network access.");
+    } finally {
+      if (request === searchRefreshRequestRef.current && latestPlaylistUrlRef.current === playlistUrl) {
+        setSearchRefreshLoading(false);
+        searchRefreshControllerRef.current = null;
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (state !== "ready" || !searchProviderFingerprint) return;
+    void createBrowserSearchClient({ playlistUrl }).loadCached(searchProviderFingerprint).then((cached) => {
+      if (cached.length) setSearchRecords(cached);
+      setSearchStatus(cached.length ? `Searching ${cached.length.toLocaleString()} saved provider titles. Refresh to update.` : "Search your imported M3U titles or refresh the Xtream catalogue.");
+    }).catch(() => undefined);
+  }, [playlistUrl, searchProviderFingerprint, state]);
 
   const playFromDetails = (title: VodCatalogItem) => {
     detailsRequestRef.current += 1;
@@ -521,7 +770,7 @@ export function App() {
     if (result.kind === "error") { setCatalogStatus(result.message); return; }
     const episodes = result.value;
     setDetailsEpisodes(episodes);
-    setDetailsEpisodeId(episodes[0]?.id ?? "");
+    setDetailsEpisodeId("");
     if (!episodes.length) { detailsRequestRef.current += 1; setDetailsTitle(null); }
     if (!episodes.length) return;
     // The first Action on a series must enter episode selection.  The details
@@ -592,7 +841,7 @@ export function App() {
     const nextFavourite = !favouriteGroupIds.includes(group.id);
     const nextIds = setFavouriteGroup(group.id, nextFavourite);
     setFavouriteGroupIds(nextIds);
-    if (browseCollection !== "recent") {
+    if (browseCollection !== "recent" && browseCollection !== "search") {
       setFocusIndex(favouriteToggleFocusIndex(groups, browseCollection, nextIds, group.id, focusIndex));
     }
     setFavouriteStatus(`${group.name} ${nextFavourite ? "added to" : "removed from"} favourites.`);
@@ -633,7 +882,7 @@ export function App() {
     const focusBrowseIndex = (index: number) => {
       setFocusIndex(index);
       const tile = tileRefs.current[index];
-      if (activeGroup && isTizen) focusTitleListItem(tile, titleListViewportRef.current);
+      if (activeGroup && isTizen) focusTitleListItem(tile ?? null, titleListViewportRef.current);
       else {
         tile?.focus();
         tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -739,8 +988,8 @@ export function App() {
             const seasons = [...new Set(detailsEpisodes.map((episode) => episode.season).filter((season): season is number => season !== undefined))];
             if (seasons.length > 1) {
               setEpisodePickerLevel("seasons");
-              setEpisodePickerFocusIndex(Math.max(0, seasons.indexOf(episodePickerSeason ?? seasons[0])));
-              window.requestAnimationFrame(() => episodePickerOptionRefs.current[Math.max(0, seasons.indexOf(episodePickerSeason ?? seasons[0]))]?.focus());
+              setEpisodePickerFocusIndex(Math.max(0, seasons.indexOf(episodePickerSeason ?? seasons[0] ?? 0)));
+              window.requestAnimationFrame(() => episodePickerOptionRefs.current[Math.max(0, seasons.indexOf(episodePickerSeason ?? seasons[0] ?? 0))]?.focus());
               return;
             }
           }
@@ -751,12 +1000,7 @@ export function App() {
         }
         if (detailsTitle) {
           event.preventDefault();
-          detailsRequestRef.current += 1;
-          setDetailsTitle(null);
-          window.requestAnimationFrame(() => {
-            if (activeGroup && isTizen) focusTitleListItem(tileRefs.current[focusIndex], titleListViewportRef.current);
-            else tileRefs.current[focusIndex]?.focus();
-          });
+          closeDetails();
           return;
         }
         const errorFormOpen = state === "error" && showPlaylistForm;
@@ -851,7 +1095,7 @@ export function App() {
         return;
       }
       if (resumeChoice) {
-        const controls = resumeChoiceControlsRef.current.filter((control): control is HTMLButtonElement => Boolean(control) && !control.disabled);
+        const controls = resumeChoiceControlsRef.current.filter((control): control is HTMLButtonElement => control !== null && !control.disabled);
         if (controls.length === 0) return;
         const activeIndex = controls.indexOf(document.activeElement as HTMLButtonElement);
         const currentIndex = activeIndex >= 0 ? activeIndex : resumeChoiceFocusIndex;
@@ -904,7 +1148,7 @@ export function App() {
           }
           return;
         }
-        const controls = [detailsControlsRef.current[0], ...(detailsTitle.providerSeriesId && detailsEpisodes.length ? [detailsEpisodeControlRef.current] : []), detailsControlsRef.current[2] ?? detailsControlsRef.current[1]].filter((control): control is HTMLElement => Boolean(control));
+        const controls = [detailsControlsRef.current[0], ...(detailsTitle.providerSeriesId && detailsEpisodes.length ? [detailsEpisodeControlRef.current] : []), detailsControlsRef.current[2] ?? detailsControlsRef.current[1], detailsControlsRef.current[3]].filter((control): control is HTMLElement => Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled));
         if (controls.length === 0) return;
         const activeIndex = controls.indexOf(document.activeElement as HTMLElement);
         const currentIndex = activeIndex >= 0 ? activeIndex : detailsFocusIndex;
@@ -924,9 +1168,9 @@ export function App() {
             const seasons = [...new Set(detailsEpisodes.map((episode) => episode.season).filter((season): season is number => season !== undefined))].sort((a, b) => a - b);
             setEpisodePickerSeason(selectedEpisode?.season ?? seasons[0]);
             setEpisodePickerLevel(seasons.length > 1 ? "seasons" : "episodes");
-            setEpisodePickerFocusIndex(seasons.length > 1 ? Math.max(0, seasons.indexOf(selectedEpisode?.season ?? seasons[0])) : selectedIndex);
+            setEpisodePickerFocusIndex(seasons.length > 1 ? Math.max(0, seasons.indexOf(selectedEpisode?.season ?? seasons[0] ?? 0)) : selectedIndex);
             setEpisodePickerOpen(true);
-            const focusIndex = seasons.length > 1 ? Math.max(0, seasons.indexOf(selectedEpisode?.season ?? seasons[0])) : selectedIndex;
+            const focusIndex = seasons.length > 1 ? Math.max(0, seasons.indexOf(selectedEpisode?.season ?? seasons[0] ?? 0)) : selectedIndex;
             window.requestAnimationFrame(() => episodePickerOptionRefs.current[focusIndex]?.focus());
           }
           return;
@@ -1078,6 +1322,17 @@ export function App() {
         }
         return;
       }
+      if (event.target === searchInputRef.current) {
+        if (key === "ArrowDown" && tileRefs.current[0]) {
+          event.preventDefault();
+          setFocusIndex(0);
+          tileRefs.current[0]?.focus();
+        } else if (key === "ArrowUp") {
+          event.preventDefault();
+          browseTabRefs.current[sectionOrder.indexOf("search")]?.focus();
+        }
+        return;
+      }
       if (event.target instanceof HTMLInputElement) return;
       if (event.target instanceof HTMLSelectElement) {
         if (activeGroup && isTizen && (key === "ArrowUp" || key === "ArrowDown")
@@ -1101,7 +1356,7 @@ export function App() {
         if (key === "ArrowLeft" || key === "ArrowRight") {
           event.preventDefault();
           const nextTab = Math.max(0, Math.min(tabs.length - 1, currentTab + (key === "ArrowLeft" ? -1 : 1)));
-          const nextCollection = BROWSE_COLLECTION_ORDER;
+          const nextCollection = sectionOrder;
           browseTabTransitionRef.current = true;
           setFocusIndex(0);
           setBrowseCollection(nextCollection[nextTab] ?? "recent");
@@ -1109,6 +1364,11 @@ export function App() {
           return;
         }
         if (key === "ArrowDown") {
+          if (browseCollection === "search") {
+            event.preventDefault();
+            searchInputRef.current?.focus();
+            return;
+          }
           const itemCount = browseCollection === "recent" ? continueHistory.length * 2 : visibleGroups.length;
           if (itemCount > 0) {
             event.preventDefault();
@@ -1126,7 +1386,7 @@ export function App() {
       if (targetButton && !targetButton.classList.contains("tile")) {
         if (dashboardControlNavigationTarget(key, targetButton === settingsOpenButtonRef.current) === "tabs") {
           event.preventDefault();
-          browseTabRefs.current[BROWSE_COLLECTION_ORDER.indexOf(browseCollection)]?.focus();
+          browseTabRefs.current[sectionOrder.indexOf(browseCollection)]?.focus();
           return;
         }
         const browseControls = [settingsOpenButtonRef.current, sortSelectRef.current, backToGroupsRef.current, previousPageRef.current, nextPageRef.current, changePlaylistRef.current]
@@ -1162,7 +1422,7 @@ export function App() {
       }
       if (targetButton && key === "Enter") return;
       const continueActionCount = browseCollection === "recent" ? continueHistory.length * 2 : 0;
-      const itemCount = activeGroup ? titles.length : continueActionCount + visibleGroups.length;
+      const itemCount = activeGroup ? titles.length : browseCollection === "search" ? visibleSearchRecords.length : continueActionCount + visibleGroups.length;
       if (itemCount === 0) return;
       if (activeGroup && isTizen && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
         event.preventDefault();
@@ -1195,7 +1455,7 @@ export function App() {
             ? recentNavigationTarget(key, focusIndex, itemCount)
           : gridNavigationTarget(key, focusIndex, itemCount, homeColumns);
         if (!activeGroup && key === "ArrowUp" && targetIndex === null && (browseCollection === "recent" ? focusIndex < 2 : focusIndex < homeColumns)) {
-          browseTabRefs.current[BROWSE_COLLECTION_ORDER.indexOf(browseCollection)]?.focus();
+          browseTabRefs.current[sectionOrder.indexOf(browseCollection)]?.focus();
           return;
         }
         if (activeGroup && key === "ArrowUp" && targetIndex === null && focusIndex < browseGridColumnCount(true, compactViewport, narrowViewport)) {
@@ -1261,7 +1521,12 @@ export function App() {
   useLayoutEffect(() => {
     if (!browseTabTransitionRef.current || activeGroup || selectedTitle || detailsTitle || resumeChoice || showSettings || settingsConfirmation) return;
     browseTabTransitionRef.current = false;
-    const itemCount = browseCollection === "recent" ? continueHistory.length * 2 : visibleGroups.length;
+    const itemCount = browseCollection === "recent" ? continueHistory.length * 2 : browseCollection === "search" ? visibleSearchRecords.length : visibleGroups.length;
+    if (browseCollection === "search") {
+      window.requestAnimationFrame(() => searchInputRef.current?.focus());
+      browseTabTransitionRef.current = false;
+      return;
+    }
     const target = browseCollectionFocusTarget(itemCount > 0, Boolean(browseEmptyRecoveryRef.current));
     if (target === "content") {
       const targetIndex = browseCollectionFocusIndex(target, itemCount);
@@ -1314,14 +1579,14 @@ export function App() {
         return;
       }
       if (focusTarget === "tab") {
-        const index = BROWSE_COLLECTION_ORDER.indexOf(browseCollection);
+        const index = sectionOrder.indexOf(browseCollection);
         browseTabRefs.current[index]?.focus();
       }
       return;
     }
     const tile = tileRefs.current[focusIndex];
     if (isTizen) {
-      if (document.activeElement !== tile) focusTitleListItem(tile, titleListViewportRef.current);
+      if (document.activeElement !== tile) focusTitleListItem(tile ?? null, titleListViewportRef.current);
     }
     else {
       tile?.focus();
@@ -1492,7 +1757,7 @@ export function App() {
       saveOpenSubtitlesApiKey(apiKey);
       const client = new OpenSubtitlesClient(apiKey, undefined, OPEN_SUBTITLES_BASE_URL);
       const titleForSearch = normalizeTitle(selectedTitle.title);
-      const defaultSearchTitle = selectedTitle.searchTitle || titleForSearch.searchTitle;
+      const defaultSearchTitle = titleForSearch.searchTitle || selectedTitle.searchTitle;
       const resolvedTitle = subtitleSearchQuery.trim() || defaultSearchTitle;
       const resolvedYear = selectedTitle.year ?? titleForSearch.year;
       const season = subtitleSearchType === "series" ? positiveInteger(subtitleSearchSeason) : undefined;
@@ -1923,7 +2188,7 @@ export function App() {
   const findSubtitleFocusIndex = subtitleFocus.find;
   const firstSubtitleFocusIndex = subtitleFocus.firstResult;
   const continueActionCount = browseCollection === "recent" ? continueHistory.length * 2 : 0;
-  const videoResolution = showVideoInfo ? playerRef.current?.getVideoResolution() ?? "Unavailable" : "";
+  const videoResolution = showVideoInfo ? playerRef.current?.getVideoResolution?.() ?? "Unavailable" : "";
   const details = detailsTitle ? {
     ...titleDetailsFor(detailsTitle),
     ...(detailsMetadata?.posterUrl ? { posterUrl: detailsMetadata.posterUrl } : {}),
@@ -1977,7 +2242,10 @@ export function App() {
     setSelectedTitle(null);
     setPlayerFullscreen(false);
     setShowFullscreenControls(false);
-    void openTitle(title);
+    setDetailsTitle(null);
+    setDetailsSearchRecord(null);
+    setDetailsOrigin(null);
+    startPlayback(title);
   };
   return <main className={"screen" + (isTvTitleBrowse ? " tv-title-screen" : "")}>
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
@@ -1991,8 +2259,8 @@ export function App() {
         <button type="button" ref={changePlaylistRef} onClick={() => { setError(""); setPlaylistDraft(""); setShowPlaylistForm(true); }}>Change playlist</button>
       </div>
     </section>}
-    {state === "ready" && <div hidden={!showSettings}>
-      <CompanionPanel playlistUrl={playlistUrl} onSelected={openCompanionTitle} editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTizen} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />
+    {state === "ready" && isTizen && <div hidden={!showSettings}>
+      <CompanionPanel playlistUrl={playlistUrl} onPlay={openCompanionTitle} editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTizen} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />
     </div>}
     {state === "ready" && <section>
       {showSettings ? <section className="settings-screen settings-panel" onFocusCapture={handleSettingsFocusCapture}>
@@ -2009,7 +2277,7 @@ export function App() {
           </div>
         </section></div> : <>
           <h2>Settings</h2>
-          <p className="hint">Playlist URLs and subtitle keys are masked on entry and are never displayed on this screen.</p>
+          <p className="hint">Playlist URLs and subtitle keys are masked on entry and are never displayed on this screen. The LAN relay address is not a credential.</p>
           <div className="settings-actions settings-primary-actions">
               <button className={settingsFocusClass("back")} data-settings-focus="back" type="button" ref={(element) => registerSettingsControl("back", element)} onClick={() => { setEditingCompanionServer(false); setShowSettings(false); }}>Back to library</button>
           </div>
@@ -2018,6 +2286,17 @@ export function App() {
             <p className="hint">Your playlist URL is stored locally and remains masked.</p>
             <button className={settingsFocusClass("playlist")} data-settings-focus="playlist" type="button" ref={(element) => registerSettingsControl("playlist", element)} onClick={changePlaylist}>Change playlist URL</button>
           </section>
+          {!isTizen && <section className="settings-section">
+            <h3>TV connection</h3>
+            <p className="hint">Enter the LAN relay address shown by the relay service, for example http://192.168.1.50:8787. On Vite development, an empty address uses the local /api proxy.</p>
+            <label htmlFor="web-tv-relay-url">LAN relay address</label>
+            <input id="web-tv-relay-url" data-settings-focus="companion-url" className={settingsFocusClass("companion-url")} type="url" value={companionServerDraft} placeholder="http://192.168.1.50:8787" autoComplete="url" onChange={(event) => setCompanionServerDraft(event.target.value)} ref={(element) => registerSettingsControl("companion-url", element)} />
+            <div className="settings-actions">
+              <button className={settingsFocusClass("companion-start")} data-settings-focus="companion-start" type="button" ref={(element) => registerSettingsControl("companion-start", element)} onClick={saveWebTvRelay}>Save relay address</button>
+              <button type="button" onClick={() => void checkWebTvConnection()}>Check TV connection</button>
+            </div>
+            {webTvConnectionStatus && <p className="hint" role="status" aria-live="polite">{webTvConnectionStatus}</p>}
+          </section>}
           <section className="settings-section">
             <h3>Subtitle language</h3>
             <p className="hint">Search and ranking prefer this language, then fall back to the other supported language.</p>
@@ -2060,9 +2339,11 @@ export function App() {
         </>}
       </section> : detailsTitle && details ? <section className="title-details" aria-labelledby="title-details-heading">
         <div className="details-actions">
-          <button className={`secondary-button ${detailsFocusIndex === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { detailsControlsRef.current[0] = element; }} onFocus={() => setDetailsFocusIndex(0)} onClick={() => { detailsRequestRef.current += 1; setDetailsTitle(null); window.requestAnimationFrame(() => { if (activeGroup && isTizen) focusTitleListItem(tileRefs.current[focusIndex], titleListViewportRef.current); else tileRefs.current[focusIndex]?.focus(); }); }}>Back to titles</button>
-          <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : detailsHistory ? "Resume or start" : "Play"}</button>
+          <button className={`secondary-button ${detailsFocusIndex === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { detailsControlsRef.current[0] = element; }} onFocus={() => setDetailsFocusIndex(0)} onClick={closeDetails}>{detailsOrigin?.kind === "search" ? "Back to search" : "Back to titles"}</button>
+          <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} disabled={Boolean(detailsTitle.providerSeriesId && detailsEpisodes.length && !detailsEpisodeId)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : "Play here"}</button>
+          {!isTizen && (detailsSearchRecord || /^xtream:(movie|series):\d{1,20}$/.test(detailsTitle.id)) && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(3)} disabled={Boolean(detailsTitle.providerSeriesId && (!detailsEpisodes.length || !detailsEpisodeId))} onClick={() => void playSearchResultOnTv(detailsTitle.providerSeriesId ? (detailsEpisodes.find((episode) => episode.id === detailsEpisodeId) ?? detailsTitle) : detailsTitle)}>Play on TV</button>}
         </div>
+        {tvPlaybackStatus && <p className="hint" role="status" aria-live="polite">{tvPlaybackStatus}</p>}
         <div className="details-layout">
           <div className="details-poster" aria-label={detailsPosterUrl || details.posterUrl ? `Poster for ${detailsTitle.title}` : "Poster unavailable"}>
             {detailsPosterUrl || details.posterUrl ? <img src={detailsPosterUrl || details.posterUrl} alt="" loading="lazy" /> : <span>Artwork unavailable</span>}
@@ -2225,7 +2506,7 @@ export function App() {
         </div>
       </> : <>
         <nav className="browse-tabs" role="tablist" aria-label="Browse your library">
-          {BROWSE_COLLECTION_ORDER.map((collection, index) => <button
+          {sectionOrder.map((collection, index) => <button
             aria-selected={browseCollection === collection}
             className={"browse-tab " + (browseCollection === collection ? "selected" : "")}
             key={collection}
@@ -2233,7 +2514,7 @@ export function App() {
             ref={(element) => { browseTabRefs.current[index] = element; }}
             role="tab"
             type="button"
-          >{collection === "recent" ? "Recent" : collection === "movies" ? "Movies" : collection === "series" ? "Series" : "Favourites"}</button>)}
+          >{collection === "recent" ? "Recent" : collection === "movies" ? "Movies" : collection === "series" ? "Series" : collection === "search" ? "Search" : "Favourites"}</button>)}
         </nav>
         {catalogStatus && !catalogStatus.startsWith("Loading ") && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
         {catalogStatus.startsWith("Loading ") && <>
@@ -2255,7 +2536,22 @@ export function App() {
           </div>
         </>}
         {browseCollection === "recent" && continueHistory.length === 0 && <div className="empty-state"><h2>Nothing here yet</h2><p>Titles you start watching will appear here so you can pick up where you left off.</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = true; setBrowseCollection("movies"); setFocusIndex(0); }}>Browse movies</button></div>}
-        {browseCollection !== "recent" && <>
+        {browseCollection === "search" && <section className="catalog-search" aria-labelledby="catalog-search-heading">
+          <div className="collection-heading"><h2 id="catalog-search-heading">Search your catalogue</h2><p className="hint">Search your imported M3U titles and the full catalogue from your Xtream playlist.</p></div>
+          <div className="catalog-search-form">
+            <label htmlFor="catalog-search-input">Title</label>
+            <div className="catalog-search-controls"><input id="catalog-search-input" ref={searchInputRef} type="search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search movies and series" autoComplete="off" /><button type="button" disabled={!searchProviderFingerprint || searchRefreshLoading} onClick={() => void refreshSearchCatalogue()}>{searchProviderFingerprint ? searchRefreshLoading ? "Refreshing catalogue…" : "Refresh Xtream catalogue" : "M3U catalogue is local"}</button></div>
+          </div>
+          <p className="hint" role="status" aria-live="polite">{searchStatus || (searchProviderFingerprint ? "Search is available without a TV connection. Refresh the Xtream catalogue when needed." : "Searching titles saved on this device. Add an Xtream playlist to refresh a full provider catalogue.")}</p>
+          <div className="groups search-results" role="list">
+            {visibleSearchItems.map((result, index) => <button className={`tile ${index === focusIndex ? "focused remote-focused" : ""}`} key={result.key} ref={(element) => { tileRefs.current[index] = element; }} type="button" role="listitem" onClick={() => result.record ? openSearchRecord(result.record, index) : openLocalSearchItem(result.item, index)}>
+              <strong>{result.title}</strong><span className="tile-meta">{result.kind === "series" ? "Series" : result.kind === "movie" ? "Movie" : "Other"}{result.year ? ` · ${result.year}` : ""}{result.category ? ` · ${result.category}` : ""}</span>
+            </button>)}
+            {!visibleSearchItems.length && searchQuery.trim().length >= 2 && <p className="empty-state">No matching titles found.</p>}
+            {!visibleSearchItems.length && searchQuery.trim().length < 2 && <p className="empty-state">Enter at least two characters to search.</p>}
+          </div>
+        </section>}
+        {browseCollection !== "recent" && browseCollection !== "search" && <>
           <div className="collection-heading"><h2>{browseCollection === "favourites" ? "Favourite groups" : browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">{browseCollection === "favourites" ? "Your saved movie genres and series categories." : "Choose a group to browse its titles. Provider groups load when selected."}</p><p className="remote-key-hint">Press the red remote key to toggle the focused group as a favourite.</p>{favouriteStatus && <p className="hint" role="status" aria-live="polite">{favouriteStatus}</p>}</div>
           <div className="groups group-grid">
           {visibleGroups.map((group, index) => <div className="favourite-tile" key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">

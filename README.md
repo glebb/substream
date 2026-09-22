@@ -30,17 +30,21 @@ npm run dev
 
 Open the local URL printed by Vite and add your playlist from the app's setup screen. Configure an OpenSubtitles API key and optional TMDb credentials from **Settings**; TMDb's read access token is preferred, with its API key accepted as a fallback.
 
-### LAN companion search (development)
+### Search in the web app
 
-The TV's IndexedDB catalogue is intentionally not used for companion search. Run the local service on a computer on the same LAN as the TV and phone:
+Search is part of the normal Substream web app and does not require a TV or LAN relay. Add an Xtream `get.php` playlist in the browser app and refresh the full movie and series catalogue from Search. Search also works against an imported M3U catalogue already stored in that browser. Xtream search results are cached in IndexedDB and remain searchable offline; selecting a result opens the regular details view. In a browser, details offer **Play here** and **Play on TV**. Only **Play on TV** requires the optional LAN relay and an active TV connection.
+
+### Optional TV playback over the LAN
+
+To use Play on TV during personal web development, start both the web app and relay with one command:
 
 ```sh
-npm run companion:dev
+npm run dev:personal
 ```
 
-The service listens on port `8787` (`COMPANION_PORT` can change it). Set `COMPANION_SERVER_URL` to its LAN address in `.env` and rebuild the TV app. On startup, the TV makes a best-effort connection to that address; if the service starts later, use **Settings → Companion search → Connect companion service**. Open the companion address on a phone or computer—no code is required. The companion browser caches credential-free catalogue metadata in IndexedDB, reuses that cache after service restarts, and downloads from the provider only when **Refresh catalogue** is selected. It needs the service and TV app online to send a selection. This development service currently supports Xtream `get.php` URLs only.
+The web app opens at Vite's local URL, and the relay listens on port `8787` (`COMPANION_PORT` can change it). Set `COMPANION_SERVER_URL` to its LAN address in `.env` and rebuild the TV app. The TV registers its active provider session at startup and retries automatically if the relay is unavailable; **Settings → TV connection → Connect** remains available for manual connection. In the browser, open **Settings → TV connection**, enter and save the relay's LAN address, then use **Check TV connection** to see whether the relay is reachable, a TV is connected, and its provider matches. During Vite development, an empty address sends `/api` requests through the dev proxy to `localhost:8787` (or `COMPANION_SERVER_URL` when configured). The browser's Search and catalogue refresh use the playlist configured in that browser app directly. The relay and TV are needed only when choosing **Play on TV**. TV playback supports Xtream `get.php` sources; M3U titles can be searched and played locally in the web app.
 
-See [the companion-search guide](docs/companion-search.md) for setup, connection behavior, caching, security boundaries, and troubleshooting.
+See [the Search and TV connection guide](docs/companion-search.md) for setup, connection behavior, caching, security boundaries, and troubleshooting.
 
 For personal builds, copy the variable names from `.env.example` into a local, ignored `.env` file. `dev:personal`, `build:personal`, and the personal Tizen build commands require the playlist URL, OpenSubtitles API key, and either `TMDB_API_READ_ACCESS_TOKEN` or `TMDB_API_KEY`. The commands read these values at build startup; they do not load credentials from the app at runtime.
 
@@ -59,7 +63,8 @@ TMDb credentials are used for metadata and artwork only. The app uses the TMDb A
 | `npm run collect:tizen3` / `collect:tizen6` | Rename the extension-produced package to its compatibility-specific name. |
 | `npm run launch:tizen3 -- TV_IP` / `launch:tizen6 -- TV_IP` | Install and launch a signed package on a TV without changing VS Code settings. |
 | `npm run inspect:m3u` | Print a credential-safe summary of the private playlist configured in `.env`. |
-| `npm run companion:dev` | Start the LAN-only development companion search service on port `8787`. |
+| `npm run companion:dev` | Start the optional LAN development relay for sending playback to a TV on port `8787`. |
+| `npm run dev:personal` | Start the personal Vite web app and LAN relay together. Ctrl+C stops both. |
 
 ## Tizen TV build and deployment
 

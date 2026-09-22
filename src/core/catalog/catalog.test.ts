@@ -11,6 +11,20 @@ describe("normalizeTitle", () => {
     });
   });
 
+  it("removes a leading 4K quality tag and the following provider tag from searches", () => {
+    expect(normalizeTitle("4K-NC:Jaws")).toEqual({
+      title: "4K-NC:Jaws",
+      searchTitle: "jaws",
+      year: null,
+    });
+    expect(normalizeTitle("4K: Blade Runner - 1982")).toMatchObject({
+      title: "4K: Blade Runner",
+      searchTitle: "blade runner",
+      year: 1982,
+    });
+    expect(normalizeTitle("4K Restoration")).toMatchObject({ searchTitle: "restoration" });
+  });
+
   it("extracts season and episode while searching by the series title", () => {
     expect(normalizeTitle("SE:Example Show S01E02 - 2024")).toMatchObject({
       title: "Example Show S01E02",

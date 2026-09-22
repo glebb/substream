@@ -67,12 +67,12 @@ For personal TV development only, the root `.env` can be embedded into the insta
 npm run build:tizen:personal
 ```
 
-This is deliberately separate from `npm run build:tizen`; the normal build contains no injected configuration. The personal command requires both `IPTV_M3U_URL` and `OPENSUBTITLES_API_KEY` to be present in the ignored root `.env` file. `npm run dev:personal` starts a local browser server with the same defaults, while `npm run build:personal` creates the equivalent browser build in the root `dist/` folder.
+This is deliberately separate from `npm run build:tizen`; the normal build contains no injected configuration. The personal command requires both `IPTV_M3U_URL` and `OPENSUBTITLES_API_KEY` to be present in the ignored root `.env` file. `npm run dev:personal` starts the local browser server with the same defaults and the optional LAN TV relay together; Ctrl+C stops both. `npm run build:personal` creates the equivalent browser build in the root `dist/` folder.
 
 | Command | Output | Injects `.env` values? |
 | --- | --- | --- |
 | `npm run dev` | Local Vite server | No |
-| `npm run dev:personal` | Local Vite server | Yes |
+| `npm run dev:personal` | Local Vite server and LAN TV relay | Yes |
 | `npm run build` | `dist/` | No |
 | `npm run build:personal` | `dist/` | Yes |
 | `npm run build:tizen` | `tizen/dist/` | No |
@@ -288,4 +288,4 @@ These are deployment notes from earlier UE75MU8005 testing, not a substitute for
 - AVPlay external-subtitle paths are rejected by this TV firmware. The app instead renders parsed, timed SRT cues itself over the video surface. ASS/SSA positioning tags and inline HTML formatting tags are omitted from the visible subtitle text.
 - In the player, Left/Right skip one minute, Up/Down move through on-screen controls, and the physical Play/Pause key toggles playback. The Aspect control cycles Auto, Fit, and Fill; Subtitle A−/A+ change overlay text size.
 - The browser player renders downloaded SRT text as Blob/WebVTT tracks. The UE75MU8005 firmware rejects AVPlay's external-subtitle API, so the TV adapter parses the SRT locally and renders timed subtitle text over playback from AVPlay's play-time callback. No filesystem permissions are needed.
-- `npm run dev:personal` must stay running during local subtitle testing because it provides the local OpenSubtitles proxy.
+- `npm run dev:personal` must stay running during local subtitle testing because Vite provides the local OpenSubtitles proxy. The same command also runs the LAN TV relay for **Play on TV**.

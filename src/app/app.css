@@ -176,6 +176,8 @@ button:disabled { cursor: default; opacity: .45; }
 .settings-section { background: var(--panel); border: 1px solid var(--border-soft); border-radius: .7rem; margin: 1rem 0; padding: 1rem 1.15rem; }
 .settings-section h3 { margin: 0 0 .35rem; }
 .settings-section p { margin: .35rem 0 .8rem; }
+.settings-section > label, .settings-section > input { display: block; margin: .5rem 0; }
+.settings-section > input { max-width: 36rem; width: 100%; }
 .danger-zone { border-color: #74434f; }
 .confirmation-panel { background: var(--panel-raised); border: 1px solid var(--border); border-radius: .7rem; padding: 1.2rem; width: min(100%, 30rem); }
 .danger-button, .quiet-danger { background: var(--danger); border-color: #a65c6d; color: #260b12; }
@@ -195,6 +197,12 @@ button:disabled { cursor: default; opacity: .45; }
 .subtitle-results article { background: var(--panel-raised); border: 1px solid var(--border-soft); border-radius: .55rem; display: grid; gap: .35rem; padding: .8rem 1rem; }
 .subtitle-results span { color: var(--muted); font-size: .85rem; }
 .browse-tabs { border-bottom: 1px solid #30394b; display: flex; gap: .45rem; margin: .2rem 0 1.4rem; overflow-x: auto; padding: 0 0 .45rem; }
+.catalog-search { min-width: 0; }
+.catalog-search-form { max-width: 52rem; margin: 1rem 0; }
+.catalog-search-form label { display: block; margin-bottom: .4rem; }
+.catalog-search-controls { display: flex; gap: .65rem; }
+.catalog-search-controls input { background: #181c28; color: inherit; flex: 1; min-width: 0; }
+.search-results { margin-top: 1rem; }
 .browse-tab { background: transparent; border-radius: .45rem; color: #bac6d8; min-width: 7.5rem; padding: .8rem 1.15rem; transition: background-color .14s ease, color .14s ease, transform .14s ease; }
 .browse-tab.selected { background: var(--panel-selected); color: var(--text); box-shadow: inset 0 -3px var(--blue); }
 .browse-tab:focus, .browse-tab:focus-visible { transform: translateY(-2px); }
@@ -270,6 +278,7 @@ button:disabled { cursor: default; opacity: .45; }
   .app-header { align-items: flex-start; }
   .app-header > button { align-self: flex-end; }
   .browse-tabs { margin-bottom: 1rem; }
+  .catalog-search-controls { align-items: stretch; flex-direction: column; }
   .browse-tab { min-width: 0; padding-left: .7rem; padding-right: .7rem; }
   .settings-section, .subtitles { padding: .9rem; }
   .player-controls button { flex: 1 1 auto; }

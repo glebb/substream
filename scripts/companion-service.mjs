@@ -13,7 +13,7 @@ export function xtreamConnectionFromPlaylist(playlistUrl) {
   const apiUrl = new URL(playlist.toString());
   apiUrl.pathname = apiUrl.pathname.replace(/get\.php$/i, "player_api.php");
   apiUrl.search = "";
-  return { apiUrl, username, password, sourceFingerprint: stableId(apiUrl.origin + apiUrl.pathname) };
+  return { apiUrl, username, password, sourceFingerprint: stableId(apiUrl.origin + apiUrl.pathname + "\0" + username) };
 }
 
 export async function fetchXtreamAction(connection, action, parameters = {}, request = fetch) {
@@ -26,6 +26,28 @@ export async function fetchXtreamAction(connection, action, parameters = {}, req
   if (!response.ok) throw new Error("Provider request failed");
   const body = await response.json();
   return Array.isArray(body) ? body : body && typeof body === "object" ? body : [];
+}
+
+/** Resolve one series episode by its provider ID; only safe metadata leaves this service. */
+export async function resolveXtreamEpisode(connection, seriesId, episodeId, request = fetch) {
+  if (!/^\d{1,20}$/.test(String(seriesId)) || !/^\d{1,20}$/.test(String(episodeId))) return null;
+  const response = await fetchXtreamAction(connection, "get_series_info", { series_id: String(seriesId) }, request);
+  const episodes = response?.episodes;
+  if (!episodes || typeof episodes !== "object") return null;
+  for (const season of Object.values(episodes)) {
+    if (!Array.isArray(season)) continue;
+    const found = season.find((record) => String(record?.id ?? "") === String(episodeId));
+    if (!found) continue;
+    const name = typeof found.title === "string" ? found.title.trim() : "";
+    if (!name) return null;
+    return {
+      id: String(episodeId), kind: "episode", title: normalizeTitle(name).title,
+      year: null,
+      extension: /^[a-z0-9]{1,10}$/i.test(String(found.container_extension ?? "")) ? String(found.container_extension).toLowerCase() : "mp4",
+      sourceFingerprint: connection.sourceFingerprint,
+    };
+  }
+  return null;
 }
 
 export async function loadXtreamCatalogue(connection, request = fetch) {

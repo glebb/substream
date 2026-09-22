@@ -12,6 +12,7 @@ describe("XtreamClient", () => {
     expect(movies).toMatchObject([{ title: "Example Movie", year: 2024, streamUrl: "https://iptv.example/movie/user/pass/7.mkv" }]);
     expect(request).toHaveBeenCalledWith(expect.stringContaining("player_api.php?"));
     expect(request).toHaveBeenCalledWith(expect.stringContaining("action=get_vod_streams"));
+    expect(client.pairingFingerprint()).not.toContain("user");
   });
 
   it("returns null for non-Xtream playlist URLs", () => {
@@ -26,6 +27,12 @@ describe("XtreamClient", () => {
     expect(client.sourceFingerprint()).toMatch(/^vod_[a-z0-9]+$/);
     expect(client.sourceFingerprint()).toBe(XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=other&password=different")?.sourceFingerprint());
     expect(client.sourceFingerprint()).not.toBe(XtreamClient.fromPlaylistUrl("https://different.example/get.php?username=user&password=pass")?.sourceFingerprint());
+    const otherAccount = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=other&password=different");
+    const sameAccountDifferentPassword = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=rotated");
+    expect(client.pairingFingerprint()).toMatch(/^vod_[a-z0-9]+$/);
+    expect(client.pairingFingerprint()).not.toBe(otherAccount?.pairingFingerprint());
+    expect(client.pairingFingerprint()).toBe(sameAccountDifferentPassword?.pairingFingerprint());
+    expect(client.pairingFingerprint()).not.toContain("user");
   });
 
   it("loads movie and series categories without downloading streams", async () => {

@@ -143,6 +143,11 @@ export class XtreamClient {
     return stableId(this.connection.apiUrl.origin + this.connection.apiUrl.pathname);
   }
 
+  /** Account-aware pairing identity; hashes the username without exposing it. */
+  pairingFingerprint(): string {
+    return stableId(this.connection.apiUrl.origin + this.connection.apiUrl.pathname + "\0" + this.connection.username);
+  }
+
   private async get<T>(action: string, parameters: Record<string, string> = {}): Promise<T> {
     const url = new URL(this.connection.apiUrl.toString());
     url.searchParams.set("username", this.connection.username);

@@ -3,6 +3,8 @@ import type { VodGroup, VodSort } from "../platform/web/indexed-db-catalog.ts";
 
 export type BrowseCollection = "recent" | "movies" | "series" | "favourites";
 export const BROWSE_COLLECTION_ORDER: readonly BrowseCollection[] = ["favourites", "recent", "movies", "series"];
+export type AppSection = BrowseCollection | "search";
+export const APP_SECTION_ORDER: readonly AppSection[] = ["favourites", "recent", "movies", "series", "search"];
 
 /** Mixed local groups remain reachable from either typed collection. */
 export function browseGroupsForCollection(groups: readonly VodGroup[], collection: Exclude<BrowseCollection, "recent">): VodGroup[] {

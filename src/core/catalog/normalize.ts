@@ -7,6 +7,7 @@ export interface NormalizedTitle {
 }
 
 const LANGUAGE_PREFIX = /^[A-Z]{2,3}\s*(?::|-)\s*/;
+const FOUR_K_PREFIX = /^4K(?:\s*[-:]\s*|\s+)(?=\S)/i;
 const TRAILING_YEAR = /\s*(?:[-–—]\s*|\()\b((?:19|20)\d{2})\)?\s*$/;
 const PARENTHESIZED_YEAR = /\((?:19|20)\d{2}\)/g;
 const EPISODE_MARKER = /(?:\s*[-–—]?\s*)(?:s(?:eason)?\s*(\d{1,2})\s*e(?:pisode)?\s*(\d{1,3})|(\d{1,2})\s*x\s*(\d{1,3}))/i;
@@ -22,6 +23,11 @@ export function normalizeTitle(value: string): NormalizedTitle {
   const episodeMatch = title.match(EPISODE_MARKER);
   const searchSource = (episodeMatch?.index === undefined ? title : title.slice(0, episodeMatch.index))
     .replace(PARENTHESIZED_YEAR, " ")
+    // Some providers prepend quality and region tags such as `4K-NC:`.
+    // Keep the display title intact, but exclude those tags from metadata and
+    // subtitle search terms.
+    .replace(FOUR_K_PREFIX, "")
+    .replace(LANGUAGE_PREFIX, "")
     .trim();
   const searchTitle = searchSource
     .normalize("NFKD")
