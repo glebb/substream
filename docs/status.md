@@ -42,7 +42,7 @@ npm run inspect:m3u # credential-safe summary of the private playlist in .env
 ## LAN companion search
 
 - The optional LAN companion service searches a full Xtream provider catalogue for a paired phone or computer. The TV keeps provider credentials and final stream URL derivation; the browser caches only safe catalogue metadata in IndexedDB.
-- A pairing listener remains active after Settings closes, so companion selections always move the TV to title details. This remains a trusted-LAN development feature: six-digit sessions expire after 30 minutes, M3U-only sources are unsupported, and selection relay requires the local service to be online.
+- A companion listener remains active after Settings closes, so selections always move the TV to title details. The TV attempts a best-effort startup connection to the configured LAN service and Settings provides a manual reconnect. This remains a trusted-LAN development feature: it has no authentication code, connections expire after 30 minutes, M3U-only sources are unsupported, and selection relay requires the local service to be online.
 - See [companion-search.md](companion-search.md) for operation and security constraints.
 
 ## UI and remote focus

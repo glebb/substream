@@ -1,4 +1,4 @@
-const pairForm = document.querySelector("#pair-form");
+const connectButton = document.querySelector("#connect");
 const searchPanel = document.querySelector("#search");
 const searchForm = document.querySelector("#search-form");
 const queryInput = document.querySelector("#query");
@@ -8,28 +8,34 @@ const error = document.querySelector("#error");
 const refreshButton = document.querySelector("#refresh");
 let sessionId = "";
 let catalogue = [];
+let sourceFingerprint = "";
 const base = window.location.origin;
 const DATABASE_NAME = "substream-companion";
 const STORE_NAME = "catalogues";
 
-const params = new URLSearchParams(window.location.search);
-if (params.get("code")) document.querySelector("#code").value = params.get("code");
+connectButton.addEventListener("click", () => void connectToActiveTv());
 
-pairForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
+async function connectToActiveTv() {
+  connectButton.disabled = true;
   error.textContent = "";
   try {
-    const response = await fetch(`${base}/api/pair/join`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: document.querySelector("#code").value }) });
+    const response = await fetch(`${base}/api/active`);
     const value = await response.json();
-    if (!response.ok) throw new Error(value.error || "Pairing failed.");
+    if (!response.ok) throw new Error(value.error || "TV connection failed.");
     sessionId = value.sessionId;
-    pairForm.hidden = true;
+    sourceFingerprint = value.sourceFingerprint || "";
+    connectButton.hidden = true;
     searchPanel.hidden = false;
     queryInput.focus();
-    status.textContent = "Connected. Saving a searchable catalogue on this device…";
-    await refreshCatalogue(false);
-  } catch (cause) { error.textContent = cause instanceof Error ? cause.message : "Pairing failed."; }
-});
+    catalogue = await loadCatalogue(sourceFingerprint);
+    status.textContent = catalogue.length
+      ? `${catalogue.length.toLocaleString()} saved titles are ready to search. Use Refresh catalogue to download changes.`
+      : "No saved catalogue for this provider. Use Refresh catalogue to download one.";
+  } catch (cause) { error.textContent = cause instanceof Error ? cause.message : "TV connection failed."; }
+  finally { connectButton.disabled = false; }
+}
+
+void connectToActiveTv();
 
 searchForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -38,36 +44,30 @@ searchForm.addEventListener("submit", async (event) => {
   results.replaceChildren();
   status.textContent = catalogue.length ? "Searching saved catalogue…" : "Searching provider catalogue…";
   try {
-    const found = catalogue.length ? searchCatalogue(catalogue, query) : await searchProvider(query);
+    if (!catalogue.length) throw new Error("No saved catalogue is available. Use Refresh catalogue first.");
+    const found = searchCatalogue(catalogue, query);
     showResults(found);
   } catch (cause) { status.textContent = ""; error.textContent = cause instanceof Error ? cause.message : "Search failed."; }
 });
 
-refreshButton.addEventListener("click", () => void refreshCatalogue(true));
+refreshButton.addEventListener("click", () => void refreshCatalogue());
 
-async function refreshCatalogue(forceProviderRefresh) {
+async function refreshCatalogue() {
   refreshButton.disabled = true;
   error.textContent = "";
-  status.textContent = forceProviderRefresh ? "Refreshing provider catalogue…" : "Loading provider catalogue…";
+  status.textContent = "Refreshing provider catalogue…";
   try {
-    const response = await fetch(`${base}/api/catalogue?sessionId=${encodeURIComponent(sessionId)}${forceProviderRefresh ? "&refresh=1" : ""}`);
+    const response = await fetch(`${base}/api/catalogue?sessionId=${encodeURIComponent(sessionId)}&refresh=1`);
     const value = await response.json();
     if (!response.ok || !Array.isArray(value.records)) throw new Error(value.error || "Catalogue refresh failed.");
     catalogue = value.records;
     await saveCatalogue(catalogue);
     status.textContent = `${catalogue.length.toLocaleString()} titles saved on this device.`;
   } catch (cause) {
-    catalogue = await loadLatestCatalogue();
+    catalogue = await loadCatalogue(sourceFingerprint);
     if (catalogue.length) status.textContent = `${catalogue.length.toLocaleString()} saved titles are available offline. Refresh will work when the LAN service returns.`;
     else error.textContent = cause instanceof Error ? cause.message : "Catalogue refresh failed.";
   } finally { refreshButton.disabled = false; }
-}
-
-async function searchProvider(query) {
-  const response = await fetch(`${base}/api/search?sessionId=${encodeURIComponent(sessionId)}&q=${encodeURIComponent(query)}`);
-  const value = await response.json();
-  if (!response.ok) throw new Error(value.error || "Search failed.");
-  return value.results;
 }
 
 function searchCatalogue(records, query) {
@@ -112,16 +112,17 @@ async function saveCatalogue(records) {
   database.close();
 }
 
-async function loadLatestCatalogue() {
+async function loadCatalogue(expectedFingerprint) {
+  if (!expectedFingerprint) return [];
   try {
     const database = await openDatabase();
-    const records = await new Promise((resolve, reject) => {
-      const request = database.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAll();
+    const catalogue = await new Promise((resolve, reject) => {
+      const request = database.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(expectedFingerprint);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
     database.close();
-    return records.sort((left, right) => right.savedAt - left.savedAt)[0]?.records || [];
+    return catalogue?.records || [];
   } catch { return []; }
 }
 
@@ -135,7 +136,8 @@ async function select(item, button) {
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || "The TV could not receive this selection.");
     status.textContent = `${item.title} sent to TV.`;
-  } catch (cause) { button.disabled = false; error.textContent = cause instanceof Error ? cause.message : "Selection failed."; }
+  } catch (cause) { error.textContent = cause instanceof Error ? cause.message : "Selection failed."; }
+  finally { button.disabled = false; }
 }
 
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]); }

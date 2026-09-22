@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { randomBytes, randomInt } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ const port = Number(process.env.COMPANION_PORT || 8787);
 const host = process.env.COMPANION_HOST || "0.0.0.0";
 const publicDir = join(fileURLToPath(new URL("../public/", import.meta.url)));
 const sessions = new Map();
+let activeSessionId = "";
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
 function json(response, status, value) {
@@ -28,19 +29,14 @@ function sessionFor(value) {
   const session = sessions.get(value);
   if (!session || Date.now() - session.createdAt > SESSION_TTL_MS) {
     if (session) sessions.delete(value);
+    if (activeSessionId === value) activeSessionId = "";
     return null;
   }
   return session;
 }
 
 function publicSession(session) {
-  return { sessionId: session.id, code: session.code, expiresAt: session.createdAt + SESSION_TTL_MS };
-}
-
-function randomCode() {
-  let code = "";
-  do code = String(randomInt(100000, 1000000)); while ([...sessions.values()].some((session) => session.code === code));
-  return code;
+  return { sessionId: session.id, expiresAt: session.createdAt + SESSION_TTL_MS, sourceFingerprint: session.connection.sourceFingerprint };
 }
 
 function validateSelection(value) {
@@ -69,27 +65,26 @@ function publicCatalogue(records) {
 
 async function route(request, response, url) {
   if (request.method === "OPTIONS") { response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "content-type" }); response.end(); return; }
-  if (request.method === "POST" && url.pathname === "/api/pair/create") {
+  if (request.method === "POST" && url.pathname === "/api/connect") {
     try {
       const input = await body(request);
       const connection = xtreamConnectionFromPlaylist(String(input.playlistUrl || ""));
       if (!connection) return json(response, 400, { error: "Only Xtream provider URLs can be paired during development." });
-      const session = { id: randomBytes(18).toString("hex"), code: randomCode(), createdAt: Date.now(), connection, records: null, events: [], nextEvent: 1 };
+      const session = { id: randomBytes(18).toString("hex"), createdAt: Date.now(), connection, records: null, events: [], nextEvent: 1 };
+      sessions.clear();
       sessions.set(session.id, session);
+      activeSessionId = session.id;
       return json(response, 200, publicSession(session));
-    } catch { return json(response, 400, { error: "Pairing request was invalid." }); }
+    } catch { return json(response, 400, { error: "Companion connection request was invalid." }); }
   }
-  if (request.method === "POST" && url.pathname === "/api/pair/join") {
-    try {
-      const input = await body(request);
-      const session = [...sessions.values()].find((candidate) => candidate.code === String(input.code || "").trim());
-      return session ? json(response, 200, { sessionId: session.id, expiresAt: session.createdAt + SESSION_TTL_MS }) : json(response, 404, { error: "Pairing code expired or not found." });
-    } catch { return json(response, 400, { error: "Pairing request was invalid." }); }
+  if (request.method === "GET" && url.pathname === "/api/active") {
+    const session = sessionFor(activeSessionId);
+    return session ? json(response, 200, publicSession(session)) : json(response, 404, { error: "No TV is connected. Open Substream on the TV, then connect from Settings if needed." });
   }
   if (request.method === "GET" && url.pathname === "/api/search") {
     const session = sessionFor(url.searchParams.get("sessionId"));
     const query = url.searchParams.get("q") || "";
-    if (!session) return json(response, 404, { error: "Pairing session expired." });
+    if (!session) return json(response, 404, { error: "Companion connection expired." });
     if (query.trim().length < 2) return json(response, 200, { results: [] });
     try {
       return json(response, 200, { results: searchCatalogue(await catalogueFor(session), query) });
@@ -97,7 +92,7 @@ async function route(request, response, url) {
   }
   if (request.method === "GET" && url.pathname === "/api/catalogue") {
     const session = sessionFor(url.searchParams.get("sessionId"));
-    if (!session) return json(response, 404, { error: "Pairing session expired." });
+    if (!session) return json(response, 404, { error: "Companion connection expired." });
     try {
       const refresh = url.searchParams.get("refresh") === "1";
       return json(response, 200, { records: publicCatalogue(await catalogueFor(session, refresh)), refreshedAt: Date.now() });
@@ -108,7 +103,7 @@ async function route(request, response, url) {
       const input = await body(request);
       const session = sessionFor(String(input.sessionId || ""));
       const selection = validateSelection(input.selection);
-      if (!session || !selection || selection.sourceFingerprint !== session.connection.sourceFingerprint) return json(response, 400, { error: "Selection is invalid or pairing expired." });
+      if (!session || !selection || selection.sourceFingerprint !== session.connection.sourceFingerprint) return json(response, 400, { error: "Selection is invalid or companion connection expired." });
       const event = { sequence: session.nextEvent++, selection };
       session.events.push(event);
       session.events = session.events.slice(-20);
@@ -117,7 +112,7 @@ async function route(request, response, url) {
   }
   if (request.method === "GET" && url.pathname === "/api/pair/events") {
     const session = sessionFor(url.searchParams.get("sessionId"));
-    if (!session) return json(response, 404, { error: "Pairing session expired." });
+    if (!session) return json(response, 404, { error: "Companion connection expired." });
     const after = Number(url.searchParams.get("after") || 0);
     return json(response, 200, { events: session.events.filter((event) => event.sequence > after) });
   }
@@ -143,5 +138,8 @@ const server = createServer((request, response) => {
 server.listen(port, host, () => console.log(`Companion service listening on http://localhost:${port}`));
 
 setInterval(() => {
-  for (const [id, session] of sessions) if (Date.now() - session.createdAt > SESSION_TTL_MS) sessions.delete(id);
+  for (const [id, session] of sessions) if (Date.now() - session.createdAt > SESSION_TTL_MS) {
+    sessions.delete(id);
+    if (activeSessionId === id) activeSessionId = "";
+  }
 }, 60_000).unref();

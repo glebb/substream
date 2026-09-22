@@ -38,9 +38,9 @@ The TV's IndexedDB catalogue is intentionally not used for companion search. Run
 npm run companion:dev
 ```
 
-The service listens on port `8787` (`COMPANION_PORT` can change it). Set `COMPANION_SERVER_URL` to its LAN address in `.env`, rebuild the TV app, then select **Settings → Companion search → Start pairing**. The companion browser caches credential-free catalogue metadata in IndexedDB and continues to search its latest saved catalogue when the local service goes down; it needs the service and paired TV online to send a selection. This development service currently supports Xtream `get.php` URLs only.
+The service listens on port `8787` (`COMPANION_PORT` can change it). Set `COMPANION_SERVER_URL` to its LAN address in `.env` and rebuild the TV app. On startup, the TV makes a best-effort connection to that address; if the service starts later, use **Settings → Companion search → Connect companion service**. Open the companion address on a phone or computer—no code is required. The companion browser caches credential-free catalogue metadata in IndexedDB, reuses that cache after service restarts, and downloads from the provider only when **Refresh catalogue** is selected. It needs the service and TV app online to send a selection. This development service currently supports Xtream `get.php` URLs only.
 
-See [the companion-search guide](docs/companion-search.md) for setup, pairing, remote behavior, caching, security boundaries, and troubleshooting.
+See [the companion-search guide](docs/companion-search.md) for setup, connection behavior, caching, security boundaries, and troubleshooting.
 
 For personal builds, copy the variable names from `.env.example` into a local, ignored `.env` file. `dev:personal`, `build:personal`, and the personal Tizen build commands require the playlist URL, OpenSubtitles API key, and either `TMDB_API_READ_ACCESS_TOKEN` or `TMDB_API_KEY`. The commands read these values at build startup; they do not load credentials from the app at runtime.
 

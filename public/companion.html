@@ -20,7 +20,7 @@
   <body>
     <h1>Companion search</h1>
     <p class="hint">Searches the paired provider catalogue on the LAN. Provider credentials and stream URLs stay on the TV/local service.</p>
-    <form id="pair-form"><label for="code">TV pairing code</label><input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required><button>Connect to TV</button></form>
+    <button id="connect" type="button">Connect to active TV</button>
     <section id="search" hidden><form id="search-form"><label for="query">Search the full catalogue</label><input id="query" autocomplete="off" placeholder="Movie or series title"><button>Search</button></form><button id="refresh" type="button">Refresh catalogue</button><p id="status" class="hint" role="status"></p><div id="results"></div></section>
     <p id="error" class="error" role="alert"></p>
     <script type="module" src="/companion.js"></script>

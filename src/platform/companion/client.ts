@@ -11,11 +11,11 @@ export type CompanionSelection = {
 };
 
 export type CompanionEvent = { sequence: number; selection: CompanionSelection };
-export type CompanionPairing = { sessionId: string; code: string; expiresAt: number };
+export type CompanionConnection = { sessionId: string; expiresAt: number };
 
 export function companionServerUrl(): string {
   const configured = new URLSearchParams(globalThis.location?.search ?? "").get("companion");
-  const value = configured || globalThis.localStorage?.getItem("substream.companion-url") || packageDefaults.companionServerUrl || globalThis.location?.origin || "";
+  const value = configured || globalThis.localStorage?.getItem("substream.companion-url") || packageDefaults.companionServerUrl || "";
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return "";
@@ -23,21 +23,21 @@ export function companionServerUrl(): string {
   } catch { return ""; }
 }
 
-export async function createCompanionPairing(server: string, playlistUrl: string): Promise<CompanionPairing> {
-  const response = await fetch(server + "/api/pair/create", {
+export async function connectCompanionService(server: string, playlistUrl: string): Promise<CompanionConnection> {
+  const response = await fetch(server + "/api/connect", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ playlistUrl }),
   });
-  const value = await response.json() as { sessionId?: string; code?: string; expiresAt?: number; error?: string };
-  if (!response.ok || !value.sessionId || !value.code || !value.expiresAt) throw new Error(value.error || "Companion pairing is unavailable.");
-  return { sessionId: value.sessionId, code: value.code, expiresAt: value.expiresAt };
+  const value = await response.json() as { sessionId?: string; expiresAt?: number; error?: string };
+  if (!response.ok || !value.sessionId || !value.expiresAt) throw new Error(value.error || "Companion service is unavailable.");
+  return { sessionId: value.sessionId, expiresAt: value.expiresAt };
 }
 
 export async function companionEvents(server: string, sessionId: string, after: number): Promise<CompanionEvent[]> {
   const response = await fetch(server + "/api/pair/events?sessionId=" + encodeURIComponent(sessionId) + "&after=" + after, { cache: "no-store" });
   const value = await response.json() as { events?: CompanionEvent[]; error?: string };
-  if (!response.ok) throw new Error(value.error || "Companion pairing expired.");
+  if (!response.ok) throw new Error(value.error || "Companion connection expired.");
   return Array.isArray(value.events) ? value.events : [];
 }
 

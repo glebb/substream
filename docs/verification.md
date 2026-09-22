@@ -23,7 +23,7 @@ Use synthetic data only. The check command includes React TSX, Vite configuratio
 - Replace a ready catalogue, then force a staged write to fail. The old generation must remain browseable and metadata must not retain a pending generation. Repeat with provider categories that share a display name but have different IDs.
 - Deny local-storage access and confirm bundled defaults remain usable. Drive browser and AVPlay adapters through loading, buffering, pause, completion, synchronous setup failure, and replacement-stream callbacks.
 - Inspect a synthetic oversized response and a failing response whose error includes a signed-looking URL. The inspection diagnostic must contain neither URL nor provider-controlled metadata.
-- With a synthetic Xtream source, pair a companion browser, search and select a title after leaving TV Settings, while browsing, and during playback. Each selection must open the selected title details. Confirm the browser cache contains no credentials or stream URLs, disconnect the companion service and search the saved catalogue, then reconnect and use **Refresh catalogue**.
+- With a synthetic Xtream source, start the TV app while the companion service is running, open the companion page without a code, then search and select a title after leaving TV Settings, while browsing, and during playback. Each selection must open the selected title details. Also start the service after the TV app and confirm Settings reconnects it. Confirm the browser cache contains no credentials or stream URLs, disconnect the companion service and search the saved catalogue, then reconnect and use **Refresh catalogue**.
 
 ## Physical-TV smoke check
 
