@@ -4,11 +4,11 @@ const MAX_ID_LENGTH = 256;
 
 const DEFAULT_MOVIE_GROUP_NAMES = [
   "Action", "Adventure", "Comedy", "Crime", "Documentary", "Drama", "Fantasy", "Finland",
-  "Horror", "Marvel and DC", "Music", "Nordic [Multi-Sub]", "Nordic 4K", "Science-Fiction",
+  "Horror", "Marvel and DC", "Music", "Nordic [Multi-Sub]", "Nordic 4K", "Science-Fiction", "Thriller", "War", "Western", "Family", "Kids", "Nordic Kids",
 ];
 const DEFAULT_SERIES_GROUP_NAMES = [
   "Apple TV+", "Finland", "HBO", "Netflix", "Nordic 4K", "Nordic Apple TV", "Nordic Disney",
-  "Nordic Netflix", "Nordic Prime Video", "Nordic Viaplay",
+  "Nordic Netflix", "Nordic Prime Video", "Nordic Viaplay", "Nordic HBO", "Other", "Nordic Kids (Multi-Audio)",
 ];
 
 interface KeyValueStorage {
