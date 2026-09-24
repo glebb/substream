@@ -106,6 +106,17 @@ When the VS Code Tizen extension already signs packages successfully, use this w
 
 The prepare command records the intended variant in an ignored local marker. The collect command refuses to rename a package prepared for the other variant, which prevents accidentally labelling a Tizen 3 build as Tizen 6.
 
+### One-command interactive workflow
+
+Copy `.tizen-devices.local.example` to `.tizen-devices.local` at the repository root and configure `TIZEN3_TV_IP` and `TIZEN6_TV_IP`. Then use:
+
+```sh
+npm run deploy:tizen3
+npm run deploy:tizen6
+```
+
+Each command prepares the personal payload, pauses while you run the VS Code signed-package action, then collects, installs, and attempts to launch the matching package after you press Enter. You can override the configured address for one run with `npm run deploy:tizen6 -- 192.168.1.50`.
+
 ### Install and launch by IP
 
 After packaging, the VS Code extension's `sdb` helper can install and launch either WGT without changing `tizentv.targetDeviceAddress` in VS Code settings:

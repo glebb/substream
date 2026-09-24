@@ -64,6 +64,7 @@ TMDb credentials are used for metadata and artwork only. The app uses the TMDb A
 | `npm run prepare:tizen3:personal` / `prepare:tizen6:personal` | Prepare a signed-package payload for the VS Code Tizen extension. |
 | `npm run collect:tizen3` / `collect:tizen6` | Rename the extension-produced package to its compatibility-specific name. |
 | `npm run launch:tizen3 -- TV_IP` / `launch:tizen6 -- TV_IP` | Install and launch a signed package on a TV without changing VS Code settings. |
+| `npm run deploy:tizen3` / `deploy:tizen6` | Prepare a personal build, pause for VS Code signing, then collect and launch it on the configured TV. |
 | `npm run inspect:m3u` | Print a credential-safe summary of the private playlist configured in `.env`. |
 | `npm run companion:dev` | Start the optional LAN development relay for sending playback to a TV on port `8787`. |
 | `npm run dev:personal` | Start the personal Vite web app and LAN relay together. Ctrl+C stops both. |
@@ -79,6 +80,8 @@ npm run prepare:tizen6:personal
 npm run collect:tizen6
 npm run launch:tizen6 -- TV_IP
 ```
+
+For the shorter interactive workflow, copy `.tizen-devices.local.example` to the ignored `.tizen-devices.local`, set each TV address, then run `npm run deploy:tizen3` or `npm run deploy:tizen6`. The command pauses while you perform the VS Code signing action and continues after you press Enter.
 
 Use `tizen3` for Samsung Tizen 3.0 / Chromium 47 TVs. It includes the legacy JavaScript entry and static-color/flexbox UI fallback required by those browsers. Follow the complete [Tizen setup, packaging, and deployment guide](tizen/README.md) for certificates, device connection, packaging, and installation.
 

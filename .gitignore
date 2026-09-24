@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 .tizen-cli.local
+.tizen-devices.local
 node_modules/
 dist/
 tizen/dist/

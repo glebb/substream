@@ -1,0 +1,4 @@
+# Copy this file to .tizen-devices.local and update the addresses for your TVs.
+# The local file is ignored by Git.
+TIZEN3_TV_IP=192.168.1.39
+TIZEN6_TV_IP=192.168.1.108

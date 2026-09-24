@@ -23,6 +23,8 @@
     "collect:tizen6": "node scripts/collect-tizen-vscode-package.mjs tizen6",
     "launch:tizen3": "node scripts/launch-tizen-wgt.mjs tizen3",
     "launch:tizen6": "node scripts/launch-tizen-wgt.mjs tizen6",
+    "deploy:tizen3": "node scripts/deploy-tizen-vscode-package.mjs tizen3",
+    "deploy:tizen6": "node scripts/deploy-tizen-vscode-package.mjs tizen6",
     "package:tizen": "node scripts/package-tizen-wgts.mjs",
     "package:tizen:personal": "PERSONAL_BUILD=1 node scripts/package-tizen-wgts.mjs",
     "inspect:m3u": "node --env-file=.env scripts/inspect-m3u.ts",
