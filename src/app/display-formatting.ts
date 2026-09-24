@@ -25,3 +25,9 @@ export function formatGroupDisplayName(name: string): string {
   }
   return repeated && remainder ? remainder : original;
 }
+
+/** Compact provider category text for badges; the tab already states its type. */
+export function formatCategoryBadge(name: string): string {
+  const value = formatGroupDisplayName(name);
+  return value.replace(COLLECTION_PREFIX, "").trim() || value;
+}

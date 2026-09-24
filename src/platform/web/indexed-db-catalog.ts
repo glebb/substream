@@ -62,6 +62,23 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
+function readAllWithCursor<T>(store: IDBObjectStore): Promise<T[]> {
+  const values: T[] = [];
+  const request = store.openCursor();
+  return new Promise((resolve, reject) => {
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor read failed"));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve(values);
+        return;
+      }
+      values.push(cursor.value as T);
+      cursor.continue();
+    };
+  });
+}
+
 function transactionDone(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
@@ -209,15 +226,20 @@ export class IndexedDbCatalogStore {
           if (oldGroups) {
             pendingMigrations += 1;
             const targetGroups = transaction.objectStore(GROUPS_STORE);
-            const groupsRequest = oldGroups.getAll();
+            const groupsRequest = oldGroups.openCursor();
+            groupsRequest.onerror = () => transaction.abort();
             groupsRequest.onsuccess = () => {
-              for (const group of groupsRequest.result as Array<VodGroup & { id?: string }>) {
-                const id = group.id ?? (group.providerCategoryId && group.providerContentType
+              const cursor = groupsRequest.result;
+              if (!cursor) {
+                finishMigrationPart();
+                return;
+              }
+              const group = cursor.value as VodGroup & { id?: string };
+              const id = group.id ?? (group.providerCategoryId && group.providerContentType
                   ? "provider:" + group.providerContentType + ":" + group.providerCategoryId
                   : "local:" + group.name);
-                targetGroups.put({ ...group, id, generation: 0 });
-              }
-              finishMigrationPart();
+              targetGroups.put({ ...group, id, generation: 0 });
+              cursor.continue();
             };
           }
 
@@ -393,7 +415,7 @@ export class IndexedDbCatalogStore {
   async groups(): Promise<VodGroup[]> {
     const generation = await this.activeGeneration();
     const transaction = this.database.transaction(GROUPS_STORE, "readonly");
-    const groups = (await requestResult(transaction.objectStore(GROUPS_STORE).getAll()) as Array<VodGroup & { generation: number }>)
+    const groups = (await readAllWithCursor<VodGroup & { generation: number }>(transaction.objectStore(GROUPS_STORE)))
       .filter((group) => group.generation === generation);
     await transactionDone(transaction);
     return groups.sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));

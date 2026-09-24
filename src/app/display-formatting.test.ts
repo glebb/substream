@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatGroupDisplayName } from "./display-formatting.ts";
+import { formatCategoryBadge, formatGroupDisplayName } from "./display-formatting.ts";
 
 describe("formatGroupDisplayName", () => {
   it("removes repeated collection prefixes without changing the stored name", () => {
@@ -17,5 +17,13 @@ describe("formatGroupDisplayName", () => {
     expect(formatGroupDisplayName("Kids / Movies: Movies: Animated")).toBe("Kids / Movies: Movies: Animated");
     expect(formatGroupDisplayName("  Curated · 2024  ")).toBe("Curated · 2024");
     expect(formatGroupDisplayName("")).toBe("");
+  });
+});
+
+describe("formatCategoryBadge", () => {
+  it("removes a collection prefix from a compact source badge", () => {
+    expect(formatCategoryBadge("Series: Apple TV+")).toBe("Apple TV+");
+    expect(formatCategoryBadge("Movies: Movies: Action")).toBe("Action");
+    expect(formatCategoryBadge("Nordic 4K")).toBe("Nordic 4K");
   });
 });

@@ -38,3 +38,15 @@ export function focusTitleListItem(element: HTMLElement | null, viewport: HTMLEl
     itemRect.bottom,
   );
 }
+
+/** Focus a home card without Chromium 47 aligning it to the viewport top. */
+export function focusPageItem(element: HTMLElement | null): void {
+  if (!element) return;
+  const pageX = window.pageXOffset || 0;
+  const pageY = window.pageYOffset || 0;
+  if (document.activeElement !== element) element.focus();
+  window.scrollTo(pageX, pageY);
+  const rect = element.getBoundingClientRect();
+  const delta = titleListScrollDelta(0, window.innerHeight, rect.top, rect.bottom, 28);
+  if (delta) window.scrollBy(0, delta);
+}

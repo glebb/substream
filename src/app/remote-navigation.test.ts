@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, titleListEndpointAction, titleListNavigationTarget, titleListPageNavigationTarget } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, titleListEndpointAction, titleListNavigationTarget, titleListPageNavigationTarget } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
   it("keeps Settings navigation in DOM order as conditional editors appear", () => {
@@ -123,6 +123,9 @@ describe("remote dashboard navigation", () => {
   it("routes between Settings and the browse tabs", () => {
     expect(dashboardControlNavigationTarget("ArrowDown", true)).toBe("tabs");
     expect(dashboardControlNavigationTarget("ArrowDown", false)).toBeNull();
+    expect(nestedScreenSettingsTarget("ArrowUp", 0)).toBe("settings");
+    expect(nestedScreenSettingsTarget("ArrowUp", 1)).toBeNull();
+    expect(nestedScreenSettingsTarget("ArrowDown", 0)).toBeNull();
   });
 
   it("keeps dialog action navigation within the available choices", () => {

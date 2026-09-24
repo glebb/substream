@@ -18,11 +18,13 @@ Web retains its responsive two-column title grid on wide screens and one-column 
 
 At the top edge, Up returns from a home grid to the selected Recent / Movies / Series tab. In the narrow one-column home grid, Down advances exactly one item and Left/Right stop at each row edge; the final item remains vertically reachable and is scrolled into view. Settings remains above the tab row; Back continues to follow the active screen hierarchy.
 
+Left and Right on the main browse tabs change the collection while keeping focus on the selected tab. Down enters the selected collection: the first item, the search field, or an empty-state action. Choosing an empty-state action may move focus directly into the destination collection.
+
 ## Settings and player controls
 
 Settings uses the same persistent yellow remote-focus treatment as browse tiles and player controls. Focus follows the current control through conditional API-key setup and confirmation dialogs; do not rely on the older Tizen browser's native `:focus` rendering. Settings keeps Back to library first in focus order.
 
-On web, Space toggles playback when the video area is active or while fullscreen. On Tizen, Enter toggles playback in fullscreen only while controls are hidden; when controls are visible, Enter activates the highlighted control. Hidden controls use Left/Right to seek and Up/Down to show the controls with Play/Pause highlighted. Visible controls use arrows to move through the controls shown in the bar, including subtitle size and toggle buttons, while skipping the video surface. Back hides visible controls and restores video-area focus; Back with controls hidden follows the app's fullscreen exit hierarchy. Dedicated media keys remain available in both states. Text-entry controls retain their editing keys and handle Back before fullscreen navigation.
+On web, Space toggles playback when the video area is active or while fullscreen. On Tizen, Enter toggles playback in fullscreen only while controls are hidden; when controls are visible, Enter activates the highlighted control. Hidden controls use Left/Right to seek and Up/Down to show the controls with Play/Pause highlighted. The main control row offers playback, restart, fullscreen, subtitle access, and Subtitles & more; Left/Right seek when controls are hidden. The advanced panel contains aspect, subtitle search, size, timing, and stream information controls. Back closes that panel and restores focus to its opener; in fullscreen, a subsequent Back hides the main controls and restores video-area focus. Back with controls hidden follows the app's fullscreen exit hierarchy. Dedicated media keys remain available in both states. Text-entry controls retain their editing keys and handle Back before fullscreen navigation.
 
 ## Safe navigation change checklist
 

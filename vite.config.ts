@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => {
   const tmdbApiKey = env.TMDB_API_KEY;
   const companionServerUrl = env.COMPANION_SERVER_URL;
   const isPersonalBuild = process.env.PERSONAL_BUILD === "1";
+  const useLocalProviderProxy = process.env.CHROMIUM47_PREVIEW === "1";
   const tizenCompatibilityTarget = process.env.TIZEN_COMPAT_TARGET;
   if (tizenCompatibilityTarget !== undefined && tizenCompatibilityTarget !== "tizen6") {
     throw new Error("TIZEN_COMPAT_TARGET must be tizen6 when it is set");
@@ -35,6 +36,8 @@ export default defineConfig(({ mode }) => {
     // VITE_ variables for them: that would expose them in every browser build.
     define: {
       __SUBSTREAM_PACKAGE_DEFAULTS__: JSON.stringify(packageDefaults),
+      __SUBSTREAM_LOCAL_PROVIDER_PROXY__: JSON.stringify(useLocalProviderProxy),
+      __SUBSTREAM_TV_UI_PREVIEW__: JSON.stringify(useLocalProviderProxy),
     },
     // UE75MU8005 is a 2017 TV running Tizen 3.0 (Chromium M47), which has
     // no ES-module support. Emit a SystemJS-compatible legacy bundle and

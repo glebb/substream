@@ -1,4 +1,5 @@
 import { normalizeTitle, searchTerms, stableId, type VodCatalogItem } from "../../core/catalog/index.ts";
+import { providerRequestUrl } from "../provider-request.ts";
 
 type Request = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
@@ -32,7 +33,7 @@ export class XtreamClient {
     private readonly request: Request,
   ) {}
 
-  static fromPlaylistUrl(playlistUrl: string, request: Request = (url) => fetch(url)): XtreamClient | null {
+  static fromPlaylistUrl(playlistUrl: string, request: Request = (url) => fetch(providerRequestUrl(url))): XtreamClient | null {
     let playlist: URL;
     try {
       playlist = new URL(playlistUrl);

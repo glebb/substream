@@ -12,6 +12,8 @@
     "build:tizen": "vite build --outDir tizen/dist",
     "build:tizen:personal": "PERSONAL_BUILD=1 vite build --outDir tizen/dist",
     "build:tizen:6": "TIZEN_COMPAT_TARGET=tizen6 vite build --outDir tizen/dist",
+    "preview:chromium47": "node scripts/run-chromium47.mjs",
+    "preview:chromium47:personal": "PERSONAL_BUILD=1 node --env-file=.env scripts/run-chromium47.mjs",
     "build:tizen:6:personal": "PERSONAL_BUILD=1 TIZEN_COMPAT_TARGET=tizen6 vite build --outDir tizen/dist",
     "prepare:tizen3": "node scripts/prepare-tizen-vscode-package.mjs tizen3",
     "prepare:tizen3:personal": "PERSONAL_BUILD=1 node scripts/prepare-tizen-vscode-package.mjs tizen3",

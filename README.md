@@ -58,6 +58,8 @@ TMDb credentials are used for metadata and artwork only. The app uses the TMDb A
 | `npm run build` | Produce a standard browser build in `dist/`. |
 | `npm run build:tizen` | Produce the Tizen web payload in `tizen/dist/`. |
 | `npm run build:tizen:6` | Produce a Chromium 76-compatible Tizen 6+ web payload in `tizen/dist/`. |
+| `npm run preview:chromium47` | Open the Tizen 3 build in a local Chromium 47 Docker browser. Add `-- stop` to close it. |
+| `npm run preview:chromium47:personal` | Open Chromium 47 with the supported `.env` values embedded. |
 | `npm run package:tizen` | Build and sign `tizen3.wgt` and `tizen6.wgt` with the configured Tizen CLI. |
 | `npm run prepare:tizen3:personal` / `prepare:tizen6:personal` | Prepare a signed-package payload for the VS Code Tizen extension. |
 | `npm run collect:tizen3` / `collect:tizen6` | Rename the extension-produced package to its compatibility-specific name. |
@@ -79,6 +81,8 @@ npm run launch:tizen6 -- TV_IP
 ```
 
 Use `tizen3` for Samsung Tizen 3.0 / Chromium 47 TVs. It includes the legacy JavaScript entry and static-color/flexbox UI fallback required by those browsers. Follow the complete [Tizen setup, packaging, and deployment guide](tizen/README.md) for certificates, device connection, packaging, and installation.
+
+To inspect the Tizen 3 build locally, start Docker Desktop and run `npm run preview:chromium47`. The command serves a standard, non-personal Tizen 3 build and opens a local noVNC window containing Chromium 47.0.2526.0. Enter a playlist in the app if you want to load a library. The isolated container proxies provider requests through the app's origin to mirror the cross-origin access granted by the Tizen manifest; Chromium web security stays enabled. For automatic setup from `.env`, use `npm run preview:chromium47:personal`; it embeds the playlist URL, OpenSubtitles key, and TMDb credential in the temporary client build. Stop either preview and remove its temporary build with `npm run preview:chromium47 -- stop`. Anyone who can access the bundle or browser container can recover embedded values, so keep this personal preview local. Both commands run Chromium in an x86 Linux container under Docker emulation; this does not reproduce Samsung TV APIs or AVPlay.
 
 To avoid exporting the local Tizen SDK path for every package build, copy `.tizen-cli.local.example` to `.tizen-cli.local` and set its `TIZEN_CLI` value. The local file is ignored by Git.
 

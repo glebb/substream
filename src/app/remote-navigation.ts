@@ -43,6 +43,11 @@ export function dashboardControlNavigationTarget(key: string, settingsIsFocused:
   return key === "ArrowDown" && settingsIsFocused ? "tabs" : null;
 }
 
+/** Up from the first control of a nested browse screen reaches the global Settings action. */
+export function nestedScreenSettingsTarget(key: string, currentIndex: number): "settings" | null {
+  return key === "ArrowUp" && currentIndex === 0 ? "settings" : null;
+}
+
 /** Keeps keyboard focus synchronized with home-grid movement without stealing it from the tab row. */
 export function homeBrowseFocusTarget(activeFocus: "body" | "tab" | "tile" | "other", selectedTileAvailable: boolean): "tab" | "tile" | "stay" {
   // On the initial ready render the browser may still have body focus.  If
@@ -279,8 +284,8 @@ export interface SubtitleFocusLayoutOptions {
 
 /** Keeps conditionally rendered player subtitle controls and result indexes aligned. */
 export function subtitleFocusLayout(options: SubtitleFocusLayoutOptions) {
-  const subtitleToggle = 9;
-  const timingStart = subtitleToggle + (options.subtitleAttached ? 1 : 0);
+  const subtitleToggle = 5;
+  const timingStart = 11;
   const keyActionStart = timingStart + (options.timingAvailable ? 4 : 0);
   const keyInput = !options.apiKeyConfigured && options.apiKeyEditorOpen ? keyActionStart : null;
   const saveKey = keyInput === null ? null : keyInput + 1;
