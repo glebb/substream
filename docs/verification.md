@@ -12,6 +12,20 @@ npm run build:tizen
 
 Use synthetic data only. The check command includes React TSX, Vite configuration, catalogue migrations, import limits, configuration-storage denial, playback adapters, and the credential-safe playlist-inspection helper. Standard builds do not inject personal configuration. Packaging and target-TV testing are separate from build verification.
 
+## Default personal Chromium 47 verification
+
+Use this as the main end-to-end verification after implementing any user-visible change. It exercises the actual personal catalogue, TMDb artwork, legacy JavaScript/CSS bundle, and remote-navigation path together. It complements—not replaces—`npm run check`, whose fixtures must remain synthetic.
+
+1. Confirm Docker Desktop is running, then run `npm run check`.
+2. Start the local personal preview with `npm run preview:chromium47:personal`. This creates a temporary local Chromium 47 container using the supported values in the ignored `.env` file.
+3. In noVNC, navigate the app with keys only: use Arrow keys for movement, Enter/Return for the remote Action key, Back/Escape for Back, and the Red key where the scenario calls for it. Do not use the mouse, trackpad, or noVNC touch controls to choose tabs, categories, titles, settings, or player controls. A one-time click to give the noVNC canvas keyboard focus is outside the app and is acceptable.
+4. From Recent, use keys to visit Movies and Series, open a populated category, move through several titles, change page with Left/Right, open title details, and return. Confirm the yellow focus treatment and focus restoration after Back.
+5. On at least one populated movie or series list, confirm poster cards appear without blocking navigation. Confirm a title with no resolved artwork retains the same fixed artwork space and a letter fallback, so its row/card aligns with poster-backed entries. Revisit a details page and its browse list to confirm artwork remains available from cache.
+6. Inspect every newly added visual separation in the Chromium 47 preview. Chromium 47 does not apply `gap` between flex items, even though modern browsers do. Use explicit margin or padding as the legacy baseline for space between cards, artwork, text, and controls; treat `gap` only as an optional modern enhancement.
+7. Exercise the changed behaviour, then use `npm run preview:chromium47 -- stop` to stop the container and remove its temporary personal build.
+
+Keep the personal preview local. Never print, paste into notes, capture in logs, or commit the playlist URL, API keys, tokens, signed media URLs, or the generated personal bundle. If the preview needs a new private network permission or provider action beyond the established local flow, obtain approval before running it.
+
 ## High-priority regression scenarios
 
 - Import a synthetic playlist containing a movie, a live channel, and an unclassified URL. Close and reopen IndexedDB. Confirm the unknown record and its evidence survive separately from the VOD catalogue; verify the movie has classification evidence.

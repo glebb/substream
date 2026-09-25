@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, titleListEndpointAction, titleListNavigationTarget, titleListPageNavigationTarget } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
   it("keeps Settings navigation in DOM order as conditional editors appear", () => {
@@ -85,29 +85,13 @@ describe("remote dashboard navigation", () => {
     expect(recentNavigationTarget("ArrowDown", 4, 4)).toBeNull();
   });
 
-  it("moves through the vertical title list one item at a time", () => {
-    expect(titleListNavigationTarget("ArrowDown", 0, 20)).toBe(1);
-    expect(titleListNavigationTarget("ArrowUp", 1, 20)).toBe(0);
-    expect(titleListNavigationTarget("ArrowDown", 18, 20)).toBe(19);
-    expect(titleListNavigationTarget("ArrowDown", 19, 20)).toBeNull();
-    expect(titleListNavigationTarget("ArrowUp", 0, 20)).toBeNull();
-    expect(titleListNavigationTarget("ArrowLeft", 0, 20)).toBeNull();
-    expect(titleListNavigationTarget("ArrowRight", 19, 20)).toBeNull();
-    expect(titleListNavigationTarget("ArrowDown", 0, 1)).toBeNull();
-    expect(titleListNavigationTarget("ArrowDown", -1, 20)).toBeNull();
-    expect(titleListEndpointAction("ArrowUp", 0, 20)).toBe("sort");
-    expect(titleListEndpointAction("ArrowUp", 0, 20, false)).toBeNull();
-    expect(titleListEndpointAction("ArrowDown", 19, 20)).toBe("pagination");
-    expect(titleListEndpointAction("ArrowDown", 19, 20, false)).toBeNull();
-  });
-
-  it("uses Left and Right for page jumps from any selected title", () => {
-    expect(titleListPageNavigationTarget("ArrowRight", 0, 3)).toEqual({ page: 1, focusAtEnd: false });
-    expect(titleListPageNavigationTarget("ArrowLeft", 1, 3)).toEqual({ page: 0, focusAtEnd: true });
-    expect(titleListPageNavigationTarget("ArrowRight", 2, 3)).toBeNull();
-    expect(titleListPageNavigationTarget("ArrowLeft", 0, 3)).toBeNull();
-    expect(titleListPageNavigationTarget("ArrowUp", 1, 3)).toBeNull();
-    expect(titleListPageNavigationTarget("ArrowRight", -1, 3)).toBeNull();
+  it("moves through TV title cards as a four-column grid", () => {
+    expect(gridNavigationTarget("ArrowRight", 0, 10, 4)).toBe(1);
+    expect(gridNavigationTarget("ArrowDown", 1, 10, 4)).toBe(5);
+    expect(gridNavigationTarget("ArrowUp", 5, 10, 4)).toBe(1);
+    expect(gridNavigationTarget("ArrowLeft", 4, 10, 4)).toBeNull();
+    expect(gridNavigationTarget("ArrowDown", 6, 10, 4)).toBeNull();
+    expect(gridNavigationTarget("ArrowRight", 9, 10, 4)).toBeNull();
   });
 
   it("throttles native held-key repeats and stops accepting them after release", () => {

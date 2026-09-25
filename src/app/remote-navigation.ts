@@ -184,30 +184,6 @@ export function recentNavigationTarget(key: string, currentIndex: number, itemCo
   return null;
 }
 
-/** Title-list movement follows its vertical layout: Up/Down visit adjacent titles. */
-export function titleListNavigationTarget(key: string, currentIndex: number, itemCount: number): number | null {
-  if (itemCount <= 0 || currentIndex < 0 || currentIndex >= itemCount) return null;
-  if (key === "ArrowUp") return currentIndex > 0 ? currentIndex - 1 : null;
-  if (key === "ArrowDown") return currentIndex + 1 < itemCount ? currentIndex + 1 : null;
-  return null;
-}
-
-/** Left/Right jump pages; focus lands at the first/last title of the new page. */
-export function titleListPageNavigationTarget(key: string, page: number, pageCount: number): { page: number; focusAtEnd: boolean } | null {
-  if (pageCount <= 0 || page < 0 || page >= pageCount) return null;
-  if (key === "ArrowRight" && page + 1 < pageCount) return { page: page + 1, focusAtEnd: false };
-  if (key === "ArrowLeft" && page > 0) return { page: page - 1, focusAtEnd: true };
-  return null;
-}
-
-/** Only a fresh endpoint press leaves the title list for its adjacent toolbar control. */
-export function titleListEndpointAction(key: string, currentIndex: number, itemCount: number, allowExit = true): "sort" | "pagination" | null {
-  if (!allowExit || itemCount <= 0 || currentIndex < 0 || currentIndex >= itemCount) return null;
-  if (key === "ArrowUp" && currentIndex === 0) return "sort";
-  if (key === "ArrowDown" && currentIndex === itemCount - 1) return "pagination";
-  return null;
-}
-
 export const TITLE_LIST_REPEAT_MIN_INTERVAL_MS = 90;
 
 export interface HeldTitleKeyState {

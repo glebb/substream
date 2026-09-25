@@ -23,8 +23,8 @@ import { formatCategoryBadge, formatGroupDisplayName } from "./display-formattin
 import { formatRuntime, titleDetailsFor } from "./title-details.ts";
 import { clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials } from "../platform/browser/tmdb-config.ts";
 import { TmdbClient, type TmdbMetadata } from "../platform/tmdb/client.ts";
-import { TmdbImageCache, TmdbMetadataCache } from "../platform/browser/tmdb-cache.ts";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, titleListEndpointAction, titleListNavigationTarget, titleListPageNavigationTarget, type HeldTitleKeyState, type SettingsControlKey } from "./remote-navigation.ts";
+import { TmdbArtworkCache, TmdbImageCache, TmdbMetadataCache } from "../platform/browser/tmdb-cache.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, type HeldTitleKeyState, type SettingsControlKey } from "./remote-navigation.ts";
 import { focusPageItem, focusTitleListItem } from "./title-list-focus.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
@@ -33,13 +33,15 @@ import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type Sa
 import { companionServerUrl, CompanionConnectionError, getCompanionConnection, saveCompanionServerUrl, sendCompanionPlayback, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
 
 type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 16;
 const OPEN_SUBTITLES_BASE_URL = import.meta.env.DEV ? "/opensubtitles-api/api/v1" : undefined;
 const PLAYBACK_UNAVAILABLE_MESSAGE = "The provider or network did not return playable media for this title. Try another title or retry later.";
 type BrowseMode = "local" | "provider" | "episodes";
 type SettingsConfirmation = "clear-catalog" | "clear-subtitles" | "reset-all";
 type SettingsFocusKey = SettingsControlKey;
 type SubtitleSearchType = "movie" | "series";
+type BrowseControlFocus = "back" | "previous-page" | "next-page" | null;
+type BrowseArtworkTarget = Pick<VodCatalogItem, "id" | "title" | "searchTitle" | "year" | "contentType">;
 
 function playbackHistoryItem(title: VodCatalogItem, progress: PlaybackProgress, providerSourceId?: string, updatedAt = Date.now()): PlaybackHistoryItem {
   const provider = title.id.match(/^xtream:(movie|episode):(\d{1,20})$/);
@@ -82,6 +84,20 @@ function formatSubtitleTimingOffset(seconds: number): string {
 function positiveInteger(value: string): number | undefined {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function BrowseArtwork({ title, image }: { title: string; image: string | null | undefined }) {
+  const initial = title.trim().charAt(0).toLocaleUpperCase() || "?";
+  return <span className="browse-artwork" aria-hidden="true">
+    {image ? <img src={image} alt="" decoding="async" loading="lazy" /> : <span className="browse-artwork-placeholder">{initial}</span>}
+  </span>;
+}
+
+function artworkLookupKey(title: Pick<BrowseArtworkTarget, "title" | "searchTitle" | "year" | "contentType">): string | null {
+  if (title.contentType === "other") return null;
+  const normalized = normalizeTitle(title.title);
+  const query = normalized.searchTitle || title.searchTitle || title.title;
+  return `${title.contentType === "series" ? "tv" : "movie"}:${query.toLocaleLowerCase()}:${title.year ?? ""}`;
 }
 
 export function App() {
@@ -213,6 +229,8 @@ export function App() {
   const [subtitleTimingOffsetSeconds, setSubtitleTimingOffsetSeconds] = useState(0);
   const [subtitleFontSize, setSubtitleFontSize] = useState(2.3);
   const [catalogStatus, setCatalogStatus] = useState("");
+  const [browseArtwork, setBrowseArtwork] = useState<Record<string, string | null>>({});
+  const [browseControlFocus, setBrowseControlFocus] = useState<BrowseControlFocus>(null);
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const browseTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -286,6 +304,70 @@ export function App() {
   const importStageRef = useRef("Preparing import");
   const [progress, setProgress] = useState("Preparing import…");
   const [error, setError] = useState("");
+
+  // Resolve only the first visible stretch of a view. The cache makes a
+  // revisit instant, while this cap keeps a provider page from
+  // competing with playback or remote navigation on older Tizen hardware.
+  const browseArtworkTargets = useMemo<BrowseArtworkTarget[]>(() => {
+    if (activeGroup) return titles;
+    if (browseCollection === "search") return visibleSearchItems.map((result) => result.item);
+    if (browseCollection === "recent") return continueHistory.map((entry) => ({
+      id: entry.id, title: entry.title, searchTitle: entry.title, year: entry.year,
+      contentType: entry.contentType,
+    }));
+    return [];
+  }, [activeGroup, browseCollection, continueHistory, titles, visibleSearchItems]);
+
+  useEffect(() => {
+    if (!tmdbCredentials.readAccessToken && !tmdbCredentials.apiKey) return;
+    const hasArtwork = (id: string) => Object.prototype.hasOwnProperty.call(browseArtwork, id);
+    const pending = browseArtworkTargets.filter((item) => !hasArtwork(item.id)).slice(0, isTizen ? 8 : 16);
+    if (!pending.length) return;
+    let cancelled = false;
+    const client = new TmdbClient(tmdbCredentials, undefined, import.meta.env.DEV ? "/tmdb-api" : undefined);
+    const artworkCache = new TmdbArtworkCache();
+    const load = async (item: BrowseArtworkTarget) => {
+      if (item.contentType === "other") return null;
+      const mediaType = item.contentType === "series" ? "tv" : "movie";
+      const normalized = normalizeTitle(item.title);
+      const query = normalized.searchTitle || item.searchTitle || item.title;
+      const key = artworkLookupKey(item);
+      if (!key) return null;
+      let posterUrl = artworkCache.get(key);
+      if (posterUrl === undefined) {
+        try {
+          const resolved = await client.resolve(query, mediaType, item.year);
+          posterUrl = resolved.kind === "match" ? resolved.candidate.posterUrl : null;
+        } catch { posterUrl = null; }
+        artworkCache.set(key, posterUrl);
+      }
+      // Let the browser load the small poster asynchronously. Converting image
+      // bytes to a data URL blocks Chromium 47's main thread and makes remote
+      // navigation hitch while a page is being painted.
+      return posterUrl;
+    };
+    const workers = Array.from({ length: Math.min(2, pending.length) }, async () => {
+      const loaded: Array<{ id: string; image: string | null }> = [];
+      while (!cancelled && pending.length) {
+        const item = pending.shift();
+        if (!item) break;
+        const image = await load(item);
+        if (!cancelled) loaded.push({ id: item.id, image });
+      }
+      return loaded;
+    });
+    void Promise.all(workers).then((completed) => {
+      if (cancelled) return;
+      const loaded = completed.reduce<Array<{ id: string; image: string | null }>>((all, items) => all.concat(items), []);
+      if (!loaded.length) return;
+      setBrowseArtwork((previous) => {
+        const next = { ...previous };
+        for (const item of loaded) if (!Object.prototype.hasOwnProperty.call(next, item.id)) next[item.id] = item.image;
+        return next;
+      });
+    });
+    return () => { cancelled = true; };
+  }, [browseArtwork, browseArtworkTargets, isTizen, tmdbCredentials]);
 
   const showSubtitleOffset = () => {
     setIsSubtitleOffsetVisible(true);
@@ -546,6 +628,7 @@ export function App() {
       const cached = cache.get(resolved.candidate.id, mediaType);
       const metadata = cached ?? await client.getMetadata(resolved.candidate.id, mediaType);
       if (!cached) cache.set(metadata);
+      new TmdbArtworkCache().set(artworkLookupKey(title)!, metadata.posterUrl);
       if (request !== detailsRequestRef.current) return;
       setDetailsMetadata(metadata);
       setDetailsMetadataStatus("");
@@ -912,21 +995,17 @@ export function App() {
         tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
       }
     };
-    const navigateTizenTitleList = (key: string, allowEndpointExit = true) => {
+    const navigateTizenTitleGrid = (key: string, allowEndpointExit = true) => {
       const itemCount = titles.length;
       if (!itemCount) return;
-      if (key === "ArrowLeft" || key === "ArrowRight") {
-        const pageJump = titleListPageNavigationTarget(key, page, browsePageCount(browseCount, PAGE_SIZE));
-        if (pageJump) changeBrowsePage(pageJump.page, sort, pageJump.focusAtEnd);
-        return;
-      }
-      const targetIndex = titleListNavigationTarget(key, focusIndex, itemCount);
+      const columns = 4;
+      const targetIndex = gridNavigationTarget(key, focusIndex, itemCount, columns);
       if (targetIndex !== null) {
         focusBrowseIndex(targetIndex);
-      } else if (titleListEndpointAction(key, focusIndex, itemCount, allowEndpointExit) === "sort") {
+      } else if (allowEndpointExit && key === "ArrowUp" && focusIndex < columns) {
         setFocusIndex(0);
         sortSelectRef.current?.focus();
-      } else if (titleListEndpointAction(key, focusIndex, itemCount, allowEndpointExit) === "pagination") {
+      } else if (allowEndpointExit && key === "ArrowDown" && focusIndex + columns >= itemCount) {
         if (page + 1 < browsePageCount(browseCount, PAGE_SIZE) && nextPageRef.current) nextPageRef.current.focus();
         else if (page > 0 && previousPageRef.current) previousPageRef.current.focus();
       }
@@ -1476,8 +1555,8 @@ export function App() {
         }
         if (key === "ArrowUp" && (targetButton === previousPageRef.current || targetButton === nextPageRef.current)) {
           event.preventDefault();
-          const columns = isTizen ? 1 : browseGridColumnCount(true, window.innerWidth <= 800, window.innerWidth < 520);
-          const lastTitleIndex = isTizen ? Math.max(0, titles.length - 1) : Math.floor(Math.max(0, titles.length - 1) / columns) * columns;
+          const columns = isTizen ? 4 : browseGridColumnCount(true, window.innerWidth <= 800, window.innerWidth < 520);
+          const lastTitleIndex = Math.floor(Math.max(0, titles.length - 1) / columns) * columns;
           if (isTizen) focusBrowseIndex(lastTitleIndex);
           else {
             setFocusIndex(lastTitleIndex);
@@ -1497,17 +1576,17 @@ export function App() {
         if (event.repeat) {
           if (verticalKey && shouldHandleHeldTitleKeyRepeat(key, Date.now(), heldTitleKeyRef.current)) {
             heldTitleKeyRef.current = { key, lastHandledAt: Date.now() };
-            navigateTizenTitleList(key, false);
+            navigateTizenTitleGrid(key, false);
           }
         } else if (verticalKey && heldTitleKeyRef.current?.key === key) {
           if (shouldHandleHeldTitleKeyRepeat(key, Date.now(), heldTitleKeyRef.current)) {
             heldTitleKeyRef.current = { key, lastHandledAt: Date.now() };
-            navigateTizenTitleList(key, false);
+            navigateTizenTitleGrid(key, false);
           }
         } else {
           if (verticalKey) heldTitleKeyRef.current = { key, lastHandledAt: Date.now() };
           else heldTitleKeyRef.current = null;
-          navigateTizenTitleList(key);
+          navigateTizenTitleGrid(key);
         }
         return;
       }
@@ -2578,21 +2657,21 @@ export function App() {
               <option value="year">Release year (newest)</option>
             </select>
           </label>
-          <button type="button" ref={backToGroupsRef} onClick={() => { browseRequestRef.current.invalidate(); remoteBrowseRef.current = null; browseReturnFocusPendingRef.current = true; setBrowseMode("local"); setBrowseCount(0); setActiveGroup(null); setTitles([]); setPage(0); setFocusIndex(browseReturnFocusIndexRef.current); setCatalogStatus(""); }}>Back to groups</button>
+          <button className={browseControlFocus === "back" ? "remote-focused" : ""} type="button" ref={backToGroupsRef} onFocus={() => setBrowseControlFocus("back")} onBlur={() => setBrowseControlFocus(null)} onClick={() => { browseRequestRef.current.invalidate(); remoteBrowseRef.current = null; browseReturnFocusPendingRef.current = true; setBrowseMode("local"); setBrowseCount(0); setActiveGroup(null); setTitles([]); setPage(0); setFocusIndex(browseReturnFocusIndexRef.current); setCatalogStatus(""); }}>Back to groups</button>
         </div>
-        {isTizen && <p className="remote-key-hint tv-title-list-hint">Up/Down: previous or next title · Left/Right: previous or next page</p>}
+        {isTizen && <p className="remote-key-hint tv-title-list-hint">Use the arrow keys to browse titles · Up from the first row returns to sorting</p>}
         <div className={isTizen ? "tv-title-list-viewport" : ""} ref={isTizen ? titleListViewportRef : undefined}>
+        {catalogStatus && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
         <div className={"groups title-grid" + (isTizen ? " tv-title-list" : "")}>
-          {catalogStatus && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
-          {titles.map((title, index) => <button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} key={title.id} onClick={() => { setFocusIndex(index); void openTitle(title); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
-            <strong>{title.title}</strong><span className="tile-meta">{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span>
+          {titles.map((title, index) => <button className={"tile title-card " + (index === focusIndex ? "focused remote-focused" : "")} key={title.id} onClick={() => { setFocusIndex(index); void openTitle(title); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
+            <BrowseArtwork title={title.title} image={browseArtwork[title.id]} /><span className="tile-copy"><strong>{title.title}</strong><span className="tile-meta">{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span></span>
           </button>)}
           {!titles.length && !catalogStatus.startsWith("Loading ") && <p className="empty-state">No titles are available in this group yet.</p>}
         </div>
         </div>
         <div className="pagination">
-          <button aria-label={isTizen ? "Previous page (Left)" : "Previous page"} disabled={page === 0} ref={previousPageRef} onClick={() => changeBrowsePage(page - 1)} type="button">{isTizen ? "Previous page · ←" : "Previous"}</button>
-          <button aria-label={isTizen ? "Next page (Right)" : "Next page"} disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onClick={() => changeBrowsePage(page + 1)} type="button">{isTizen ? "Next page · →" : "Next"}</button>
+          <button aria-label={isTizen ? "Previous page (Left)" : "Previous page"} className={browseControlFocus === "previous-page" ? "remote-focused" : ""} disabled={page === 0} ref={previousPageRef} onFocus={() => setBrowseControlFocus("previous-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page - 1)} type="button">{isTizen ? "Previous page · ←" : "Previous"}</button>
+          <button aria-label={isTizen ? "Next page (Right)" : "Next page"} className={browseControlFocus === "next-page" ? "remote-focused" : ""} disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onFocus={() => setBrowseControlFocus("next-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page + 1)} type="button">{isTizen ? "Next page · →" : "Next"}</button>
         </div>
       </> : <>
         <nav className="browse-tabs" role="tablist" aria-label="Browse your library">
@@ -2615,8 +2694,8 @@ export function App() {
           <h2 className="section-heading">Continue watching</h2>
           <div className="groups continue-grid">
             {continueHistory.map((entry, index) => <Fragment key={entry.id}>
-              <button className={"tile " + (index * 2 === focusIndex ? "focused remote-focused" : "")} onClick={() => { setFocusIndex(index * 2); void openHistoryEntry(entry); }} ref={(element) => { tileRefs.current[index * 2] = element; }} type="button">
-                <strong>{entry.title}</strong><span>Resume · {formatPlaybackTime(entry.currentTimeSeconds)} of {formatPlaybackTime(entry.durationSeconds)}</span>
+              <button className={"tile title-card " + (index * 2 === focusIndex ? "focused remote-focused" : "")} onClick={() => { setFocusIndex(index * 2); void openHistoryEntry(entry); }} ref={(element) => { tileRefs.current[index * 2] = element; }} type="button">
+                <BrowseArtwork title={entry.title} image={browseArtwork[entry.id]} /><span className="tile-copy"><strong>{entry.title}</strong><span>Resume · {formatPlaybackTime(entry.currentTimeSeconds)} of {formatPlaybackTime(entry.durationSeconds)}</span></span>
                 <progress className="history-progress" max={Math.max(1, entry.durationSeconds)} value={Math.min(Math.max(0, entry.currentTimeSeconds), Math.max(1, entry.durationSeconds))} aria-label={`Watched ${formatPlaybackTime(entry.currentTimeSeconds)} of ${formatPlaybackTime(entry.durationSeconds)}`} />
               </button>
               <button className={"tile remove-history " + (index * 2 + 1 === focusIndex ? "focused remote-focused" : "")} onClick={() => { setFocusIndex(index * 2 + 1); removeHistoryEntry(entry); }} ref={(element) => { tileRefs.current[index * 2 + 1] = element; }} type="button" aria-label={`Remove ${entry.title} from Continue watching`}>
@@ -2634,8 +2713,8 @@ export function App() {
           </div>
           <p className="hint" role="status" aria-live="polite">{searchStatus || (searchProviderFingerprint ? "Search is available without a TV connection. Refresh the Xtream catalogue when needed." : "Searching titles saved on this device. Add an Xtream playlist to refresh a full provider catalogue.")}</p>
           <div className="groups search-results">
-            {visibleSearchItems.map((result, index) => <button className={`tile ${index === focusIndex ? "focused remote-focused" : ""}`} key={result.key} ref={(element) => { tileRefs.current[index] = element; }} type="button" onClick={() => result.record ? openSearchRecord(result.record, index) : openLocalSearchItem(result.item, index)}>
-              <strong>{result.title}</strong><span className="tile-meta">{result.kind === "series" ? "Series" : result.kind === "movie" ? "Movie" : "Other"}{result.year ? ` · ${result.year}` : ""}{result.category ? ` · ${formatCategoryBadge(result.category)}` : ""}</span>
+            {visibleSearchItems.map((result, index) => <button className={`tile title-card ${index === focusIndex ? "focused remote-focused" : ""}`} key={result.key} ref={(element) => { tileRefs.current[index] = element; }} type="button" onClick={() => result.record ? openSearchRecord(result.record, index) : openLocalSearchItem(result.item, index)}>
+              <BrowseArtwork title={result.title} image={browseArtwork[result.item.id]} /><span className="tile-copy"><strong>{result.title}</strong><span className="tile-meta">{result.kind === "series" ? "Series" : result.kind === "movie" ? "Movie" : "Other"}{result.year ? ` · ${result.year}` : ""}{result.category ? ` · ${formatCategoryBadge(result.category)}` : ""}</span></span>
             </button>)}
             {!visibleSearchItems.length && searchQuery.trim().length >= 2 && <p className="empty-state">No matching titles found.</p>}
             {!visibleSearchItems.length && searchQuery.trim().length < 2 && <p className="empty-state">Enter at least two characters to search.</p>}

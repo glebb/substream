@@ -110,7 +110,7 @@ The core deliberately has no browser, React, Node.js, or Tizen global dependenci
 
 ## Verification
 
-Automated tests use synthetic data only. Run `npm run check` before making changes, then see [docs/verification.md](docs/verification.md) for regression scenarios and the physical-TV smoke checklist.
+Automated tests use synthetic data only. Run `npm run check` before making changes, then use the keyboard-only personal Chromium 47 flow in [docs/verification.md](docs/verification.md) as the default end-to-end verification for user-visible work. The guide also covers regression scenarios and the physical-TV smoke checklist.
 
 ## Status and roadmap
 

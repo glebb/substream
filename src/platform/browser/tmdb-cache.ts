@@ -4,11 +4,14 @@ const KEY = "substream.tmdb-metadata-cache";
 const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_ENTRIES = 100;
 const IMAGE_KEY = "substream.tmdb-image-cache";
+const ARTWORK_KEY = "substream.tmdb-artwork-cache";
 const DEFAULT_MAX_IMAGE_ENTRIES = 40;
 const DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_ARTWORK_ENTRIES = 240;
 type CacheRecord = { value: TmdbMetadata; savedAt: number };
 export type CacheStorage = Pick<Storage, "getItem" | "setItem">;
 type ImageRecord = { dataUrl: string; savedAt: number; size: number };
+type ArtworkRecord = { posterUrl: string | null; savedAt: number };
 export type ThumbnailResponse = { ok: boolean; status: number; arrayBuffer(): Promise<ArrayBuffer> };
 export type ThumbnailFetcher = (url: string) => Promise<ThumbnailResponse>;
 
@@ -41,6 +44,28 @@ export class TmdbImageCache {
   clear(): void { try { this.storage?.setItem(IMAGE_KEY, "{}"); } catch { /* optional */ } }
 }
 
+/**
+ * Remembers the outcome of a title search separately from the image bytes.
+ * A null poster is intentional: it prevents repeated searches for titles that
+ * TMDb cannot confidently match or that simply have no artwork.
+ */
+export class TmdbArtworkCache {
+  constructor(private readonly storage: CacheStorage | undefined = (() => { try { return globalThis.localStorage; } catch { return undefined; } })(), private readonly ttlMs = DEFAULT_TTL_MS, private readonly maxEntries = DEFAULT_MAX_ARTWORK_ENTRIES) {}
+  private read(): Record<string, ArtworkRecord> { try { const value: unknown = JSON.parse(this.storage?.getItem(ARTWORK_KEY) ?? "{}"); return value && typeof value === "object" ? value as Record<string, ArtworkRecord> : {}; } catch { return {}; } }
+  get(key: string, now = Date.now()): string | null | undefined {
+    const record = this.read()[key];
+    return record && now - record.savedAt <= this.ttlMs ? record.posterUrl : undefined;
+  }
+  set(key: string, posterUrl: string | null, now = Date.now()): void {
+    if (!key || (posterUrl !== null && !isSafeImageUrl(posterUrl))) return;
+    const records = this.read(); records[key] = { posterUrl, savedAt: now };
+    const keys = Object.keys(records).sort((a, b) => (records[b]?.savedAt ?? 0) - (records[a]?.savedAt ?? 0)).slice(0, Math.max(1, this.maxEntries));
+    const bounded: Record<string, ArtworkRecord> = {}; for (const item of keys) { const record = records[item]; if (record) bounded[item] = record; }
+    try { this.storage?.setItem(ARTWORK_KEY, JSON.stringify(bounded)); } catch { /* artwork lookup caching is optional */ }
+  }
+  clear(): void { try { this.storage?.setItem(ARTWORK_KEY, "{}"); } catch { /* optional */ } }
+}
+
 export class TmdbMetadataCache {
   constructor(private readonly storage: CacheStorage | undefined = (() => { try { return globalThis.localStorage; } catch { return undefined; } })(), private readonly ttlMs = DEFAULT_TTL_MS, private readonly maxEntries = DEFAULT_MAX_ENTRIES) {}
   private read(): Record<string, CacheRecord> {
@@ -63,3 +88,4 @@ export class TmdbMetadataCache {
 
 export const tmdbCacheKey = KEY;
 export const tmdbImageCacheKey = IMAGE_KEY;
+export const tmdbArtworkCacheKey = ARTWORK_KEY;

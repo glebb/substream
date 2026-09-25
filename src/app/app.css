@@ -358,6 +358,27 @@ button:disabled { cursor: default; opacity: .45; }
 
 /* TV and Chromium 47 preview: use static values and the flex fallback. */
 .screen.tv-ui { padding: 22px 36px; }
+
+/* Browse artwork stays a fixed, quiet column so titles line up whether TMDb
+ * supplied a poster or the cache deliberately recorded no artwork. */
+.title-card { align-items: center; display: flex; flex-direction: row; justify-content: flex-start; min-height: 154px; }
+.browse-artwork { align-items: center; background: #0b0e15; border: 1px solid #34435a; border-radius: 6px; display: flex; flex: 0 0 96px; height: 136px; justify-content: center; margin-right: 18px; overflow: hidden; width: 96px; }
+.browse-artwork img { display: block; height: 100%; object-fit: cover; width: 100%; }
+.browse-artwork-placeholder { align-items: center; background: #1d2e47; color: #82b7ff; display: flex; font-size: 26px; font-weight: 800; height: 100%; justify-content: center; width: 100%; }
+.tile-copy { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; }
+.tile-copy > span { margin-top: 8px; }
+.tile-copy strong { max-height: 2.7em; }
+.tile-copy .tile-meta { align-self: flex-start; text-align: left; }
+.continue-grid .title-card { min-height: 154px; }
+.continue-grid .title-card .history-progress { margin-top: auto; }
+.tile.remote-focused .browse-artwork { border-color: #061426; }
+.tile.remote-focused .browse-artwork-placeholder { background: #fff2a8; color: #061426; }
+
+@media (max-width: 519px) {
+  .title-card { min-height: 108px; padding: .65rem .75rem; }
+  .browse-artwork { flex-basis: 68px; height: 96px; margin-right: 12px; width: 68px; }
+  .browse-artwork-placeholder { font-size: 21px; }
+}
 .tv-ui .app-header { margin-bottom: 12px; padding-bottom: 10px; }
 .tv-ui .app-header h1 { font-size: 28px; }
 .tv-ui .browse-tabs { margin-bottom: 12px; }
@@ -371,6 +392,16 @@ button:disabled { cursor: default; opacity: .45; }
 .tv-ui .favourite-indicator { color: #ffd54a; font-weight: 700; }
 .tv-ui .tile.remote-focused:not(:focus) { background: #151d2b !important; box-shadow: none !important; color: #f4f7ff !important; }
 .tv-ui .tile.remote-focused:not(:focus) span { color: #b8c4d7; }
+/* The TV title pane used to force one tall row per title.  Keep Chromium 47
+ * on its flex fallback, but use all four available columns now that cards
+ * carry larger artwork.  The 28px gutters leave 4px of clear space around
+ * the 12px remote-focus ring, so neighbouring cards never overlap. */
+.tv-ui .tv-title-list-viewport .groups.title-grid.tv-title-list { display: flex; flex-wrap: wrap; margin: -14px; }
+.tv-ui .tv-title-list-viewport .groups.title-grid.tv-title-list > .tile {
+  flex: 0 0 calc(25% - 28px);
+  margin: 14px;
+  width: calc(25% - 28px);
+}
 .tv-ui .title-details { width: 100%; }
 .tv-ui .details-copy { max-width: none; }
 .tv-ui .details-actions button { min-height: 52px; }
