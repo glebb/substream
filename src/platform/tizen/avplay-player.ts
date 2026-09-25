@@ -1,4 +1,4 @@
-import type { MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import type { AudioTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { parseSrtCues, type SubtitleCue } from "../../core/subtitles/srt-cues.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
 
@@ -13,7 +13,9 @@ interface AvPlayApi {
   close(): void;
   seekTo?(milliseconds: number, onSuccess?: () => void, onError?: (error: unknown) => void): void;
   getDuration?(): number;
-  getCurrentStreamInfo?(): Array<{ type?: string; extra_info?: string }>;
+  getCurrentStreamInfo?(): AvPlayStreamInfo[];
+  getTotalTrackInfo?(): AvPlayStreamInfo[];
+  setSelectTrack?(trackType: "AUDIO", index: number): void;
   setBufferingParam?(bufferingType: "PLAYER_BUFFER_FOR_PLAY" | "PLAYER_BUFFER_FOR_RESUME", parameter: "PLAYER_BUFFER_SIZE_IN_SECOND", value: number): void;
   setDisplayRect(left: number, top: number, width: number, height: number): void;
   setDisplayMethod(mode: "PLAYER_DISPLAY_MODE_LETTER_BOX" | "PLAYER_DISPLAY_MODE_FULL_SCREEN" | "PLAYER_DISPLAY_MODE_AUTO_ASPECT_RATIO"): void;
@@ -24,6 +26,12 @@ interface AvPlayApi {
     onstreamcompleted?(): void;
     onerror?(error: unknown): void;
   }): void;
+}
+
+interface AvPlayStreamInfo {
+  type?: string;
+  index?: number;
+  extra_info?: string;
 }
 
 interface WebApisGlobal {
@@ -231,6 +239,33 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     return null;
   }
 
+  getAudioTracks(): AudioTrack[] {
+    const player = avplay();
+    if (!this.opened || !player?.getTotalTrackInfo) return [];
+    try {
+      const selectedIndex = player.getCurrentStreamInfo?.()
+        .find((stream) => stream.type?.toUpperCase() === "AUDIO")?.index;
+      return player.getTotalTrackInfo()
+        .filter((stream) => stream.type?.toUpperCase() === "AUDIO" && Number.isInteger(stream.index))
+        .map((stream) => audioTrackFromAvPlay(stream, stream.index === selectedIndex));
+    } catch {
+      // AVPlay limits track queries to ready, playing, and paused states.
+      return [];
+    }
+  }
+
+  selectAudioTrack(id: string): boolean {
+    const index = Number(id);
+    const player = avplay();
+    if (!this.opened || !player?.setSelectTrack || !Number.isInteger(index) || index < 0) return false;
+    try {
+      player.setSelectTrack("AUDIO", index);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   setDisplayMode(mode: VideoDisplayMode): void {
     this.displayMode = mode;
     const player = avplay();
@@ -381,4 +416,33 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     try { player.stop(); } catch { /* AVPlay can already be stopped. */ }
     try { player.close(); } catch { /* Closing an errored AVPlay session can fail. */ }
   }
+}
+
+function audioTrackFromAvPlay(stream: AvPlayStreamInfo, selected: boolean): AudioTrack {
+  const details = parseStreamDetails(stream.extra_info);
+  const language = readStreamText(details, "language", "track_lang", "lang");
+  const codec = readStreamText(details, "codec", "fourCC", "fourcc");
+  const channels = readStreamText(details, "channels", "channel");
+  const label = [language, codec, channels].filter(Boolean).join(" · ") || `Audio ${(stream.index ?? 0) + 1}`;
+  return { id: String(stream.index), label, ...(language ? { language } : {}), ...(codec ? { codec } : {}), selected };
+}
+
+function parseStreamDetails(extraInfo: string | undefined): Record<string, unknown> {
+  if (!extraInfo) return {};
+  try {
+    const parsed: unknown = JSON.parse(extraInfo);
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function readStreamText(details: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = details[key];
+    if (typeof value !== "string" && typeof value !== "number") continue;
+    const cleaned = String(value).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80);
+    if (cleaned) return cleaned;
+  }
+  return undefined;
 }

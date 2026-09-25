@@ -72,6 +72,33 @@ describe("HtmlVideoPlayer", () => {
     player.destroy();
   });
 
+  it("lists and selects audio tracks when the browser exposes its non-standard audioTracks API", () => {
+    const { video } = fakeVideo();
+    const tracks = [
+      { label: "English", language: "en", enabled: true },
+      { label: "Finnish", language: "fi", enabled: false },
+    ];
+    (video as unknown as { audioTracks: typeof tracks }).audioTracks = tracks;
+    const player = new HtmlVideoPlayer(video);
+
+    expect(player.getAudioTracks()).toEqual([
+      { id: "0", label: "English", language: "en", selected: true },
+      { id: "1", label: "Finnish", language: "fi", selected: false },
+    ]);
+    expect(player.selectAudioTrack("1")).toBe(true);
+    expect(tracks.map((track) => track.enabled)).toEqual([false, true]);
+    expect(player.selectAudioTrack("not-a-track")).toBe(false);
+    player.destroy();
+  });
+
+  it("reports no selectable audio tracks when the browser does not expose them", () => {
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    expect(player.getAudioTracks()).toEqual([]);
+    expect(player.selectAudioTrack("0")).toBe(false);
+    player.destroy();
+  });
+
   it("contains synchronous load failures and reports a playback error", () => {
     const { video } = fakeVideo(() => { throw new Error("private signed stream URL"); });
     const player = new HtmlVideoPlayer(video);

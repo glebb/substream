@@ -12,6 +12,17 @@ export interface PlaybackProgress {
   durationSeconds: number;
 }
 
+/** A user-selectable embedded audio rendition. Never contains a stream URL. */
+export interface AudioTrack {
+  /** Platform-specific, opaque identifier used only for selecting this track. */
+  id: string;
+  /** Short user-facing description, such as language and codec when available. */
+  label: string;
+  language?: string;
+  codec?: string;
+  selected: boolean;
+}
+
 export interface MediaPlayerEventHandlers {
   onStateChange(state: PlaybackState): void;
   onProgress?(progress: PlaybackProgress): void;
@@ -24,6 +35,10 @@ export interface MediaPlayer {
   seekTo?(seconds: number): void;
   /** Returns source dimensions only; adapters must not expose stream metadata or URLs. */
   getVideoResolution?(): string | null;
+  /** Lists embedded audio tracks when the playback engine makes them available. */
+  getAudioTracks?(): AudioTrack[];
+  /** Selects a previously listed audio track. Returns false when unsupported or rejected. */
+  selectAudioTrack?(id: string): boolean;
   play(): void;
   pause(): void;
   restart(): void;

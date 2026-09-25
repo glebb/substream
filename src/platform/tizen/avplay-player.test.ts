@@ -93,6 +93,33 @@ describe("TizenAvPlayPlayer", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("lists AVPlay audio tracks and switches by its provider index", () => {
+    const setSelectTrack = vi.fn();
+    const getTotalTrackInfo = vi.fn(() => [
+      { type: "VIDEO", index: 0, extra_info: "{}" },
+      { type: "AUDIO", index: 1, extra_info: '{"language":"eng","codec":"AAC","channels":"2"}' },
+      { type: "AUDIO", index: 3, extra_info: '{"track_lang":"fin","fourCC":"AC3","channels":"6"}' },
+    ]);
+    const getCurrentStreamInfo = vi.fn(() => [{ type: "AUDIO", index: 1, extra_info: "{}" }]);
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), getTotalTrackInfo, getCurrentStreamInfo, setSelectTrack,
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.load("https://example.invalid/stream.mkv");
+
+    expect(player.getAudioTracks()).toEqual([
+      { id: "1", label: "eng · AAC · 2", language: "eng", codec: "AAC", selected: true },
+      { id: "3", label: "fin · AC3 · 6", language: "fin", codec: "AC3", selected: false },
+    ]);
+    expect(player.selectAudioTrack("3")).toBe(true);
+    expect(setSelectTrack).toHaveBeenCalledWith("AUDIO", 3);
+    expect(player.selectAudioTrack("bad")).toBe(false);
+    player.destroy();
+  });
+
   it("ignores prepare callbacks from a replaced stream", () => {
     const prepareCallbacks: Array<{ success: () => void; error: (error: unknown) => void }> = [];
     const play = vi.fn();

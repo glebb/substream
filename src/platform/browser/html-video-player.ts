@@ -1,4 +1,4 @@
-import type { MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import type { AudioTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { srtToWebVtt } from "../../core/subtitles/srt-to-vtt.ts";
 import { shiftWebVttCues } from "../../core/subtitles/webvtt-timing.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
@@ -55,6 +55,37 @@ export class HtmlVideoPlayer implements MediaPlayer {
     return this.video.videoWidth > 0 && this.video.videoHeight > 0
       ? `${this.video.videoWidth} × ${this.video.videoHeight}`
       : null;
+  }
+
+  getAudioTracks(): AudioTrack[] {
+    // audioTracks is deliberately non-standard. Chromium currently does not expose
+    // it for ordinary <video> playback, but some browser engines do.
+    const tracks = audioTrackList(this.video);
+    if (!tracks) return [];
+    const result: AudioTrack[] = [];
+    for (let index = 0; index < tracks.length; index += 1) {
+      const track = tracks[index];
+      if (!track) continue;
+      const language = cleanTrackText(track.language);
+      const label = cleanTrackText(track.label) || language || `Audio ${index + 1}`;
+      result.push({ id: String(index), label, ...(language ? { language } : {}), selected: track.enabled });
+    }
+    return result;
+  }
+
+  selectAudioTrack(id: string): boolean {
+    const tracks = audioTrackList(this.video);
+    const index = Number(id);
+    if (!tracks || !Number.isInteger(index) || index < 0 || index >= tracks.length) return false;
+    try {
+      for (let candidate = 0; candidate < tracks.length; candidate += 1) {
+        const track = tracks[candidate];
+        if (track) track.enabled = candidate === index;
+      }
+      return tracks[index]?.enabled === true;
+    } catch {
+      return false;
+    }
   }
 
   play(): void {
@@ -206,4 +237,25 @@ export class HtmlVideoPlayer implements MediaPlayer {
       // The browser may not have initialized the track yet; mode is applied again on replacement.
     }
   }
+}
+
+interface BrowserAudioTrack {
+  enabled: boolean;
+  label?: string;
+  language?: string;
+}
+
+interface BrowserAudioTrackList {
+  length: number;
+  [index: number]: BrowserAudioTrack | undefined;
+}
+
+function audioTrackList(video: HTMLVideoElement): BrowserAudioTrackList | undefined {
+  return (video as HTMLVideoElement & { audioTracks?: BrowserAudioTrackList }).audioTracks;
+}
+
+function cleanTrackText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80);
+  return cleaned || undefined;
 }

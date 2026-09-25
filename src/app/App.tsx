@@ -5,7 +5,7 @@ import { clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl } from "../plat
 import { isBackKey, isRedKey, isTizenRuntime, normalizedRemoteKey, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
 import { IndexedDbCatalogOpenError, IndexedDbCatalogStore, type VodGroup, type VodSort } from "../platform/web/indexed-db-catalog.ts";
 import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
-import type { MediaPlayer, PlaybackProgress, VideoDisplayMode } from "../platform/media-player.ts";
+import type { AudioTrack, MediaPlayer, PlaybackProgress, VideoDisplayMode } from "../platform/media-player.ts";
 import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avplay-player.ts";
 import { clearSavedOpenSubtitlesSettings, loadOpenSubtitlesApiKey, saveOpenSubtitlesApiKey } from "../platform/browser/opensubtitles-config.ts";
 import { OpenSubtitlesClient, OpenSubtitlesRequestError, type SubtitleResult } from "../platform/opensubtitles/client.ts";
@@ -201,6 +201,7 @@ export function App() {
   const [webTvConnectionStatus, setWebTvConnectionStatus] = useState("");
   const [showVideoInfo, setShowVideoInfo] = useState(false);
   const [showPlayerTools, setShowPlayerTools] = useState(false);
+  const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
   const [openSubtitlesApiKey, setOpenSubtitlesApiKey] = useState(loadOpenSubtitlesApiKey);
   const [settingsApiKeyDraft, setSettingsApiKeyDraft] = useState("");
   const [tmdbCredentials, setTmdbCredentials] = useState(loadTmdbCredentials);
@@ -262,6 +263,7 @@ export function App() {
   const playerAspectButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerInfoButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerTechnicalInfoButtonRef = useRef<HTMLButtonElement | null>(null);
+  const playerAudioTrackButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleToggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSmallerButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleLargerButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -398,6 +400,7 @@ export function App() {
       ...playbackControls,
       playerAspectButtonRef.current,
       playerTechnicalInfoButtonRef.current,
+      playerAudioTrackButtonRef.current,
       subtitleSmallerButtonRef.current,
       subtitleLargerButtonRef.current,
       ...(subtitleTimingAvailable ? [
@@ -569,6 +572,7 @@ export function App() {
     setResumeChoice(null);
     setShowVideoInfo(false);
     setShowPlayerTools(false);
+    setAudioTracks([]);
     setPlayerFocusIndex(0);
     setShowFullscreenControls(false);
     // Tizen uses the app's viewport presentation. On the web, ask the browser
@@ -1858,6 +1862,7 @@ export function App() {
           error: PLAYBACK_UNAVAILABLE_MESSAGE,
         };
         setPlaybackStatus(status[playbackState]);
+        if (playbackState === "playing") setAudioTracks(player.getAudioTracks?.() ?? []);
         setIsPlaybackBuffering(playbackState === "buffering");
         setIsPlaybackPaused(playbackState === "paused" || playbackState === "ended" || playbackState === "error");
         if (playbackState === "error") setShowFullscreenControls(true);
@@ -2095,6 +2100,23 @@ export function App() {
     setVideoDisplayMode((current) => next[current]);
   };
 
+  const selectNextAudioTrack = () => {
+    const tracks = playerRef.current?.getAudioTracks?.() ?? [];
+    if (tracks.length === 0) {
+      setAudioTracks([]);
+      setPlaybackStatus("Audio tracks are not exposed by this playback engine.");
+      return;
+    }
+    const selectedIndex = Math.max(0, tracks.findIndex((track) => track.selected));
+    const next = tracks[(selectedIndex + 1) % tracks.length];
+    if (!next || !playerRef.current?.selectAudioTrack?.(next.id)) {
+      setPlaybackStatus("The selected audio track could not be changed.");
+      return;
+    }
+    setAudioTracks(tracks.map((track) => ({ ...track, selected: track.id === next.id })));
+    setPlaybackStatus(`Audio: ${next.label}`);
+  };
+
   const saveSubtitleSettings = () => {
     const apiKey = openSubtitlesApiKeyRef.current
       ? openSubtitlesApiKeyRef.current.value.trim()
@@ -2325,8 +2347,9 @@ export function App() {
   const subtitleToggleFocusIndex = 5;
   const infoFocusIndex = 6;
   const aspectFocusIndex = 7;
-  const subtitleSmallerFocusIndex = 9;
-  const subtitleLargerFocusIndex = 10;
+  const audioTrackFocusIndex = 9;
+  const subtitleSmallerFocusIndex = 10;
+  const subtitleLargerFocusIndex = 11;
   const subtitleFocus = subtitleFocusLayout({
     subtitleAttached: isSubtitleAttached,
     timingAvailable: subtitleTimingAvailable,
@@ -2602,6 +2625,7 @@ export function App() {
           {showPlayerTools && <>
             <button className={playerFocusIndex === aspectFocusIndex ? "remote-focused" : ""} type="button" onClick={cycleVideoDisplayMode} ref={playerAspectButtonRef}>Aspect: {videoDisplayMode === "auto" ? "Auto" : videoDisplayMode === "fit" ? "Fit" : "Fill"}</button>
             <button className={playerFocusIndex === 8 ? "remote-focused" : ""} type="button" onClick={() => setShowVideoInfo((visible) => !visible)} ref={playerTechnicalInfoButtonRef}>Info</button>
+            <button className={playerFocusIndex === audioTrackFocusIndex ? "remote-focused" : ""} type="button" onClick={selectNextAudioTrack} ref={playerAudioTrackButtonRef}>{audioTracks.length === 0 ? "Audio: unavailable" : `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}`}</button>
             <button className={playerFocusIndex === subtitleSmallerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(-.2)} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
             <button className={playerFocusIndex === subtitleLargerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(.2)} ref={subtitleLargerButtonRef}>Subtitle A+</button>
           </>}
