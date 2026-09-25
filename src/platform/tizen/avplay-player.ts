@@ -1,4 +1,4 @@
-import type { AudioTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import type { AudioTrack, EmbeddedSubtitleTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { parseSrtCues, type SubtitleCue } from "../../core/subtitles/srt-cues.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
 
@@ -15,7 +15,8 @@ interface AvPlayApi {
   getDuration?(): number;
   getCurrentStreamInfo?(): AvPlayStreamInfo[];
   getTotalTrackInfo?(): AvPlayStreamInfo[];
-  setSelectTrack?(trackType: "AUDIO", index: number): void;
+  setSelectTrack?(trackType: "AUDIO" | "TEXT", index: number): void;
+  setSilentSubtitle?(silent: boolean): void;
   setBufferingParam?(bufferingType: "PLAYER_BUFFER_FOR_PLAY" | "PLAYER_BUFFER_FOR_RESUME", parameter: "PLAYER_BUFFER_SIZE_IN_SECOND", value: number): void;
   setDisplayRect(left: number, top: number, width: number, height: number): void;
   setDisplayMethod(mode: "PLAYER_DISPLAY_MODE_LETTER_BOX" | "PLAYER_DISPLAY_MODE_FULL_SCREEN" | "PLAYER_DISPLAY_MODE_AUTO_ASPECT_RATIO"): void;
@@ -65,6 +66,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private isPrepared = false;
   private pendingSeekMilliseconds: number | null = null;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
+  private liveSubtitleMode = false;
+  private embeddedSubtitleTracksSignature = "";
 
   constructor(
     private readonly container: HTMLElement,
@@ -73,6 +76,11 @@ export class TizenAvPlayPlayer implements MediaPlayer {
 
   setEventHandlers(handlers: MediaPlayerEventHandlers | null): void {
     this.eventHandlers = handlers;
+  }
+
+  setLiveSubtitleMode(enabled: boolean): void {
+    this.liveSubtitleMode = enabled;
+    if (enabled) this.setLiveAvPlaySubtitleSilent(true);
   }
 
   load(streamUrl: string): void {
@@ -87,6 +95,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     try {
       player.open(streamUrl);
       this.opened = true;
+      if (this.liveSubtitleMode) try { player.setSilentSubtitle?.(true); } catch { /* Older firmware may not offer subtitle muting. */ }
       this.paused = false;
       this.configureBuffering(player);
       this.setDisplayRect(player);
@@ -97,9 +106,15 @@ export class TizenAvPlayPlayer implements MediaPlayer {
           this.currentPlayheadMilliseconds = milliseconds;
           this.updateSubtitle(milliseconds);
           this.emitProgress(milliseconds, player);
+          this.emitEmbeddedSubtitleTracksIfChanged();
         },
         onbufferingstart: () => { if (this.isCurrent(generation)) this.emit("buffering"); },
-        onbufferingcomplete: () => { if (this.isCurrent(generation) && !this.paused) this.emit("playing"); },
+        onbufferingcomplete: () => {
+          if (!this.isCurrent(generation)) return;
+          this.setLiveAvPlaySubtitleSilent(true);
+          this.emitEmbeddedSubtitleTracksIfChanged();
+          if (!this.paused) this.emit("playing");
+        },
         onstreamcompleted: () => { if (this.isCurrent(generation)) { this.paused = true; this.emit("ended"); } },
         onerror: () => { if (this.isCurrent(generation)) this.fail(generation); },
       });
@@ -107,6 +122,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
         () => {
           if (!this.isCurrent(generation)) return;
           this.isPrepared = true;
+          this.setLiveAvPlaySubtitleSilent(true);
+          this.emitEmbeddedSubtitleTracksIfChanged();
           const pendingSeek = this.pendingSeekMilliseconds;
           this.pendingSeekMilliseconds = null;
           if (pendingSeek !== null && pendingSeek > 0) {
@@ -141,6 +158,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       player.play();
       this.paused = false;
       this.emit("playing");
+      this.emitEmbeddedSubtitleTracksIfChanged();
     } catch {
       this.fail(this.generation);
     }
@@ -266,6 +284,36 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     }
   }
 
+  getEmbeddedSubtitleTracks(): EmbeddedSubtitleTrack[] {
+    const player = avplay();
+    if (!this.opened || !player?.getTotalTrackInfo) return [];
+    try {
+      const selectedIndex = player.getCurrentStreamInfo?.()
+        .find((stream) => stream.type?.toUpperCase() === "TEXT")?.index;
+      return player.getTotalTrackInfo()
+        .filter((stream) => stream.type?.toUpperCase() === "TEXT" && Number.isInteger(stream.index))
+        .map((stream) => subtitleTrackFromAvPlay(stream, stream.index === selectedIndex));
+    } catch {
+      return [];
+    }
+  }
+
+  selectEmbeddedSubtitleTrack(id: string): boolean {
+    if (this.liveSubtitleMode && id === "off") {
+      return this.setLiveAvPlaySubtitleSilent(true);
+    }
+    const index = Number(id);
+    const player = avplay();
+    if (!this.opened || !player?.setSelectTrack || !Number.isInteger(index) || index < 0) return false;
+    try {
+      player.setSelectTrack("TEXT", index);
+      if (this.liveSubtitleMode && !this.setLiveAvPlaySubtitleSilent(false)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   setDisplayMode(mode: VideoDisplayMode): void {
     this.displayMode = mode;
     const player = avplay();
@@ -331,6 +379,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   }
 
   setSubtitleEnabled(enabled: boolean): void {
+    if (this.liveSubtitleMode) this.setLiveAvPlaySubtitleSilent(!enabled);
     if (this.subtitleCues.length === 0) return;
     this.subtitlesEnabled = enabled;
     this.updateSubtitle(this.currentPlayheadMilliseconds);
@@ -376,6 +425,21 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.eventHandlers?.onStateChange(state);
   }
 
+  private setLiveAvPlaySubtitleSilent(silent: boolean): boolean {
+    const player = avplay();
+    if (!this.liveSubtitleMode || !player || !this.opened || !player.setSilentSubtitle) return false;
+    try { player.setSilentSubtitle(silent); return true; } catch { return false; }
+  }
+
+  private emitEmbeddedSubtitleTracksIfChanged(): void {
+    if (!this.liveSubtitleMode) return;
+    const tracks = this.getEmbeddedSubtitleTracks();
+    const signature = JSON.stringify(tracks);
+    if (signature === this.embeddedSubtitleTracksSignature) return;
+    this.embeddedSubtitleTracksSignature = signature;
+    this.eventHandlers?.onEmbeddedSubtitleTracksChange?.(tracks);
+  }
+
   private emitProgress(currentTimeMilliseconds: number, player: AvPlayApi): void {
     if (!Number.isFinite(currentTimeMilliseconds) || !player.getDuration) return;
     try {
@@ -409,6 +473,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.paused = false;
     this.isPrepared = false;
     this.pendingSeekMilliseconds = null;
+    this.embeddedSubtitleTracksSignature = "";
     if (!this.opened) return;
     const player = avplay();
     this.opened = false;
@@ -425,6 +490,14 @@ function audioTrackFromAvPlay(stream: AvPlayStreamInfo, selected: boolean): Audi
   const channels = readStreamText(details, "channels", "channel");
   const label = [language, codec, channels].filter(Boolean).join(" · ") || `Audio ${(stream.index ?? 0) + 1}`;
   return { id: String(stream.index), label, ...(language ? { language } : {}), ...(codec ? { codec } : {}), selected };
+}
+
+function subtitleTrackFromAvPlay(stream: AvPlayStreamInfo, selected: boolean): EmbeddedSubtitleTrack {
+  const details = parseStreamDetails(stream.extra_info);
+  const language = readStreamText(details, "language", "track_lang", "lang");
+  const codec = readStreamText(details, "codec", "fourCC", "fourcc", "format");
+  const label = [language, codec].filter(Boolean).join(" · ") || `Subtitle ${(stream.index ?? 0) + 1}`;
+  return { id: String(stream.index), label, ...(language ? { language } : {}), selected };
 }
 
 function parseStreamDetails(extraInfo: string | undefined): Record<string, unknown> {

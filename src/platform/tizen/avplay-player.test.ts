@@ -120,6 +120,62 @@ describe("TizenAvPlayPlayer", () => {
     player.destroy();
   });
 
+  it("keeps a provider subtitle default hidden, then selects the Finnish TEXT track", () => {
+    const setSelectTrack = vi.fn();
+    const setSilentSubtitle = vi.fn();
+    const getTotalTrackInfo = vi.fn(() => [
+      { type: "TEXT", index: 4, extra_info: '{"track_lang":"swe","codec":"DVB"}' },
+      { type: "TEXT", index: 6, extra_info: '{"language":"fin","codec":"DVB"}' },
+    ]);
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), getTotalTrackInfo,
+      getCurrentStreamInfo: vi.fn(() => [{ type: "TEXT", index: 4, extra_info: "{}" }]), setSelectTrack, setSilentSubtitle,
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    const discovered: unknown[] = [];
+    player.setEventHandlers({ onStateChange: () => undefined, onEmbeddedSubtitleTracksChange: (tracks) => discovered.push(tracks) });
+    player.setLiveSubtitleMode(true);
+    player.load("https://example.invalid/live.ts");
+
+    expect(setSilentSubtitle).toHaveBeenCalledWith(true);
+    expect(player.getEmbeddedSubtitleTracks()).toEqual([
+      { id: "4", label: "swe · DVB", language: "swe", selected: true },
+      { id: "6", label: "fin · DVB", language: "fin", selected: false },
+    ]);
+    expect(player.selectEmbeddedSubtitleTrack("6")).toBe(true);
+    expect(setSelectTrack).toHaveBeenCalledWith("TEXT", 6);
+    expect(setSilentSubtitle).toHaveBeenLastCalledWith(false);
+    expect(player.selectEmbeddedSubtitleTrack("off")).toBe(true);
+    expect(setSilentSubtitle).toHaveBeenLastCalledWith(true);
+    expect(discovered).toContainEqual([
+      { id: "4", label: "swe · DVB", language: "swe", selected: true },
+      { id: "6", label: "fin · DVB", language: "fin", selected: false },
+    ]);
+    player.destroy();
+  });
+
+  it("does not report live subtitle selection or off when AVPlay cannot mute its text plane", () => {
+    const setSelectTrack = vi.fn();
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), getTotalTrackInfo: vi.fn(() => [{ type: "TEXT", index: 2, extra_info: '{"language":"fin"}' }]),
+      setSelectTrack,
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.setLiveSubtitleMode(true);
+    player.load("https://example.invalid/live.ts");
+
+    expect(player.selectEmbeddedSubtitleTrack("2")).toBe(false);
+    expect(player.selectEmbeddedSubtitleTrack("off")).toBe(false);
+    expect(setSelectTrack).toHaveBeenCalledWith("TEXT", 2);
+    player.destroy();
+  });
+
   it("ignores prepare callbacks from a replaced stream", () => {
     const prepareCallbacks: Array<{ success: () => void; error: (error: unknown) => void }> = [];
     const play = vi.fn();

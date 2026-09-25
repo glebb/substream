@@ -1,5 +1,6 @@
 import { normalizeTitle, searchTerms, stableId, type VodCatalogItem } from "../../core/catalog/index.ts";
 import { providerRequestUrl } from "../provider-request.ts";
+import type { LiveCategory, ProviderLiveStream } from "../../core/live/index.ts";
 
 type Request = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
@@ -20,6 +21,7 @@ type XtreamCategoryResponse = { category_id?: string | number; category_name?: s
 type XtreamVodResponse = { stream_id?: string | number; name?: string; container_extension?: string; added?: string | number; year?: string | number };
 type XtreamSeriesResponse = { series_id?: string | number; name?: string; year?: string | number; last_modified?: string | number };
 type XtreamSeriesInfoResponse = { episodes?: Record<string, Array<{ id?: string | number; title?: string; episode_num?: string | number; container_extension?: string }>> };
+type XtreamLiveResponse = { stream_id?: string | number; category_id?: string | number; name?: string; stream_icon?: string; epg_channel_id?: string; num?: string | number };
 
 export class XtreamRequestError extends Error {
   constructor(readonly status?: number) {
@@ -60,6 +62,30 @@ export class XtreamClient {
       ...this.categoriesFor(movies, "movie"),
       ...this.categoriesFor(series, "series"),
     ];
+  }
+
+  async liveCategories(): Promise<LiveCategory[]> {
+    const records = await this.get<XtreamCategoryResponse[]>("get_live_categories");
+    return (Array.isArray(records) ? records : []).flatMap((record) => {
+      const id = String(record.category_id ?? "");
+      const name = record.category_name?.trim();
+      return id && name ? [{ id, name }] : [];
+    });
+  }
+
+  async liveStreams(categoryId?: string): Promise<ProviderLiveStream[]> {
+    const records = await this.get<XtreamLiveResponse[]>("get_live_streams", categoryId ? { category_id: categoryId } : {});
+    return (Array.isArray(records) ? records : []).flatMap((record, index) => {
+      const streamId = String(record.stream_id ?? "");
+      const resolvedCategoryId = String(record.category_id ?? categoryId ?? "");
+      const name = record.name?.trim();
+      if (!/^\d{1,20}$/.test(streamId) || !resolvedCategoryId || !name) return [];
+      const order = numberOrNull(record.num) ?? index;
+      return [{ streamId, categoryId: resolvedCategoryId, name, order,
+        ...(record.stream_icon?.trim() ? { logo: record.stream_icon.trim() } : {}),
+        ...(record.epg_channel_id?.trim() ? { epgId: record.epg_channel_id.trim() } : {}),
+      }];
+    });
   }
 
   async movies(categoryId: string): Promise<VodCatalogItem[]> {
@@ -137,6 +163,11 @@ export class XtreamClient {
   streamUrlFor(kind: "movie" | "series", id: string, extension?: string): string {
     if (!/^\d{1,20}$/.test(id)) throw new Error("Invalid provider stream identifier");
     return this.streamUrl(kind, id, extension);
+  }
+
+  liveStreamUrl(id: string, extension: "ts" | "m3u8" = "ts"): string {
+    if (!/^\d{1,20}$/.test(id)) throw new Error("Invalid provider stream identifier");
+    return this.connection.streamBaseUrl + "live/" + encodeURIComponent(this.connection.username) + "/" + encodeURIComponent(this.connection.password) + "/" + encodeURIComponent(id) + "." + extension;
   }
 
   /** Stable server/path fingerprint that deliberately excludes playlist credentials. */

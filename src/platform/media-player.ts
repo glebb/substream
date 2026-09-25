@@ -7,6 +7,23 @@ export interface SubtitleAttachment {
 export type VideoDisplayMode = "auto" | "fit" | "fill";
 export type PlaybackState = "loading" | "buffering" | "playing" | "paused" | "ended" | "error";
 
+export type PlaybackRequest =
+  | { kind: "vod"; streamUrl: string; titleId: string; resumeSeconds?: number }
+  | { kind: "live"; streamUrl: string; channelId: string };
+
+export type PlaybackCapabilities = {
+  seek: boolean;
+  restart: boolean;
+  pause: boolean;
+  tracks: boolean;
+};
+
+export function playbackCapabilities(request: PlaybackRequest): PlaybackCapabilities {
+  return request.kind === "live"
+    ? { seek: false, restart: false, pause: false, tracks: true }
+    : { seek: true, restart: true, pause: true, tracks: true };
+}
+
 export interface PlaybackProgress {
   currentTimeSeconds: number;
   durationSeconds: number;
@@ -23,13 +40,28 @@ export interface AudioTrack {
   selected: boolean;
 }
 
+/** An embedded subtitle rendition supplied with a live stream. */
+export interface EmbeddedSubtitleTrack {
+  /** Platform-specific, opaque identifier used only for selecting this track. */
+  id: string;
+  /** Short user-facing description, such as language and codec when available. */
+  label: string;
+  /** ISO 639 language code when the playback engine exposes one. */
+  language?: string;
+  selected: boolean;
+}
+
 export interface MediaPlayerEventHandlers {
   onStateChange(state: PlaybackState): void;
   onProgress?(progress: PlaybackProgress): void;
+  /** Fires when selectable embedded live subtitle renditions become available or change. */
+  onEmbeddedSubtitleTracksChange?(tracks: EmbeddedSubtitleTrack[]): void;
 }
 
 export interface MediaPlayer {
   setEventHandlers(handlers: MediaPlayerEventHandlers | null): void;
+  /** Enables automatic Finnish/English selection for embedded live subtitles. */
+  setLiveSubtitleMode?(enabled: boolean): void;
   load(streamUrl: string): void;
   /** Seeks to an absolute playhead position, including while the stream is preparing. */
   seekTo?(seconds: number): void;
@@ -39,6 +71,10 @@ export interface MediaPlayer {
   getAudioTracks?(): AudioTrack[];
   /** Selects a previously listed audio track. Returns false when unsupported or rejected. */
   selectAudioTrack?(id: string): boolean;
+  /** Lists subtitles embedded in the current stream. */
+  getEmbeddedSubtitleTracks?(): EmbeddedSubtitleTrack[];
+  /** Selects one embedded subtitle rendition. */
+  selectEmbeddedSubtitleTrack?(id: string): boolean;
   play(): void;
   pause(): void;
   restart(): void;

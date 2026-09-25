@@ -42,9 +42,9 @@ export function isRedKey(event: KeyboardEvent): boolean {
 export function normalizedRemoteKey(event: KeyboardEvent): string {
   const key = event.key ?? "";
   const code = event.code ?? "";
-  const backNames = new Set(["escape", "browserback", "back", "xf86back", "goback"]);
+  const backNames = new Set(["escape", "esc", "browserback", "back", "xf86back", "goback"]);
   if (backNames.has(key.toLowerCase()) || backNames.has(code.toLowerCase())
-    || event.keyCode === 10009 || event.which === 10009) return "Back";
+    || event.keyCode === 27 || event.which === 27 || event.keyCode === 10009 || event.which === 10009) return "Back";
 
   const legacyKeys: Record<number, string> = {
     13: "Enter",

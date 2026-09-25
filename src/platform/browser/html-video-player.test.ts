@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HtmlVideoPlayer } from "./html-video-player.ts";
 
 function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElement; dispatch(type: string): void; tracks: HTMLTrackElement[] } {
-  const listeners = new Map<string, EventListener>();
+  const listeners = new Map<string, EventListener[]>();
   const tracks: HTMLTrackElement[] = [];
   const video = {
     src: "",
@@ -13,13 +13,13 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
     play: vi.fn(() => Promise.resolve()),
     pause: vi.fn(),
     load: vi.fn(load),
-    addEventListener: vi.fn((type: string, listener: EventListener) => listeners.set(type, listener)),
-    removeEventListener: vi.fn((type: string) => listeners.delete(type)),
+    addEventListener: vi.fn((type: string, listener: EventListener) => listeners.set(type, [...(listeners.get(type) ?? []), listener])),
+    removeEventListener: vi.fn((type: string, listener: EventListener) => listeners.set(type, (listeners.get(type) ?? []).filter((entry) => entry !== listener))),
     removeAttribute: vi.fn(),
     querySelectorAll: vi.fn(() => tracks),
     append: vi.fn((track: HTMLTrackElement) => tracks.push(track)),
   } as unknown as HTMLVideoElement;
-  return { video, dispatch: (type) => listeners.get(type)?.(new Event(type)), tracks };
+  return { video, dispatch: (type) => listeners.get(type)?.forEach((listener) => listener(new Event(type))), tracks };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -39,6 +39,23 @@ describe("HtmlVideoPlayer", () => {
     dispatch("ended");
 
     expect(states).toEqual(["loading", "loading", "playing", "buffering", "paused", "ended"]);
+    player.destroy();
+  });
+
+  it("recovers from a late live load event once media is advancing", () => {
+    const { video, dispatch } = fakeVideo();
+    const media = video as unknown as { paused: boolean; readyState: number };
+    media.paused = false;
+    media.readyState = 4;
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    dispatch("playing");
+    dispatch("loadstart");
+    dispatch("timeupdate");
+
+    expect(states).toEqual(["playing", "loading", "playing"]);
     player.destroy();
   });
 
@@ -96,6 +113,38 @@ describe("HtmlVideoPlayer", () => {
     const player = new HtmlVideoPlayer(video);
     expect(player.getAudioTracks()).toEqual([]);
     expect(player.selectAudioTrack("0")).toBe(false);
+    player.destroy();
+  });
+
+  it("keeps live native subtitle defaults hidden and selects Finnish, English, or off", () => {
+    const { video } = fakeVideo();
+    const changes = new Map<string, EventListener>();
+    const tracks = [
+      { kind: "subtitles", label: "English", language: "en", mode: "showing" },
+      { kind: "captions", label: "Finnish", language: "fi", mode: "showing" },
+    ] as unknown as TextTrack[] & { addEventListener(type: string, listener: EventListener): void; removeEventListener(type: string): void };
+    tracks.addEventListener = vi.fn((type: string, listener: EventListener) => changes.set(type, listener));
+    tracks.removeEventListener = vi.fn((type: string) => changes.delete(type));
+    (video as unknown as { textTracks: typeof tracks }).textTracks = tracks;
+    const player = new HtmlVideoPlayer(video);
+    const trackChanges: unknown[] = [];
+    player.setEventHandlers({ onStateChange: () => undefined, onEmbeddedSubtitleTracksChange: (value) => trackChanges.push(value) });
+    player.setLiveSubtitleMode(true);
+
+    expect((tracks[0] as unknown as { mode: string }).mode).toBe("disabled");
+    expect((tracks[1] as unknown as { mode: string }).mode).toBe("disabled");
+    expect(player.getEmbeddedSubtitleTracks()).toEqual([
+      { id: "text:0", label: "English", language: "en", selected: false },
+      { id: "text:1", label: "Finnish", language: "fi", selected: false },
+    ]);
+    expect(player.selectEmbeddedSubtitleTrack("text:1")).toBe(true);
+    expect((tracks[0] as unknown as { mode: string }).mode).toBe("disabled");
+    expect((tracks[1] as unknown as { mode: string }).mode).toBe("showing");
+    expect(player.selectEmbeddedSubtitleTrack("off")).toBe(true);
+    expect((tracks[1] as unknown as { mode: string }).mode).toBe("disabled");
+    expect(trackChanges.length).toBeGreaterThan(0);
+    player.setLiveSubtitleMode(false);
+    expect(player.getEmbeddedSubtitleTracks()).toEqual([]);
     player.destroy();
   });
 

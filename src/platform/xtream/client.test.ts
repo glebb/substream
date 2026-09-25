@@ -2,6 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import { XtreamClient } from "./client.ts";
 
 describe("XtreamClient", () => {
+  it("loads live categories and streams without exposing credentials in records", async () => {
+    const urls: string[] = [];
+    const client = XtreamClient.fromPlaylistUrl("https://tv.example/get.php?username=user&password=secret", async (url) => {
+      urls.push(url);
+      const action = new URL(url).searchParams.get("action");
+      return { ok: true, status: 200, json: async () => action === "get_live_categories"
+        ? [{ category_id: "7", category_name: "SUOMI" }]
+        : [{ stream_id: "42", category_id: "7", name: "Yle TV1 HD", stream_icon: "https://img.example/yle.png", epg_channel_id: "yle1.fi", num: 3 }] };
+    });
+    expect(await client!.liveCategories()).toEqual([{ id: "7", name: "SUOMI" }]);
+    expect(await client!.liveStreams("7")).toEqual([{ streamId: "42", categoryId: "7", name: "Yle TV1 HD", logo: "https://img.example/yle.png", epgId: "yle1.fi", order: 3 }]);
+    expect(client!.liveStreamUrl("42")).toBe("https://tv.example/live/user/secret/42.ts");
+    expect(JSON.stringify(await client!.liveStreams("7"))).not.toContain("secret");
+    expect(urls.every((url) => url.includes("action=get_live_"))).toBe(true);
+  });
   it("detects a get.php playlist and lazily maps a movie category", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => [{ stream_id: 7, name: "FI:Example Movie - 2024", container_extension: "mkv" }] });
     const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=pass&type=m3u_plus", request);

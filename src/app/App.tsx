@@ -31,6 +31,7 @@ import "./app.css";
 import { CompanionPanel } from "./CompanionPanel.tsx";
 import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../platform/companion/search-catalog.ts";
 import { companionServerUrl, CompanionConnectionError, getCompanionConnection, saveCompanionServerUrl, sendCompanionPlayback, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
+import { LiveTv } from "./LiveTv.tsx";
 
 type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 16;
@@ -100,7 +101,7 @@ function artworkLookupKey(title: Pick<BrowseArtworkTarget, "title" | "searchTitl
   return `${title.contentType === "series" ? "tv" : "movie"}:${query.toLocaleLowerCase()}:${title.year ?? ""}`;
 }
 
-export function App() {
+function VodApp({ onMainMenu }: { onMainMenu(): void }) {
   const subtitleTimingAvailable = true;
   // The Chromium 47 preview exercises the TV layout and remote flow without
   // claiming that Tizen media APIs are present in the browser container.
@@ -2426,7 +2427,7 @@ export function App() {
     startPlayback(title);
   };
   return <main className={"screen" + (isTizen ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen" : "")}>
-    <header className="app-header"><div><p className="eyebrow">SUBSTREAM</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
+    <header className="app-header"><div><p className="eyebrow">SUBSTREAM · VIDEO-ON-DEMAND</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
       {state === "ready" && !selectedTitle && !showPlaylistForm && !showSettings && <button className={settingsButtonFocused ? "remote-focused" : ""} type="button" ref={settingsOpenButtonRef} onBlur={() => setSettingsButtonFocused(false)} onFocus={() => setSettingsButtonFocused(true)} onClick={openSettings}>Settings</button>}
     </header>
     {state !== "ready" && showPlaylistForm && playlistSetupForm}
@@ -2755,5 +2756,39 @@ export function App() {
         </>}
       </>)}
     </section>}
+  </main>;
+}
+
+type AppRoute = "home" | "live" | "vod";
+
+export function App() {
+  const [route, setRoute] = useState<AppRoute>("home");
+  const [homeFocus, setHomeFocus] = useState<0 | 1>(0);
+  const cardRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  useEffect(() => {
+    if (route !== "home") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = normalizedRemoteKey(event);
+      if (key === "ArrowLeft" || key === "ArrowUp" || key === "ArrowRight" || key === "ArrowDown") {
+        event.preventDefault();
+        const next = key === "ArrowLeft" || key === "ArrowUp" ? 0 : 1;
+        setHomeFocus(next); cardRefs.current[next]?.focus();
+      }
+      if (isBackKey(event)) event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.requestAnimationFrame(() => cardRefs.current[homeFocus]?.focus());
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [homeFocus, route]);
+  if (route === "live") return <LiveTv onMainMenu={() => { setHomeFocus(0); setRoute("home"); }} />;
+  if (route === "vod") return <div className="vod-route"><button className="shell-home-button" type="button" onClick={() => { setHomeFocus(1); setRoute("home"); }}>Main menu</button><VodApp onMainMenu={() => { setHomeFocus(1); setRoute("home"); }} /></div>;
+  return <main className="app-home">
+    <div className="home-brand" aria-hidden="true"><img src="./branding/substream-icon.png" alt="" /><strong>Substream</strong></div>
+    <section className="home-content" aria-label="Choose what to watch">
+      <div className="home-cards">
+        <button className={`home-card ${homeFocus === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[0] = element; }} onFocus={() => setHomeFocus(0)} onClick={() => setRoute("live")}><strong>Live TV</strong></button>
+        <button className={`home-card ${homeFocus === 1 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[1] = element; }} onFocus={() => setHomeFocus(1)} onClick={() => setRoute("vod")}><strong>Video-On-Demand</strong></button>
+      </div>
+    </section>
   </main>;
 }

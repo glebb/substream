@@ -32,11 +32,13 @@ describe("normalizedRemoteKey", () => {
 
   it.each([
     { key: "Escape", code: "", keyCode: 0 },
+    { key: "Esc", code: "", keyCode: 0 },
     { key: "BrowserBack", code: "", keyCode: 0 },
     { key: "Back", code: "", keyCode: 0 },
     { key: "XF86Back", code: "", keyCode: 0 },
     { key: "GoBack", code: "", keyCode: 0 },
     { key: "", code: "XF86Back", keyCode: 0 },
+    { key: "", code: "", keyCode: 27 },
     { key: "", code: "", keyCode: 10009 },
   ])("normalizes Samsung/Tizen Back variant %#", (event) => {
     const keyboardEvent = event as KeyboardEvent;

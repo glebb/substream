@@ -25,6 +25,10 @@ export default defineConfig(({ mode }) => {
   };
   return {
     base: "./",
+    // libbitsub resolves its DVB decoder WASM relative to its own module URL.
+    // Keeping it out of Vite's development prebundle preserves that package
+    // relationship; production builds still emit a hashed WASM asset.
+    optimizeDeps: { exclude: ["libbitsub"] },
     // Keep the default build unchanged for the existing Tizen 3 package. The
     // Tizen 6 package uses a CSS target appropriate for its Chromium M76 engine.
     ...(tizenCompatibilityTarget === "tizen6" ? {

@@ -1,6 +1,14 @@
 # Project guide
 
-Substream is a Samsung Tizen IPTV VOD player with OpenSubtitles-powered subtitle discovery. The shared TypeScript catalogue and subtitle logic lives in `src/core`; browser and Tizen behavior is implemented by platform adapters.
+Substream is a Samsung Tizen IPTV live TV and VOD player with OpenSubtitles-powered subtitle discovery. The shared TypeScript catalogue, live selection, and subtitle logic lives in `src/core`; browser and Tizen behavior is implemented by platform adapters.
+
+## Home and Live TV
+
+- The app launches into a network-independent menu that matches the branded splash, with only Live TV and Video-On-Demand actions centered near the bottom. Both sections retain separate UI state and provide a direct Main menu action.
+- Xtream live categories and streams are fetched lazily. Live TV lists every normalized `Finland - ...` provider category in provider order, then fetches and displays only the selected category's channels in a separate view. Category and channel results are cached per provider account. Channel records retain classification evidence and variants and deduplicate exact stream identifiers.
+- Account-scoped channel metadata is cached without playback URLs. Cached channels display immediately and refresh in the background; a refresh failure does not clear a usable list.
+- Live playback opens in a video-only fullscreen presentation by default, hiding its title and controls until fullscreen is exited. The windowed player provides an explicit fullscreen toggle. Browsers use HLS.js for live subtitle inspection and whenever native HLS is unavailable; Tizen uses AVPlay and provider TS output. Keyboard and remote controls expose previous/next, fullscreen, retry, and back without VOD seek, pause, restart, or Continue Watching behavior. Embedded live subtitles select Finnish first, English second, and otherwise stay off; physical AVPlay subtitle behavior still needs hardware validation.
+- M3U-only live discovery and physical Tizen stream compatibility remain provider/device-dependent release work; the implemented phase-one live catalogue requires an Xtream-compatible `get.php` playlist.
 
 ## Everyday commands
 

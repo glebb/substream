@@ -1,9 +1,16 @@
-import type { AudioTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import type { AudioTrack, EmbeddedSubtitleTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { srtToWebVtt } from "../../core/subtitles/srt-to-vtt.ts";
 import { shiftWebVttCues } from "../../core/subtitles/webvtt-timing.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
+import { LiveDvbSubtitles } from "./live-dvb-subtitles.ts";
 
 export class HtmlVideoPlayer implements MediaPlayer {
+  private hls: { destroy(): void } | undefined;
+  private liveDvbSubtitles: LiveDvbSubtitles | undefined;
+  private liveSubtitleMode = false;
+  private liveHlsSubtitleTracks: Array<{ id: number; label: string; language?: string; selected: boolean }> = [];
+  private selectedNativeSubtitleTrack: TextTrack | undefined;
+  private loadGeneration = 0;
   private subtitleObjectUrl: string | undefined;
   private subtitleText: string | undefined;
   private subtitleLabel = "";
@@ -19,23 +26,67 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.eventListeners = [
       ["loadstart", () => this.emit("loading")],
       ["playing", () => this.emit("playing")],
+      ["canplay", () => this.emitPlayingIfMediaIsAdvancing()],
       ["waiting", () => this.emit("buffering")],
       ["pause", () => { if (!this.video.ended) this.emit("paused"); }],
       ["ended", () => this.emit("ended")],
       ["error", () => this.emit("error")],
       ["loadedmetadata", () => this.applyPendingSeek()],
-      ["timeupdate", () => this.emitProgress()],
+      ["loadedmetadata", () => this.refreshEmbeddedSubtitleTracks()],
+      ["playing", () => this.refreshEmbeddedSubtitleTracks()],
+      ["timeupdate", () => { this.emitPlayingIfMediaIsAdvancing(); this.emitProgress(); }],
       ["durationchange", () => this.emitProgress()],
     ];
     for (const [type, listener] of this.eventListeners) this.video.addEventListener(type, listener);
+    const textTracks = this.video.textTracks;
+    textTracks?.addEventListener?.("addtrack", this.onNativeSubtitleTracksChanged);
+    textTracks?.addEventListener?.("removetrack", this.onNativeSubtitleTracksChanged);
   }
 
   setEventHandlers(handlers: MediaPlayerEventHandlers | null): void {
     this.eventHandlers = handlers;
   }
 
+  setLiveSubtitleMode(enabled: boolean): void {
+    this.liveSubtitleMode = enabled;
+    if (enabled) this.suppressNativeSubtitleDefaults();
+    else this.liveHlsSubtitleTracks = [];
+    this.refreshEmbeddedSubtitleTracks();
+  }
+
   load(streamUrl: string): void {
+    const generation = ++this.loadGeneration;
+    this.liveHlsSubtitleTracks = [];
+    this.selectedNativeSubtitleTrack = undefined;
+    this.liveDvbSubtitles?.dispose();
+    this.liveDvbSubtitles = undefined;
+    this.hls?.destroy();
+    this.hls = undefined;
     this.emit("loading");
+    if (/\.m3u8(?:[?#]|$)/i.test(streamUrl)
+      && (this.liveSubtitleMode || !this.video.canPlayType("application/vnd.apple.mpegurl"))) {
+      void import("hls.js").then(({ default: Hls }) => {
+        if (generation !== this.loadGeneration) return;
+        if (!Hls.isSupported()) { this.emit("error"); return; }
+        // The DVB subtitle adapter consumes transport packets before they are
+        // transferred to HLS.js's worker, so live mode must keep them local.
+        const hls = new Hls({ enableWorker: !this.liveSubtitleMode, lowLatencyMode: true });
+        this.hls = hls;
+        if (this.liveSubtitleMode) {
+          this.liveDvbSubtitles = new LiveDvbSubtitles(this.video, hls, Hls.Events, undefined, () => this.refreshEmbeddedSubtitleTracks());
+          const events = Hls.Events as unknown as Record<string, string>;
+          const updateTracks = () => { this.captureHlsSubtitleTracks(hls); this.refreshEmbeddedSubtitleTracks(); };
+          const trackEvents = hls as unknown as { on(event: string, callback: () => void): void };
+          if (events.SUBTITLE_TRACKS_UPDATED) trackEvents.on(events.SUBTITLE_TRACKS_UPDATED, updateTracks);
+          if (events.SUBTITLE_TRACK_SWITCH) trackEvents.on(events.SUBTITLE_TRACK_SWITCH, updateTracks);
+        }
+        hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) this.emit("error"); });
+        hls.loadSource(streamUrl);
+        hls.attachMedia(this.video);
+        void this.requestPlay();
+      }).catch(() => this.emit("error"));
+      return;
+    }
     try {
       this.video.src = streamUrl;
       this.video.load();
@@ -88,6 +139,65 @@ export class HtmlVideoPlayer implements MediaPlayer {
     }
   }
 
+  getEmbeddedSubtitleTracks(): EmbeddedSubtitleTrack[] {
+    if (!this.liveSubtitleMode) return [];
+    const native = nativeSubtitleTracks(this.video);
+    return [...this.liveHlsSubtitleTracks.map((track) => ({ ...track, id: `hls:${track.id}` })),
+      ...native,
+      ...(this.liveDvbSubtitles?.getTracks() ?? [])];
+  }
+
+  selectEmbeddedSubtitleTrack(id: string): boolean {
+    if (!this.liveSubtitleMode) return false;
+    if (id === "off") {
+      this.selectedNativeSubtitleTrack = undefined;
+      this.disableOtherSubtitleRenderers();
+      this.suppressNativeSubtitleDefaults();
+      const hls = this.hls as HlsSubtitleController | undefined;
+      if (hls && "subtitleTrack" in hls) {
+        try { hls.subtitleTrack = -1; hls.subtitleDisplay = false; } catch { /* Older HLS builds may not expose these controls. */ }
+      }
+      return this.liveDvbSubtitles?.setEnabled?.(false) ?? true;
+    }
+    if (id.startsWith("hls:")) {
+      const trackId = Number(id.slice(4));
+      const hls = this.hls as HlsSubtitleController | undefined;
+      if (!Number.isInteger(trackId) || !hls || !("subtitleTrack" in hls)) return false;
+      try {
+        hls.subtitleTrack = trackId;
+        hls.subtitleDisplay = true;
+        this.liveDvbSubtitles?.setEnabled(false);
+        this.disableNativeSubtitleTracks();
+        return hls.subtitleTrack === trackId;
+      } catch { return false; }
+    }
+    if (id.startsWith("text:")) {
+      const tracks = this.video.textTracks;
+      const index = Number(id.slice(5));
+      if (!tracks || !Number.isInteger(index) || index < 0 || index >= tracks.length) return false;
+      try {
+        this.selectedNativeSubtitleTrack = tracks[index];
+        const hls = this.hls as HlsSubtitleController | undefined;
+        if (hls && "subtitleTrack" in hls) { hls.subtitleTrack = -1; hls.subtitleDisplay = false; }
+        this.liveDvbSubtitles?.setEnabled(false);
+        for (let candidate = 0; candidate < tracks.length; candidate += 1) {
+          const track = tracks[candidate];
+          if (track && isSubtitleKind(track.kind)) track.mode = candidate === index ? "showing" : "disabled";
+        }
+        return tracks[index]?.mode === "showing";
+      } catch { return false; }
+    }
+    // DVB selection happens while parsing the PMT, before any PES data reaches
+    // the canvas. This confirms the live policy's chosen rendition to the UI.
+    if (!this.liveDvbSubtitles?.isSelected(id)) return false;
+    this.selectedNativeSubtitleTrack = undefined;
+    const hls = this.hls as HlsSubtitleController | undefined;
+    if (hls && "subtitleTrack" in hls) { hls.subtitleTrack = -1; hls.subtitleDisplay = false; }
+    this.disableNativeSubtitleTracks();
+    this.liveDvbSubtitles.setEnabled(true);
+    return true;
+  }
+
   play(): void {
     void this.requestPlay();
   }
@@ -119,6 +229,16 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   destroy(): void {
+    this.loadGeneration += 1;
+    this.liveDvbSubtitles?.dispose();
+    this.liveDvbSubtitles = undefined;
+    this.hls?.destroy();
+    this.hls = undefined;
+    this.liveHlsSubtitleTracks = [];
+    const textTracks = this.video.textTracks;
+    textTracks?.removeEventListener?.("addtrack", this.onNativeSubtitleTracksChanged);
+    textTracks?.removeEventListener?.("removetrack", this.onNativeSubtitleTracksChanged);
+    this.selectedNativeSubtitleTrack = undefined;
     this.video.pause();
     this.video.removeAttribute("src");
     this.video.load();
@@ -139,11 +259,70 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.eventHandlers?.onStateChange(state);
   }
 
+  private emitPlayingIfMediaIsAdvancing(): void {
+    // MediaSource-backed live streams can dispatch a late loadstart after their
+    // first playing event. A canplay event, or advancing playback time, is the
+    // authoritative signal that the stream is no longer connecting.
+    // HAVE_CURRENT_DATA is 2. Keep the numeric threshold so the platform-free
+    // unit-test environment does not need a browser HTMLMediaElement global.
+    if (!this.video.paused && this.video.readyState >= 2) this.emit("playing");
+  }
+
   private emitProgress(): void {
     const durationSeconds = this.video.duration;
     const currentTimeSeconds = this.video.currentTime;
     if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || !Number.isFinite(currentTimeSeconds)) return;
     this.eventHandlers?.onProgress?.({ currentTimeSeconds, durationSeconds });
+  }
+
+  private readonly onNativeSubtitleTracksChanged: EventListener = () => {
+    if (!this.liveSubtitleMode) return;
+    this.suppressNativeSubtitleDefaults();
+    this.refreshEmbeddedSubtitleTracks();
+  };
+
+  private suppressNativeSubtitleDefaults(): void {
+    if (!this.liveSubtitleMode) return;
+    const tracks = this.video.textTracks;
+    if (!tracks) return;
+    for (let index = 0; index < tracks.length; index += 1) {
+      const track = tracks[index];
+      if (track && track !== this.selectedNativeSubtitleTrack && isSubtitleKind(track.kind) && track.mode !== "disabled") {
+        try { track.mode = "disabled"; } catch { /* The browser may not have initialized the track. */ }
+      }
+    }
+  }
+
+  private disableNativeSubtitleTracks(): void {
+    const tracks = this.video.textTracks;
+    if (!tracks) return;
+    for (let index = 0; index < tracks.length; index += 1) {
+      const track = tracks[index];
+      if (track && isSubtitleKind(track.kind)) try { track.mode = "disabled"; } catch { /* The browser may not have initialized the track. */ }
+    }
+  }
+
+  private disableOtherSubtitleRenderers(): void {
+    const hls = this.hls as HlsSubtitleController | undefined;
+    if (hls && "subtitleTrack" in hls) {
+      try { hls.subtitleTrack = -1; hls.subtitleDisplay = false; } catch { /* Older HLS builds may not expose these controls. */ }
+    }
+    this.liveDvbSubtitles?.setEnabled(false);
+    this.disableNativeSubtitleTracks();
+  }
+
+  private captureHlsSubtitleTracks(hls: HlsSubtitleController): void {
+    const source = hls.subtitleTracks;
+    this.liveHlsSubtitleTracks = Array.isArray(source) ? source.flatMap((track, index) => {
+      const language = cleanTrackText(track.lang);
+      const label = cleanTrackText(track.name) || language || `Subtitle ${index + 1}`;
+      return [{ id: index, label, ...(language ? { language } : {}), selected: hls.subtitleTrack === index }];
+    }) : [];
+  }
+
+  private refreshEmbeddedSubtitleTracks(): void {
+    if (!this.liveSubtitleMode) return;
+    this.eventHandlers?.onEmbeddedSubtitleTracksChange?.(this.getEmbeddedSubtitleTracks());
   }
 
   private applyPendingSeek(): void {
@@ -258,4 +437,28 @@ function cleanTrackText(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80);
   return cleaned || undefined;
+}
+
+interface HlsSubtitleController {
+  subtitleTracks?: Array<{ lang?: string; name?: string }>;
+  subtitleTrack?: number;
+  subtitleDisplay?: boolean;
+}
+
+function isSubtitleKind(kind: string): boolean {
+  return kind === "subtitles" || kind === "captions";
+}
+
+function nativeSubtitleTracks(video: HTMLVideoElement): EmbeddedSubtitleTrack[] {
+  const tracks = video.textTracks;
+  if (!tracks) return [];
+  const result: EmbeddedSubtitleTrack[] = [];
+  for (let index = 0; index < tracks.length; index += 1) {
+    const track = tracks[index];
+    if (!track || !isSubtitleKind(track.kind)) continue;
+    const language = cleanTrackText(track.language);
+    const label = cleanTrackText(track.label) || language || `Subtitle ${index + 1}`;
+    result.push({ id: `text:${index}`, label, ...(language ? { language } : {}), selected: track.mode === "showing" });
+  }
+  return result;
 }
