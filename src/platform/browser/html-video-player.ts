@@ -2,11 +2,11 @@ import type { AudioTrack, EmbeddedSubtitleTrack, MediaPlayer, MediaPlayerEventHa
 import { srtToWebVtt } from "../../core/subtitles/srt-to-vtt.ts";
 import { shiftWebVttCues } from "../../core/subtitles/webvtt-timing.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
-import { LiveDvbSubtitles } from "./live-dvb-subtitles.ts";
+
+const PLAYBACK_START_TIMEOUT_MS = 8_000;
 
 export class HtmlVideoPlayer implements MediaPlayer {
   private hls: { destroy(): void } | undefined;
-  private liveDvbSubtitles: LiveDvbSubtitles | undefined;
   private liveSubtitleMode = false;
   private liveHlsSubtitleTracks: Array<{ id: number; label: string; language?: string; selected: boolean }> = [];
   private selectedNativeSubtitleTrack: TextTrack | undefined;
@@ -20,6 +20,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private subtitleTrack: HTMLTrackElement | undefined;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
   private pendingSeekSeconds: number | null = null;
+  private playbackStartTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly eventListeners: Array<[string, EventListener]>;
 
   constructor(private readonly video: HTMLVideoElement) {
@@ -30,7 +31,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
       ["waiting", () => this.emit("buffering")],
       ["pause", () => { if (!this.video.ended) this.emit("paused"); }],
       ["ended", () => this.emit("ended")],
-      ["error", () => this.emit("error")],
+      ["error", () => { this.clearPlaybackStartTimer(); this.emit("error"); }],
       ["loadedmetadata", () => this.applyPendingSeek()],
       ["loadedmetadata", () => this.refreshEmbeddedSubtitleTracks()],
       ["playing", () => this.refreshEmbeddedSubtitleTracks()],
@@ -58,22 +59,38 @@ export class HtmlVideoPlayer implements MediaPlayer {
     const generation = ++this.loadGeneration;
     this.liveHlsSubtitleTracks = [];
     this.selectedNativeSubtitleTrack = undefined;
-    this.liveDvbSubtitles?.dispose();
-    this.liveDvbSubtitles = undefined;
     this.hls?.destroy();
     this.hls = undefined;
+    this.clearPlaybackStartTimer();
     this.emit("loading");
+    this.armPlaybackStartTimer(generation);
     if (/\.m3u8(?:[?#]|$)/i.test(streamUrl)
       && (this.liveSubtitleMode || !this.video.canPlayType("application/vnd.apple.mpegurl"))) {
       void import("hls.js").then(({ default: Hls }) => {
         if (generation !== this.loadGeneration) return;
         if (!Hls.isSupported()) { this.emit("error"); return; }
-        // The DVB subtitle adapter consumes transport packets before they are
-        // transferred to HLS.js's worker, so live mode must keep them local.
-        const hls = new Hls({ enableWorker: !this.liveSubtitleMode, lowLatencyMode: true });
+        // Keep MPEG-TS demuxing off the UI thread so malformed or unusually
+        // busy transport streams cannot make the controls unresponsive.
+        const hls = new Hls({
+          enableWorker: true,
+          // Provider live streams can contain malformed auxiliary tracks or
+          // advertise partial-segment behavior they do not implement safely.
+          // The conservative profile keeps ordinary segment playback isolated
+          // from those parsers and leaves external WebVTT subtitles unaffected.
+          lowLatencyMode: false,
+          enableWebVTT: false,
+          enableIMSC1: false,
+          enableCEA708Captions: false,
+        });
         this.hls = hls;
         if (this.liveSubtitleMode) {
-          this.liveDvbSubtitles = new LiveDvbSubtitles(this.video, hls, Hls.Events, undefined, () => this.refreshEmbeddedSubtitleTracks());
+          // Keep browser playback isolated from MPEG-TS DVB subtitle parsing.
+          // Some provider streams expose malformed or extremely busy private
+          // subtitle PIDs; feeding those packets to a browser-side decoder can
+          // monopolize the main thread and prevent both playback and the UI
+          // timeout fallback from making progress. hls.js manifest subtitle
+          // tracks remain available here, while Tizen continues to use AVPlay's
+          // native embedded-track support.
           const events = Hls.Events as unknown as Record<string, string>;
           const updateTracks = () => { this.captureHlsSubtitleTracks(hls); this.refreshEmbeddedSubtitleTracks(); };
           const trackEvents = hls as unknown as { on(event: string, callback: () => void): void };
@@ -144,7 +161,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     const native = nativeSubtitleTracks(this.video);
     return [...this.liveHlsSubtitleTracks.map((track) => ({ ...track, id: `hls:${track.id}` })),
       ...native,
-      ...(this.liveDvbSubtitles?.getTracks() ?? [])];
+    ];
   }
 
   selectEmbeddedSubtitleTrack(id: string): boolean {
@@ -157,7 +174,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
       if (hls && "subtitleTrack" in hls) {
         try { hls.subtitleTrack = -1; hls.subtitleDisplay = false; } catch { /* Older HLS builds may not expose these controls. */ }
       }
-      return this.liveDvbSubtitles?.setEnabled?.(false) ?? true;
+      return true;
     }
     if (id.startsWith("hls:")) {
       const trackId = Number(id.slice(4));
@@ -166,7 +183,6 @@ export class HtmlVideoPlayer implements MediaPlayer {
       try {
         hls.subtitleTrack = trackId;
         hls.subtitleDisplay = true;
-        this.liveDvbSubtitles?.setEnabled(false);
         this.disableNativeSubtitleTracks();
         return hls.subtitleTrack === trackId;
       } catch { return false; }
@@ -179,7 +195,6 @@ export class HtmlVideoPlayer implements MediaPlayer {
         this.selectedNativeSubtitleTrack = tracks[index];
         const hls = this.hls as HlsSubtitleController | undefined;
         if (hls && "subtitleTrack" in hls) { hls.subtitleTrack = -1; hls.subtitleDisplay = false; }
-        this.liveDvbSubtitles?.setEnabled(false);
         for (let candidate = 0; candidate < tracks.length; candidate += 1) {
           const track = tracks[candidate];
           if (track && isSubtitleKind(track.kind)) track.mode = candidate === index ? "showing" : "disabled";
@@ -187,15 +202,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
         return tracks[index]?.mode === "showing";
       } catch { return false; }
     }
-    // DVB selection happens while parsing the PMT, before any PES data reaches
-    // the canvas. This confirms the live policy's chosen rendition to the UI.
-    if (!this.liveDvbSubtitles?.isSelected(id)) return false;
-    this.selectedNativeSubtitleTrack = undefined;
-    const hls = this.hls as HlsSubtitleController | undefined;
-    if (hls && "subtitleTrack" in hls) { hls.subtitleTrack = -1; hls.subtitleDisplay = false; }
-    this.disableNativeSubtitleTracks();
-    this.liveDvbSubtitles.setEnabled(true);
-    return true;
+    return false;
   }
 
   play(): void {
@@ -230,8 +237,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   destroy(): void {
     this.loadGeneration += 1;
-    this.liveDvbSubtitles?.dispose();
-    this.liveDvbSubtitles = undefined;
+    this.clearPlaybackStartTimer();
     this.hls?.destroy();
     this.hls = undefined;
     this.liveHlsSubtitleTracks = [];
@@ -265,7 +271,29 @@ export class HtmlVideoPlayer implements MediaPlayer {
     // authoritative signal that the stream is no longer connecting.
     // HAVE_CURRENT_DATA is 2. Keep the numeric threshold so the platform-free
     // unit-test environment does not need a browser HTMLMediaElement global.
-    if (!this.video.paused && this.video.readyState >= 2) this.emit("playing");
+    if (!this.video.paused && this.video.readyState >= 2) {
+      if (this.video.currentTime > 0) this.clearPlaybackStartTimer();
+      this.emit("playing");
+    }
+  }
+
+  private armPlaybackStartTimer(generation: number): void {
+    this.clearPlaybackStartTimer();
+    this.playbackStartTimer = setTimeout(() => {
+      this.playbackStartTimer = undefined;
+      if (generation !== this.loadGeneration
+        || (!this.video.paused && this.video.readyState >= 2 && this.video.currentTime > 0)) return;
+      this.hls?.destroy();
+      this.hls = undefined;
+      this.video.pause();
+      this.emit("error");
+    }, PLAYBACK_START_TIMEOUT_MS);
+  }
+
+  private clearPlaybackStartTimer(): void {
+    if (this.playbackStartTimer === undefined) return;
+    clearTimeout(this.playbackStartTimer);
+    this.playbackStartTimer = undefined;
   }
 
   private emitProgress(): void {
@@ -307,7 +335,6 @@ export class HtmlVideoPlayer implements MediaPlayer {
     if (hls && "subtitleTrack" in hls) {
       try { hls.subtitleTrack = -1; hls.subtitleDisplay = false; } catch { /* Older HLS builds may not expose these controls. */ }
     }
-    this.liveDvbSubtitles?.setEnabled(false);
     this.disableNativeSubtitleTracks();
   }
 

@@ -59,6 +59,28 @@ describe("HtmlVideoPlayer", () => {
     player.destroy();
   });
 
+  it("fails a browser stream that never produces playable media without blocking the UI", () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    const media = video as unknown as { paused: boolean; readyState: number };
+    media.paused = false;
+    media.readyState = 2;
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    player.load("https://example.invalid/stream.mp4");
+    dispatch("playing");
+    dispatch("loadstart");
+    dispatch("canplay");
+    vi.advanceTimersByTime(8_000);
+
+    expect(states).toEqual(["loading", "playing", "loading", "playing", "error"]);
+    expect(video.pause).toHaveBeenCalled();
+    player.destroy();
+    vi.useRealTimers();
+  });
+
   it("reports elapsed time and duration when browser media metadata is available", () => {
     const { video, dispatch } = fakeVideo();
     const player = new HtmlVideoPlayer(video);

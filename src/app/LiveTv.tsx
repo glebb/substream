@@ -12,6 +12,7 @@ type Props = { onMainMenu(): void };
 type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCategory: Record<string, LiveChannel[]> };
 const CACHE_PREFIX = "substream.live.v2.";
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
+const BROWSER_PLAYBACK_START_TIMEOUT_MS = 8_000;
 
 function safeCache(key: string): CachedLive | null {
   try {
@@ -145,11 +146,37 @@ export function LiveTv({ onMainMenu }: Props) {
     const player = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {}) : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
     if (!player) { setPlaybackState("error"); return; }
     playerRef.current = player;
-    player.setLiveSubtitleMode?.(expectsEmbeddedLiveSubtitles(selected.name));
-    player.setEventHandlers({ onStateChange: setPlaybackState, onEmbeddedSubtitleTracksChange: (tracks) => reconcileEmbeddedSubtitles(player, tracks) });
+    const subtitleMode = expectsEmbeddedLiveSubtitles(selected.name);
+    if (!isTizen && expectsEmbeddedLiveSubtitles(selected.name)) {
+      setLiveSubtitleStatus("Embedded subtitles unavailable in browser playback");
+    }
+    player.setLiveSubtitleMode?.(subtitleMode);
+    player.setEventHandlers({
+      onStateChange: setPlaybackState,
+      onEmbeddedSubtitleTracksChange: (tracks) => reconcileEmbeddedSubtitles(player, tracks),
+    });
     player.load(client.liveStreamUrl(selected.providerStreamId, isTizenAvPlayAvailable() ? "ts" : "m3u8"));
-    return () => { player.setEventHandlers(null); player.destroy(); if (playerRef.current === player) playerRef.current = null; };
-  }, [client, retryCount, selected]);
+    return () => {
+      player.setEventHandlers(null); player.destroy(); if (playerRef.current === player) playerRef.current = null;
+    };
+  }, [client, isTizen, retryCount, selected]);
+
+  useEffect(() => {
+    if (!selected || isTizenAvPlayAvailable()) return;
+    const startupTimer = window.setTimeout(() => {
+      const video = videoRef.current;
+      const playbackIsAdvancing = !!video && !video.paused && video.readyState >= 2 && video.currentTime > 0;
+      if (playbackIsAdvancing || playbackStateRef.current === "error") return;
+      // Stop hls.js before a malformed or continuously busy transport stream
+      // can monopolize Chromium's renderer. Retry starts another bounded attempt.
+      const player = playerRef.current;
+      player?.setEventHandlers(null);
+      player?.destroy();
+      if (playerRef.current === player) playerRef.current = null;
+      setPlaybackState("error");
+    }, BROWSER_PLAYBACK_START_TIMEOUT_MS);
+    return () => window.clearTimeout(startupTimer);
+  }, [selected?.id, retryCount]);
 
   useEffect(() => {
     if (!selected || playbackState !== "playing") return;

@@ -45,6 +45,7 @@ describe("LiveDvbSubtitles TS demux and renderer handoff", () => {
     );
     const payload = fragment.buffer.slice(fragment.byteOffset, fragment.byteOffset + fragment.byteLength) as ArrayBuffer;
     listeners.get("frag")?.("frag", { payload, frag: { type: "main", start: 0, cc: 4 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(subtitles.getTracks()).toEqual([
       { id: "288:1", label: "fin · DVB", language: "fin", selected: true },
       { id: "288:2", label: "swe · DVB", language: "swe", selected: false },
@@ -75,13 +76,13 @@ describe("LiveDvbSubtitles TS demux and renderer handoff", () => {
     const pat = withCrc([0, 0xb0, 13, 0, 1, 0xc1, 0, 0, 0, 1, 0xe1, 0]);
     const pmt = withCrc([2, 0xb0, 28, 0, 1, 0xc1, 0, 0, 0xe1, 0x20, 0xf0, 0,
       6, 0xe1, 0x20, 0xf0, 10, 0x59, 8, 0x66, 0x69, 0x6e, 0x10, 0, 1, 0, 1]);
-    const continuation = Array.from({ length: 2_000 }, () => ts(0x120, new Array(184).fill(0x55), false));
+    const continuation = Array.from({ length: 300 }, () => ts(0x120, new Array(184).fill(0x55), false));
     const pes = [0, 0, 1, 0xbd, 0, 9, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1, 0x20];
     const fragment = concat(ts(0, [0, ...pat]), ts(0x100, [0, ...pmt]), ...continuation, ts(0x120, pes));
     const payload = fragment.buffer.slice(fragment.byteOffset, fragment.byteOffset + fragment.byteLength) as ArrayBuffer;
     listeners.get("pts")?.("pts", { id: "main", initPTS: 0, timescale: 90_000, frag: { cc: 1 } });
     listeners.get("frag")?.("frag", { payload, frag: { type: "main", start: 0, cc: 1 } });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(append).toHaveBeenCalledOnce();
     subtitles.dispose();

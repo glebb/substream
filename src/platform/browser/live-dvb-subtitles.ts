@@ -8,6 +8,7 @@ type HlsEvents = { FRAG_LOADED: string; FRAG_DECRYPTED: string; INIT_PTS_FOUND: 
 type DvbTrack = { pid: number; language: string; compositionPageId: number; ancillaryPageId: number };
 type Renderer = { append(data: Uint8Array): Promise<number>; reset(): Promise<void>; dispose(): void };
 type QueuedPes = { data: Uint8Array; start: number; cc: number | undefined };
+type QueuedFragment = { bytes: Uint8Array; start: number; cc: number | undefined; offset: number };
 
 const TS_PACKET = 188;
 const PTS_WRAP = 0x200000000;
@@ -15,6 +16,8 @@ const PTS_WRAP = 0x200000000;
 // for zero-length/malformed packets, but never repeatedly copy an unbounded
 // transport payload on the browser's main thread.
 const MAX_PENDING_PES_BYTES = 128 * 1024;
+const TS_PACKETS_PER_TASK = 256;
+const MAX_QUEUED_FRAGMENTS = 8;
 
 /**
  * Extracts DVB subtitle PES packets from HLS MPEG-TS media fragments. hls.js
@@ -42,6 +45,8 @@ export class LiveDvbSubtitles {
   private rebuildCount = 0;
   private rendererOps: Promise<void> = Promise.resolve();
   private rendererFailed = false;
+  private queuedFragments: QueuedFragment[] = [];
+  private fragmentTimer: ReturnType<typeof setTimeout> | undefined;
 
   private readonly onInitPts = (_event: string, data: Record<string, unknown>) => {
     const id = data.id;
@@ -63,13 +68,40 @@ export class LiveDvbSubtitles {
     const payload = data.payload;
     const fragment = data.frag as { type?: string; start?: number; cc?: number } | undefined;
     if (!(payload instanceof ArrayBuffer) || fragment?.type !== "main" || this.disposed) return;
-    if (this.lastContinuityCounter !== undefined && fragment.cc !== undefined && fragment.cc !== this.lastContinuityCounter) {
+    // HLS may transfer the source buffer to its demux worker as soon as this
+    // event returns, so retain one local copy for time-sliced subtitle parsing.
+    this.queuedFragments.push({ bytes: new Uint8Array(payload).slice(), start: Math.max(0, Number(fragment.start) || 0), cc: fragment.cc, offset: 0 });
+    while (this.queuedFragments.length > MAX_QUEUED_FRAGMENTS) this.queuedFragments.shift();
+    this.scheduleFragmentWork();
+  };
+
+  private scheduleFragmentWork(): void {
+    if (this.fragmentTimer !== undefined || this.disposed || !this.queuedFragments.length) return;
+    this.fragmentTimer = setTimeout(() => {
+      this.fragmentTimer = undefined;
+      this.processFragmentWork();
+      this.scheduleFragmentWork();
+    }, 0);
+  }
+
+  private processFragmentWork(): void {
+    const fragment = this.queuedFragments[0];
+    if (!fragment || this.disposed) return;
+    if (fragment.offset === 0) this.beginFragment(fragment.cc);
+    const end = Math.min(fragment.bytes.length, fragment.offset + TS_PACKET * TS_PACKETS_PER_TASK);
+    this.consume(fragment.bytes.subarray(fragment.offset, end), fragment.start);
+    fragment.offset = end;
+    if (fragment.offset >= fragment.bytes.length) this.queuedFragments.shift();
+  }
+
+  private beginFragment(continuityCounter: number | undefined): void {
+    if (this.lastContinuityCounter !== undefined && continuityCounter !== undefined && continuityCounter !== this.lastContinuityCounter) {
       this.pendingPes = new Uint8Array(0);
       this.queuedPes = [];
       this.queuedBytes = 0;
-      // With worker mode disabled, HLS can publish initPTS before the fragment
-      // event. Preserve it when it already belongs to the incoming continuity.
-      if (this.initPtsCc !== fragment.cc) {
+      // HLS can publish initPTS before queued fragment work runs. Preserve it
+      // when it already belongs to the incoming continuity.
+      if (this.initPtsCc !== continuityCounter) {
         this.initPts = undefined;
         this.initPtsCc = undefined;
       }
@@ -78,9 +110,8 @@ export class LiveDvbSubtitles {
       this.selectionVersion++;
       this.queueRenderer(async (renderer) => { await renderer.reset(); });
     }
-    this.lastContinuityCounter = fragment.cc;
-    this.consume(new Uint8Array(payload), Math.max(0, Number(fragment.start) || 0));
-  };
+    this.lastContinuityCounter = continuityCounter;
+  }
 
   constructor(
     private readonly video: HTMLVideoElement,
@@ -99,6 +130,9 @@ export class LiveDvbSubtitles {
 
   dispose(): void {
     this.disposed = true;
+    if (this.fragmentTimer !== undefined) clearTimeout(this.fragmentTimer);
+    this.fragmentTimer = undefined;
+    this.queuedFragments = [];
     this.hls.off(this.events.INIT_PTS_FOUND, this.onInitPts);
     this.hls.off(this.events.FRAG_LOADED, this.onFragment);
     this.hls.off(this.events.FRAG_DECRYPTED, this.onFragment);
