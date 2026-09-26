@@ -12,6 +12,61 @@ const TS_PACKET_BYTES = 188;
 const DVB_MAX_CAPTURED_FRAGMENT_BYTES = 10 * 1024 * 1024;
 const DVB_CAPTURE_WINDOW_BYTES = Math.floor(LIVE_DVB_MAX_FRAGMENT_BYTES / TS_PACKET_BYTES) * TS_PACKET_BYTES;
 
+function logCompatibilityHlsEvent(event: string, value: unknown): void {
+  const data = value && typeof value === "object" ? value as {
+    type?: unknown; details?: unknown; fatal?: unknown; response?: { code?: unknown };
+    frag?: { sn?: unknown; type?: unknown; stats?: { loaded?: unknown } };
+    networkDetails?: { status?: unknown; readyState?: unknown; name?: unknown };
+    mimeType?: unknown;
+    sourceBufferName?: unknown; error?: { name?: unknown };
+  } : {};
+  const safeName = (item: unknown) => typeof item === "string" && /^[a-zA-Z0-9_]{1,64}$/.test(item) ? item : undefined;
+  const status = Number(data.response?.code);
+  const segmentNumber = Number(data.frag?.sn);
+  const loadedBytes = Number(data.frag?.stats?.loaded);
+  const safe = {
+    event: safeName(event), type: safeName(data.type), detail: safeName(data.details),
+    fatal: typeof data.fatal === "boolean" ? data.fatal : undefined,
+    status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined,
+    segment: Number.isSafeInteger(segmentNumber) && segmentNumber >= 0 ? segmentNumber : undefined,
+    segmentType: safeName(data.frag?.type),
+    sourceBuffer: safeName(data.sourceBufferName), errorName: safeName(data.error?.name),
+    mimeType: typeof data.mimeType === "string" && /^[a-zA-Z0-9_./;=," -]{1,120}$/.test(data.mimeType) ? data.mimeType : undefined,
+    networkStatus: Number.isInteger(Number(data.networkDetails?.status)) && Number(data.networkDetails?.status) >= 100 && Number(data.networkDetails?.status) <= 599 ? Number(data.networkDetails?.status) : undefined,
+    networkReadyState: Number.isInteger(Number(data.networkDetails?.readyState)) ? Number(data.networkDetails?.readyState) : undefined,
+    networkErrorName: safeName(data.networkDetails?.name),
+    loadedBytes: Number.isSafeInteger(loadedBytes) && loadedBytes >= 0 ? loadedBytes : undefined,
+  };
+  console.warn(`[media-compat:hls] ${JSON.stringify(safe)}`);
+}
+
+function logCompatibilityHlsDiagnostic(event: string, value: unknown): void {
+  if (!import.meta.env.DEV || typeof window === "undefined" || !new URLSearchParams(window.location.search).has("mediaDebug")) return;
+  const data = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const safeName = (item: unknown) => typeof item === "string" && /^[a-zA-Z0-9_.-]{1,80}$/.test(item) ? item : undefined;
+  const tracksValue = data.tracks && typeof data.tracks === "object"
+    ? data.tracks as Record<string, unknown>
+    : Object.fromEntries(["audio", "video", "audiovideo"].flatMap((name) => data[name] && typeof data[name] === "object" ? [[name, data[name]]] : []));
+  const tracks = Object.fromEntries(Object.entries(tracksValue).map(([name, item]) => {
+    const track = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    return [name, { codec: safeName(track.codec), levelCodec: safeName(track.levelCodec), container: safeName(track.container), id: safeName(track.id) }];
+  }));
+  const output = {
+    event: safeName(event), trackNames: Object.keys(tracksValue).filter((name) => /^[a-zA-Z]{1,20}$/.test(name)), tracks,
+    segment: typeof data.frag === "object" && data.frag ? Number((data.frag as { sn?: unknown }).sn) : undefined,
+    bytes: typeof data.frag === "object" && data.frag ? Number(((data.frag as { stats?: { loaded?: unknown } }).stats?.loaded)) : undefined,
+    codec: safeName(data.codec), mimeType: safeName(data.mimeType),
+    levelCount: Array.isArray(data.levels) ? data.levels.length : undefined,
+    firstLevel: Number.isSafeInteger(data.firstLevel) ? data.firstLevel : undefined,
+    audioTrackCount: Array.isArray(data.audioTracks) ? data.audioTracks.length : undefined,
+  };
+  console.info(`[media-compat:hls-debug] ${JSON.stringify(output)}`);
+}
+
+function browserSupportsAudioCodec(video: HTMLVideoElement, codec: string): boolean {
+  try { return typeof video.canPlayType === "function" && !!video.canPlayType(codec); } catch { return false; }
+}
+
 export class HtmlVideoPlayer implements MediaPlayer {
   private hls: HlsSubtitleController | undefined;
   private liveSubtitleMode = false;
@@ -33,6 +88,10 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private subtitleTimingOffsetSeconds = 0;
   private subtitleEnabled = true;
   private subtitleTrack: HTMLTrackElement | undefined;
+  private compatibilityPath: string | undefined;
+  private compatibilitySourceUrl: string | undefined;
+  private compatibilityDurationSeconds: number | null = null;
+  private compatibilityOffsetSeconds = 0;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
   private pendingSeekSeconds: number | null = null;
   private playbackStartTimer: ReturnType<typeof setTimeout> | undefined;
@@ -63,7 +122,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
         this.emit("playing");
         this.emitProgress(); this.emitLiveBufferWindow(); this.dvbWorker?.setTime(this.video.currentTime);
       }],
-      ["durationchange", () => { this.emitProgress(); this.emitLiveBufferWindow(); }],
+      ["durationchange", () => { this.applyPendingSeek(); this.emitProgress(); this.emitLiveBufferWindow(); }],
       ["progress", () => this.emitLiveBufferWindow()],
       ["loadedmetadata", () => this.emitLiveBufferWindow()],
     ];
@@ -89,6 +148,10 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   load(streamUrl: string): void {
     const generation = ++this.loadGeneration;
+    this.stopCompatibilityPlayback();
+    this.compatibilitySourceUrl = undefined;
+    this.compatibilityDurationSeconds = null;
+    this.compatibilityOffsetSeconds = 0;
     this.disposeDvbSubtitlePath();
     this.subtitlesDisabled = false;
     this.selectedNativeSubtitleTrack = undefined;
@@ -96,6 +159,17 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.hls = undefined;
     this.clearPlaybackStartTimer();
     this.emit("loading");
+    const supportsEac3 = browserSupportsAudioCodec(this.video, 'audio/mp4; codecs="ec-3"');
+    const supportsAc3 = browserSupportsAudioCodec(this.video, 'audio/mp4; codecs="ac-3"');
+    const supportsH264 = browserSupportsAudioCodec(this.video, 'video/mp4; codecs="avc1.640028"');
+    if (import.meta.env.DEV && /\.mkv(?:[?#]|$)/i.test(streamUrl) && supportsH264 && (!supportsEac3 || !supportsAc3)) {
+      this.compatibilitySourceUrl = streamUrl;
+      this.video.pause();
+      this.video.removeAttribute("src");
+      this.video.load();
+      void this.loadCompatibilityStream(streamUrl, generation);
+      return;
+    }
     this.armPlaybackStartTimer(generation);
     const isHlsStream = /\.m3u8(?:[?#]|$)/i.test(streamUrl);
     const supportsNativeHls = isHlsStream && !!this.video.canPlayType("application/vnd.apple.mpegurl");
@@ -323,6 +397,12 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   restart(): void {
+    if (this.compatibilitySourceUrl && this.compatibilityOffsetSeconds > 0) {
+      // A resumed HLS job's local timeline starts at the saved source position.
+      // Re-prepare from source zero so Restart retains its usual meaning.
+      this.load(this.compatibilitySourceUrl);
+      return;
+    }
     try {
       this.video.currentTime = 0;
       this.play();
@@ -333,6 +413,11 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   skip(seconds: number): void {
     if (!Number.isFinite(seconds) || !Number.isFinite(this.video.duration)) return;
+    if (this.compatibilityPath) {
+      const sourceTime = this.video.currentTime + this.compatibilityOffsetSeconds;
+      this.seekTo(Math.max(this.compatibilityOffsetSeconds, sourceTime + seconds));
+      return;
+    }
     this.video.currentTime = Math.max(0, Math.min(this.video.duration, this.video.currentTime + seconds));
   }
 
@@ -346,6 +431,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   destroy(): void {
     this.loadGeneration += 1;
+    this.stopCompatibilityPlayback();
+    this.compatibilitySourceUrl = undefined;
     this.disposeDvbSubtitlePath();
     this.clearPlaybackStartTimer();
     this.clearBufferingTimer();
@@ -360,6 +447,85 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.video.load();
     for (const [type, listener] of this.eventListeners) this.video.removeEventListener(type, listener);
     this.removeSubtitleTrack();
+  }
+
+  private async loadCompatibilityStream(streamUrl: string, generation: number): Promise<void> {
+    try {
+      // App startup calls load() and then seekTo(savedPosition) synchronously.
+      // Give that seek one microtask to populate pendingSeekSeconds before
+      // building the preparation request.
+      await Promise.resolve();
+      if (generation !== this.loadGeneration) return;
+      const response = await fetch("/api/media/prepare", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          streamUrl,
+          supportsEac3: browserSupportsAudioCodec(this.video, 'audio/mp4; codecs="ec-3"'),
+          supportsAc3: browserSupportsAudioCodec(this.video, 'audio/mp4; codecs="ac-3"'),
+          supportsH264: browserSupportsAudioCodec(this.video, 'video/mp4; codecs="avc1.640028"'),
+          startSeconds: this.pendingSeekSeconds || 0,
+        }),
+      });
+      if (!response.ok) throw new Error("Media preparation failed.");
+      const value = await response.json() as { url?: string; direct?: boolean; durationSeconds?: number | null; startSeconds?: number };
+      if (value.direct) {
+        if (generation !== this.loadGeneration) return;
+        this.video.src = streamUrl;
+        this.video.load();
+        this.armPlaybackStartTimer(generation);
+        void this.requestPlay();
+        return;
+      }
+      if (!value.url) throw new Error("Media preparation response was invalid.");
+      if (generation !== this.loadGeneration) {
+        void fetch(value.url.replace(/\/index\.m3u8$/, ""), { method: "DELETE" }).catch(() => undefined);
+        return;
+      }
+      this.compatibilityPath = value.url;
+      this.compatibilityDurationSeconds = typeof value.durationSeconds === "number"
+        && Number.isFinite(value.durationSeconds) && value.durationSeconds > 0 ? value.durationSeconds : null;
+      this.compatibilityOffsetSeconds = typeof value.startSeconds === "number"
+        && Number.isFinite(value.startSeconds) && value.startSeconds > 0 ? value.startSeconds : 0;
+      if (this.subtitleText !== undefined) this.replaceSubtitleTrack();
+      const { default: Hls } = await import("hls.js");
+      if (generation !== this.loadGeneration) return;
+      if (!Hls.isSupported()) throw new Error("HLS playback is unavailable.");
+      const hls = new Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 60, backBufferLength: 30 });
+      this.hls = hls;
+      hls.on(Hls.Events.ERROR, (_event: string, data: { fatal?: boolean; type?: string; details?: string; response?: { code?: number }; sourceBufferName?: string; error?: { name?: string }; networkDetails?: { status?: number; readyState?: number; name?: string }; frag?: { sn?: number | "initSegment"; type?: string; stats?: { loaded?: number } } }) => {
+        const debug = import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).has("mediaDebug");
+        if (!data.fatal && !debug) return;
+        if (import.meta.env.DEV) logCompatibilityHlsEvent(Hls.Events.ERROR, data);
+        if (data.fatal) this.emit("error");
+      });
+      if (import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).has("mediaDebug")) {
+        for (const event of [Hls.Events.MANIFEST_PARSED, Hls.Events.BUFFER_CODECS, Hls.Events.BUFFER_CREATED, Hls.Events.BUFFER_APPENDED, Hls.Events.FRAG_LOADED]) {
+          hls.on(event, (_event: string, data: unknown) => logCompatibilityHlsDiagnostic(event, data));
+        }
+      }
+      hls.loadSource(value.url);
+      hls.attachMedia(this.video);
+      this.armPlaybackStartTimer(generation);
+      void this.requestPlay();
+    } catch {
+      if (generation !== this.loadGeneration) return;
+      // Do not silently return to an unsupported MKV audio codec. A failed
+      // local adapter must surface as a playback error instead of fake success.
+      this.stopCompatibilityPlayback();
+      this.hls?.destroy();
+      this.hls = undefined;
+      this.clearPlaybackStartTimer();
+      this.video.pause();
+      this.video.removeAttribute("src");
+      this.video.load();
+      this.emit("error");
+    }
+  }
+
+  private stopCompatibilityPlayback(): void {
+    const path = this.compatibilityPath;
+    this.compatibilityPath = undefined;
+    if (path) void fetch(path.replace(/\/index\.m3u8$/, ""), { method: "DELETE" }).catch(() => undefined);
   }
 
   private async requestPlay(): Promise<void> {
@@ -428,8 +594,10 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   private emitProgress(): void {
-    const durationSeconds = this.video.duration;
-    const currentTimeSeconds = this.video.currentTime;
+    const probedDuration = this.compatibilityPath ? this.compatibilityDurationSeconds : null;
+    const durationSeconds = probedDuration && Number.isFinite(probedDuration) && probedDuration > 0
+      ? probedDuration : this.video.duration;
+    const currentTimeSeconds = this.video.currentTime + (this.compatibilityPath ? this.compatibilityOffsetSeconds : 0);
     if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || !Number.isFinite(currentTimeSeconds)) return;
     this.eventHandlers?.onProgress?.({ currentTimeSeconds, durationSeconds });
   }
@@ -590,11 +758,14 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private applyPendingSeek(): void {
     if (this.pendingSeekSeconds === null || this.video.readyState < 1) return;
     const seconds = this.pendingSeekSeconds;
+    const localSeconds = Math.max(0, seconds - (this.compatibilityPath ? this.compatibilityOffsetSeconds : 0));
+    if (this.compatibilityPath && Number.isFinite(this.video.duration) && localSeconds > this.video.duration) return;
     this.pendingSeekSeconds = null;
     try {
-      this.video.currentTime = Math.min(seconds, Number.isFinite(this.video.duration) ? this.video.duration : seconds);
+      this.video.currentTime = Math.min(localSeconds, Number.isFinite(this.video.duration) ? this.video.duration : localSeconds);
     } catch {
       // Some browser streams do not permit seeking until a seekable range exists.
+      if (this.compatibilityPath) this.pendingSeekSeconds = seconds;
     }
   }
 
@@ -635,7 +806,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   private replaceSubtitleTrack(): void {
-    const vtt = shiftWebVttCues(srtToWebVtt(this.subtitleText ?? ""), this.subtitleTimingOffsetSeconds);
+    const timelineAdjustment = this.compatibilityPath ? -this.compatibilityOffsetSeconds : 0;
+    const vtt = shiftWebVttCues(srtToWebVtt(this.subtitleText ?? ""), this.subtitleTimingOffsetSeconds + timelineAdjustment);
     const objectUrl = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
     let track: HTMLTrackElement | null = null;
     try {

@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HtmlVideoPlayer } from "./html-video-player.ts";
 
-vi.mock("hls.js", () => ({ default: { Events: { ERROR: "error" }, isSupported: () => false } }));
+const { isHlsSupported, hlsInstances } = vi.hoisted(() => ({ isHlsSupported: vi.fn(() => false), hlsInstances: [] as unknown[] }));
+vi.mock("hls.js", () => ({ default: class MockHls {
+  static Events = { ERROR: "error" };
+  static isSupported = isHlsSupported;
+  on = vi.fn();
+  loadSource = vi.fn();
+  attachMedia = vi.fn();
+  destroy = vi.fn();
+  constructor() { hlsInstances.push(this); }
+} }));
 
 function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElement; dispatch(type: string): void; tracks: HTMLTrackElement[] } {
   const listeners = new Map<string, EventListener[]>();
@@ -12,6 +21,7 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
     duration: 100,
     ended: false,
     style: {},
+    canPlayType: vi.fn(() => ""),
     play: vi.fn(() => Promise.resolve()),
     pause: vi.fn(),
     load: vi.fn(load),
@@ -24,9 +34,71 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
   return { video, dispatch: (type) => listeners.get(type)?.forEach((listener) => listener(new Event(type))), tracks };
 }
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); isHlsSupported.mockReset().mockReturnValue(false); hlsInstances.length = 0; });
 
 describe("HtmlVideoPlayer", () => {
+  it("surfaces a missing compatibility server instead of silently playing unsupported MKV audio", async () => {
+    const { video } = fakeVideo();
+    (video as unknown as { canPlayType(type: string): string }).canPlayType = vi.fn((type: string) => type.includes("avc1") ? "probably" : "");
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false })));
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    player.load("https://media.example.invalid/episode.mkv");
+    await vi.waitFor(() => expect(states).toContain("error"));
+
+    expect(video.src).toBe("");
+    expect(video.play).not.toHaveBeenCalled();
+    player.destroy();
+  });
+
+  it("reports the probed source duration and keeps resume pending until HLS duration reaches it", async () => {
+    const { video, dispatch } = fakeVideo();
+    (video as unknown as { canPlayType(type: string): string }).canPlayType = vi.fn((type: string) => type.includes("avc1") ? "probably" : "");
+    const media = video as unknown as { readyState: number; duration: number; currentTime: number };
+    media.readyState = 0;
+    isHlsSupported.mockReturnValue(true);
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ url: "/api/media/synthetic/index.m3u8", durationSeconds: 3323, startSeconds: 87 }) })));
+    const player = new HtmlVideoPlayer(video);
+    const progress: Array<{ currentTimeSeconds: number; durationSeconds: number }> = [];
+    player.setEventHandlers({ onStateChange: () => undefined, onProgress: (value) => progress.push(value) });
+    const subtitleBlobs: Blob[] = [];
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn((blob: Blob) => { subtitleBlobs.push(blob); return `blob:compat-subtitle-${subtitleBlobs.length}`; }),
+      revokeObjectURL: vi.fn(),
+    });
+    vi.stubGlobal("document", { createElement: vi.fn(() => ({ default: false, kind: "", label: "", srclang: "", src: "", track: { mode: "disabled" }, remove: vi.fn() })) });
+
+    player.load("https://media.example.invalid/episode.mkv");
+    player.seekTo(87);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    const prepRequest = vi.mocked(fetch).mock.calls[0]?.[1];
+    expect(JSON.parse(String(prepRequest?.body))).toMatchObject({ startSeconds: 87 });
+    await vi.waitFor(() => expect(hlsInstances).toHaveLength(1));
+
+    media.readyState = 1;
+    media.duration = 7.8;
+    dispatch("loadedmetadata");
+    expect(media.currentTime).toBe(0);
+    media.currentTime = 1.5;
+    dispatch("timeupdate");
+    expect(progress.at(-1)).toEqual({ currentTimeSeconds: 88.5, durationSeconds: 3323 });
+
+    media.duration = 120;
+    dispatch("durationchange");
+    expect(media.currentTime).toBe(1.5);
+    expect(progress.at(-1)).toEqual({ currentTimeSeconds: 88.5, durationSeconds: 3323 });
+
+    await player.setSubtitle("1\n00:01:27.500 --> 00:01:28.000\nResume cue\n", "English", "en");
+    expect(await subtitleBlobs[0]!.text()).toContain("00:00:00.500 --> 00:00:01.000");
+    player.restart();
+    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === "/api/media/prepare")).toHaveLength(2));
+    const prepareCalls = vi.mocked(fetch).mock.calls.filter(([url]) => url === "/api/media/prepare");
+    expect(JSON.parse(String(prepareCalls[1]?.[1]?.body))).toMatchObject({ startSeconds: 0 });
+    player.destroy();
+  });
+
   it("reports loading, buffering, playing, pause, and completion from video events", () => {
     vi.useFakeTimers();
     const { video, dispatch } = fakeVideo();
@@ -259,9 +331,8 @@ describe("HtmlVideoPlayer", () => {
     player.setLiveSubtitleMode(true);
 
     player.load("https://example.invalid/live.m3u8");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => expect(video.src).toBe("https://example.invalid/live.m3u8"));
 
-    expect(video.src).toBe("https://example.invalid/live.m3u8");
     expect(video.load).toHaveBeenCalledOnce();
     expect(video.play).toHaveBeenCalledOnce();
     expect(states).toEqual(["loading"]);

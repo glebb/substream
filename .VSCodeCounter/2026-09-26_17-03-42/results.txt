@@ -1,0 +1,204 @@
+Date : 2026-09-26 17:03:42
+Directory : /Users/anttiniiles/Documents/ChatGPT/my-m3u
+Total : 145 files,  18022 codes, 446 comments, 1626 blanks, all 20094 lines
+
+Languages
++--------------------+------------+------------+------------+------------+------------+
+| language           | files      | code       | comment    | blank      | total      |
++--------------------+------------+------------+------------+------------+------------+
+| TypeScript         |        106 |      8,244 |        336 |        986 |      9,566 |
+| JSON               |          2 |      4,092 |          0 |          2 |      4,094 |
+| TypeScript JSX     |          5 |      3,277 |         45 |        131 |      3,453 |
+| JavaScript         |         12 |        968 |         23 |        116 |      1,107 |
+| Markdown           |         11 |        708 |          0 |        342 |      1,050 |
+| PostCSS            |          1 |        536 |         26 |         14 |        576 |
+| Python             |          1 |         77 |          2 |         12 |         91 |
+| YAML               |          1 |         42 |         13 |         11 |         66 |
+| HTML               |          1 |         24 |          0 |          1 |         25 |
+| Shell Script       |          1 |         16 |          1 |          3 |         20 |
+| JSON with Comments |          1 |         15 |          0 |          1 |         16 |
+| XML                |          1 |         12 |          0 |          1 |         13 |
+| Docker             |          2 |         11 |          0 |          6 |         17 |
++--------------------+------------+------------+------------+------------+------------+
+
+Directories
++---------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| path                                                                                              | files      | code       | comment    | blank      | total      |
++---------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| .                                                                                                 |        145 |     18,022 |        446 |      1,626 |     20,094 |
+| . (Files)                                                                                         |          7 |      4,305 |         22 |         54 |      4,381 |
+| docker                                                                                            |          4 |        104 |          3 |         21 |        128 |
+| docker/chromium47                                                                                 |          4 |        104 |          3 |         21 |        128 |
+| docs                                                                                              |          8 |        412 |          0 |        189 |        601 |
+| scripts                                                                                           |         22 |      1,316 |         30 |        171 |      1,517 |
+| src                                                                                               |        101 |     11,633 |        378 |      1,074 |     13,085 |
+| src (Files)                                                                                       |          2 |          5 |          1 |          3 |          9 |
+| src/app                                                                                           |         16 |      4,603 |        132 |        247 |      4,982 |
+| src/core                                                                                          |         32 |      1,262 |         48 |        203 |      1,513 |
+| src/core/catalog                                                                                  |          7 |        368 |          8 |         48 |        424 |
+| src/core/live                                                                                     |          6 |        237 |         11 |         34 |        282 |
+| src/core/m3u                                                                                      |          6 |        306 |          6 |         61 |        373 |
+| src/core/subtitles                                                                                |         13 |        351 |         23 |         60 |        434 |
+| src/platform                                                                                      |         51 |      5,763 |        197 |        621 |      6,581 |
+| src/platform (Files)                                                                              |          4 |         95 |         34 |         18 |        147 |
+| src/platform/browser                                                                              |         29 |      2,599 |         97 |        313 |      3,009 |
+| src/platform/companion                                                                            |          4 |        508 |         15 |         48 |        571 |
+| src/platform/opensubtitles                                                                        |          3 |        353 |          0 |         35 |        388 |
+| src/platform/tizen                                                                                |          5 |        944 |         28 |         86 |      1,058 |
+| src/platform/tmdb                                                                                 |          2 |        121 |          6 |          8 |        135 |
+| src/platform/web                                                                                  |          2 |        782 |          8 |         72 |        862 |
+| src/platform/xtream                                                                               |          2 |        361 |          9 |         41 |        411 |
+| tizen                                                                                             |          3 |        252 |         13 |        117 |        382 |
++---------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+
+Files
++---------------------------------------------------------------------------------------------------+--------------------+------------+------------+------------+------------+
+| filename                                                                                          | language           | code       | comment    | blank      | total      |
++---------------------------------------------------------------------------------------------------+--------------------+------------+------------+------------+------------+
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/AGENTS.md                                             | Markdown           |         13 |          0 |          8 |         21 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/README.md                                             | Markdown           |         85 |          0 |         40 |        125 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docker/chromium47/Base.Dockerfile                     | Docker             |          4 |          0 |          3 |          7 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docker/chromium47/Dockerfile                          | Docker             |          7 |          0 |          3 |         10 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docker/chromium47/provider-preview.py                 | Python             |         77 |          2 |         12 |         91 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docker/chromium47/start.sh                            | Shell Script       |         16 |          1 |          3 |         20 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docs/companion-search.md                              | Markdown           |         40 |          0 |         22 |         62 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docs/live-dvb-subtitles.md                            | Markdown           |         75 |          0 |         18 |         93 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docs/live-tv-plan.md                                  | Markdown           |         64 |          0 |         43 |        107 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docs/navigation.md                                    | Markdown           |         22 |          0 |         17 |         39 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docs/roadmap.md                                       | Markdown           |         20 |          0 |          8 |         28 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docs/status.md                                        | Markdown           |         53 |          0 |         20 |         73 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docs/tizen-3-ux-plan.md                               | Markdown           |         76 |          0 |         37 |        113 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/docs/verification.md                                  | Markdown           |         62 |          0 |         24 |         86 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/index.html                                            | HTML               |         24 |          0 |          1 |         25 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/package-lock.json                                     | JSON               |      4,039 |          0 |          1 |      4,040 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/package.json                                          | JSON               |         53 |          0 |          1 |         54 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/collect-tizen-vscode-package.mjs              | JavaScript         |         19 |          0 |          5 |         24 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/companion-media-route.test.mjs                | JavaScript         |         55 |          0 |         12 |         67 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/companion-server.mjs                          | JavaScript         |        263 |          4 |         16 |        283 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/companion-server.test.ts                      | TypeScript         |         52 |          1 |         10 |         63 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/companion-service.mjs                         | JavaScript         |        117 |          8 |         11 |        136 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/companion-service.mjs.d.ts                    | TypeScript         |          8 |          0 |          1 |          9 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/companion-service.test.ts                     | TypeScript         |         50 |          3 |          4 |         57 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/deploy-tizen-vscode-package.d.mts             | TypeScript         |         11 |          0 |          3 |         14 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/deploy-tizen-vscode-package.mjs               | JavaScript         |         57 |          0 |         12 |         69 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/deploy-tizen-vscode-package.test.ts           | TypeScript         |         26 |          0 |          5 |         31 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/dev-personal.d.mts                            | TypeScript         |          8 |          0 |          2 |         10 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/dev-personal.mjs                              | JavaScript         |         52 |          3 |          7 |         62 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/dev-personal.test.ts                          | TypeScript         |         54 |          0 |         11 |         65 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/inspect-m3u-lib.ts                            | TypeScript         |         77 |          2 |          7 |         86 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/inspect-m3u.test.ts                           | TypeScript         |         40 |          0 |          8 |         48 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/inspect-m3u.ts                                | TypeScript         |         22 |          1 |          4 |         27 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/launch-tizen-wgt.mjs                          | JavaScript         |         51 |          2 |         10 |         63 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/media-compat.mjs                              | JavaScript         |        130 |          2 |         10 |        142 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/media-compat.test.mjs                         | JavaScript         |         45 |          0 |          8 |         53 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/package-tizen-wgts.mjs                        | JavaScript         |         46 |          4 |          9 |         59 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/prepare-tizen-vscode-package.mjs              | JavaScript         |         23 |          0 |          5 |         28 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/scripts/run-chromium47.mjs                            | JavaScript         |        110 |          0 |         11 |        121 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/App.tsx                                       | TypeScript JSX     |      2,678 |         30 |         87 |      2,795 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/CompanionPanel.tsx                            | TypeScript JSX     |        138 |          3 |          8 |        149 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/LiveTv.tsx                                    | TypeScript JSX     |        435 |          6 |         31 |        472 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/app.css                                       | PostCSS            |        536 |         26 |         14 |        576 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/browse.test.ts                                | TypeScript         |        106 |          0 |         12 |        118 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/browse.ts                                     | TypeScript         |         67 |          4 |         11 |         82 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/companion-retry.test.ts                       | TypeScript         |          9 |          0 |          2 |         11 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/display-formatting.test.ts                    | TypeScript         |         27 |          0 |          3 |         30 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/display-formatting.ts                         | TypeScript         |         27 |          2 |          5 |         34 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/remote-editable.tsx                           | TypeScript JSX     |         22 |          6 |          3 |         31 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/remote-navigation.test.ts                     | TypeScript         |        196 |          1 |         21 |        218 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/remote-navigation.ts                          | TypeScript         |        212 |         48 |         28 |        288 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/title-details.test.ts                         | TypeScript         |         19 |          0 |          4 |         23 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/title-details.ts                              | TypeScript         |         44 |          1 |          5 |         50 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/title-list-focus.test.ts                      | TypeScript         |         45 |          0 |          7 |         52 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/app/title-list-focus.ts                           | TypeScript         |         42 |          5 |          6 |         53 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/catalog/catalog.test.ts                      | TypeScript         |         81 |          0 |         11 |         92 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/catalog/catalog.ts                           | TypeScript         |         76 |          1 |         11 |         88 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/catalog/importer.test.ts                     | TypeScript         |         24 |          0 |          5 |         29 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/catalog/importer.ts                          | TypeScript         |         94 |          0 |          8 |        102 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/catalog/index.ts                             | TypeScript         |          5 |          0 |          1 |          6 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/catalog/normalize.ts                         | TypeScript         |         52 |          3 |          6 |         61 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/catalog/types.ts                             | TypeScript         |         36 |          4 |          6 |         46 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/live/epg.test.ts                             | TypeScript         |         62 |          0 |          8 |         70 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/live/epg.ts                                  | TypeScript         |         35 |         10 |          8 |         53 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/live/index.ts                                | TypeScript         |          3 |          0 |          1 |          4 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/live/select.test.ts                          | TypeScript         |         36 |          0 |          4 |         40 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/live/select.ts                               | TypeScript         |         61 |          0 |          7 |         68 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/live/types.ts                                | TypeScript         |         40 |          1 |          6 |         47 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/m3u/classifier.ts                            | TypeScript         |         65 |          5 |         14 |         84 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/m3u/index.ts                                 | TypeScript         |          4 |          0 |          1 |          5 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/m3u/parser.test.ts                           | TypeScript         |         73 |          0 |         16 |         89 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/m3u/parser.ts                                | TypeScript         |        117 |          1 |         19 |        137 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/m3u/redact.ts                                | TypeScript         |         22 |          0 |          5 |         27 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/m3u/types.ts                                 | TypeScript         |         25 |          0 |          6 |         31 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/embedded.test.ts                   | TypeScript         |         14 |          0 |          3 |         17 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/embedded.ts                        | TypeScript         |         10 |          4 |          4 |         18 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/normalize.ts                       | TypeScript         |         15 |          1 |          1 |         17 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/rank.test.ts                       | TypeScript         |         52 |          0 |          8 |         60 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/rank.ts                            | TypeScript         |         97 |         10 |         13 |        120 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/srt-cues.test.ts                   | TypeScript         |         24 |          0 |          5 |         29 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/srt-cues.ts                        | TypeScript         |         24 |          1 |          3 |         28 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/srt-to-vtt.test.ts                 | TypeScript         |         12 |          0 |          3 |         15 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/srt-to-vtt.ts                      | TypeScript         |         10 |          0 |          3 |         13 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/timing.test.ts                     | TypeScript         |         17 |          0 |          3 |         20 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/timing.ts                          | TypeScript         |         10 |          5 |          3 |         18 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/webvtt-timing.test.ts              | TypeScript         |         18 |          0 |          4 |         22 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/core/subtitles/webvtt-timing.ts                   | TypeScript         |         48 |          2 |          7 |         57 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/main.tsx                                          | TypeScript JSX     |          4 |          0 |          2 |          6 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/catalog-preferences.ts           | TypeScript         |         20 |          2 |          4 |         26 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/config.test.ts                   | TypeScript         |         70 |          0 |         12 |         82 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/favourites-config.test.ts        | TypeScript         |         41 |          0 |          7 |         48 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/favourites-config.ts             | TypeScript         |         57 |          3 |         11 |         71 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/fetch-chunks.test.ts             | TypeScript         |         90 |          0 |         11 |        101 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/fetch-chunks.ts                  | TypeScript         |         86 |          9 |          9 |        104 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/html-video-player-dvb.test.ts    | TypeScript         |        139 |          0 |          9 |        148 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/html-video-player.test.ts        | TypeScript         |        282 |          0 |         45 |        327 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/html-video-player.ts             | TypeScript         |        687 |         41 |         60 |        788 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/live-dvb-overlay.test.ts         | TypeScript         |         48 |          2 |          7 |         57 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/live-dvb-overlay.ts              | TypeScript         |         84 |          4 |          8 |         96 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/live-dvb-subtitle.worker.test.ts | TypeScript         |         61 |          0 |         11 |         72 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/live-dvb-subtitle.worker.ts      | TypeScript         |        123 |          4 |          7 |        134 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/live-dvb-ts-scanner.test.ts      | TypeScript         |         41 |          2 |          5 |         48 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/live-dvb-ts-scanner.ts           | TypeScript         |        125 |          3 |         11 |        139 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/live-dvb-worker-protocol.test.ts | TypeScript         |         66 |          0 |          5 |         71 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/live-dvb-worker-protocol.ts      | TypeScript         |         75 |          8 |         11 |         94 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/opensubtitles-config.ts          | TypeScript         |         21 |          2 |          5 |         28 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/playback-progress-config.test.ts | TypeScript         |         37 |          0 |          8 |         45 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/playback-progress-config.ts      | TypeScript         |        104 |          5 |         12 |        121 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/playlist-config.ts               | TypeScript         |         21 |          2 |          5 |         28 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/subtitle-preferences.test.ts     | TypeScript         |         28 |          0 |          6 |         34 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/subtitle-preferences.ts          | TypeScript         |         54 |          0 |         13 |         67 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/subtitle-timing-config.test.ts   | TypeScript         |         38 |          0 |          5 |         43 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/subtitle-timing-config.ts        | TypeScript         |         61 |          4 |          9 |         74 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/tmdb-cache.test.ts               | TypeScript         |         10 |          0 |          2 |         12 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/tmdb-cache.ts                    | TypeScript         |         79 |          6 |          7 |         92 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/tmdb-config.ts                   | TypeScript         |         25 |          0 |          5 |         30 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/browser/tmdb-image-cache.test.ts         | TypeScript         |         26 |          0 |          3 |         29 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/companion/client.test.ts                 | TypeScript         |         54 |          0 |         11 |         65 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/companion/client.ts                      | TypeScript         |        114 |          5 |         11 |        130 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/companion/search-catalog.test.ts         | TypeScript         |        101 |          0 |          7 |        108 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/companion/search-catalog.ts              | TypeScript         |        239 |         10 |         19 |        268 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/media-player.test.ts                     | TypeScript         |          9 |          0 |          2 |         11 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/media-player.ts                          | TypeScript         |         72 |         29 |         11 |        112 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/opensubtitles/client.browser.test.ts     | TypeScript         |         23 |          0 |          2 |         25 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/opensubtitles/client.test.ts             | TypeScript         |        141 |          0 |         15 |        156 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/opensubtitles/client.ts                  | TypeScript         |        189 |          0 |         18 |        207 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/package-defaults.ts                      | TypeScript         |          9 |          4 |          3 |         16 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/provider-request.ts                      | TypeScript         |          5 |          1 |          2 |          8 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/tizen/avplay-player.test.ts              | TypeScript         |        340 |          0 |         27 |        367 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/tizen/avplay-player.ts                   | TypeScript         |        464 |         16 |         42 |        522 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/tizen/file-chunks.ts                     | TypeScript         |         30 |          5 |          4 |         39 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/tizen/remote.test.ts                     | TypeScript         |         45 |          0 |          4 |         49 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/tizen/remote.ts                          | TypeScript         |         65 |          7 |          9 |         81 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/tmdb/client.test.ts                      | TypeScript         |         31 |          0 |          2 |         33 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/tmdb/client.ts                           | TypeScript         |         90 |          6 |          6 |        102 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/web/indexed-db-catalog.test.ts           | TypeScript         |        253 |          1 |         30 |        284 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/web/indexed-db-catalog.ts                | TypeScript         |        529 |          7 |         42 |        578 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/xtream/client.test.ts                    | TypeScript         |        109 |          0 |         15 |        124 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/platform/xtream/client.ts                         | TypeScript         |        252 |          9 |         26 |        287 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/src/vite-env.d.ts                                     | TypeScript         |          1 |          1 |          1 |          3 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/tizen/README.md                                       | Markdown           |        198 |          0 |        105 |        303 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/tizen/config.xml                                      | XML                |         12 |          0 |          1 |         13 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/tizen/tizen_web_project.yaml                          | YAML               |         42 |         13 |         11 |         66 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/tsconfig.json                                         | JSON with Comments |         15 |          0 |          1 |         16 |
+| /Users/anttiniiles/Documents/ChatGPT/my-m3u/vite.config.ts                                        | TypeScript         |         76 |         22 |          2 |        100 |
+| Total                                                                                             |                    |     18,022 |        446 |      1,626 |     20,094 |
++---------------------------------------------------------------------------------------------------+--------------------+------------+------------+------------+------------+

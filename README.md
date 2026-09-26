@@ -92,6 +92,10 @@ To avoid exporting the local Tizen SDK path for every package build, copy `.tize
 
 The app's Tizen ID is `Substream0.Substream`; it installs separately from the prior My M3U development build.
 
+## Browser MKV audio compatibility
+
+For local Chrome playback, install `ffmpeg` and `ffprobe` on `PATH` and run `npm run dev:personal`. H.264 MKVs with AC-3 or E-AC-3 audio are remuxed to HLS when Chrome reports that audio codec unsupported; audio becomes stereo AAC and video is copied. Supported audio tracks play directly. DTS and TrueHD are not converted by this fallback. Production builds and Tizen playback are unaffected.
+
 ## Personal configuration and security
 
 Substream keeps playlist URLs and provider credentials in local device storage when entered through the UI. Do not commit `.env`, playlist URLs, API keys, read access tokens, signed media URLs, or packaged personal builds.

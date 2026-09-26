@@ -4,6 +4,9 @@ import { readFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fetchXtreamAction, loadXtreamCatalogue, resolveXtreamEpisode, searchCatalogue, xtreamConnectionFromPlaylist } from "./companion-service.mjs";
+import { readFile as readMediaFile } from "node:fs/promises";
+import { randomBytes as randomToken } from "node:crypto";
+import { prepareMedia } from "./media-compat.mjs";
 
 const port = Number(process.env.COMPANION_PORT || 8787);
 const host = process.env.COMPANION_HOST || "0.0.0.0";
@@ -13,6 +16,105 @@ const distDir = join(projectDir, "dist");
 const sessions = new Map();
 let activeSessionId = "";
 const SESSION_TTL_MS = 30 * 60 * 1000;
+const mediaJobs = new Map();
+
+function mediaDebug(event, fields = {}) {
+  if (process.env.MEDIA_COMPAT_DEBUG !== "1") return;
+  console.info(`[media-compat:route] ${JSON.stringify({ event, ...fields })}`);
+}
+
+function sameOriginRequest(request) {
+  const origin = request.headers?.origin;
+  const host = request.headers?.host;
+  if (!host) return false;
+  if (!origin) return request.headers?.["sec-fetch-site"] === "same-origin";
+  try {
+    const parsed = new URL(origin);
+    if (`${parsed.host}` === host) return true;
+    // Vite's local dev proxy rewrites Host to the relay while retaining the
+    // browser's localhost origin. Do not extend this exception to LAN hosts.
+    return /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(parsed.host)
+      && /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(host);
+  } catch { return false; }
+}
+
+function loopbackPeer(request) {
+  const address = String(request.socket?.remoteAddress || "").toLowerCase();
+  return address === "::1" || address === "127.0.0.1" || address === "::ffff:127.0.0.1";
+}
+
+async function readPlaylistWithRetry(filename, attempts = 5) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try { return await readMediaFile(filename); }
+    catch { if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 40)); }
+  }
+  return null;
+}
+
+async function mediaRoute(request, response, url) {
+  const routeKind = url.pathname.endsWith("/prepare") ? "prepare" : url.pathname.endsWith(".m3u8") ? "playlist" : url.pathname.endsWith(".ts") ? "segment" : "cleanup";
+  mediaDebug("request", { method: request.method, kind: routeKind });
+  response.once?.("close", () => { if (!response.writableFinished) mediaDebug("client_closed_early", { method: request.method, kind: routeKind }); });
+  if (!loopbackPeer(request)) return json(response, 403, { error: "Media compatibility request was rejected." });
+  if (request.method === "POST" && url.pathname === "/api/media/prepare") {
+    if (!sameOriginRequest(request)) return json(response, 403, { error: "Media compatibility request was rejected." });
+    try {
+      const input = await body(request);
+      if (typeof input.streamUrl !== "string" || input.streamUrl.length > 8192) return json(response, 400, { error: "Media compatibility request was invalid." });
+      const job = await prepareMedia(input.streamUrl, { supportsEac3: input.supportsEac3 === true, supportsAc3: input.supportsAc3 === true, supportsH264: input.supportsH264 === true, startSeconds: input.startSeconds });
+      if (job.direct) return json(response, 200, { direct: true, audioConverted: false });
+      const id = randomToken(18).toString("hex");
+      const record = { ...job, id, createdAt: Date.now(), lastPlaylist: await readPlaylistWithRetry(job.playlist) };
+      mediaJobs.set(id, record);
+      record.process.once("close", () => { record.finishedAt = Date.now(); });
+      const durationSeconds = Number.isFinite(job.plan.duration) && job.plan.duration > 0 ? job.plan.duration : null;
+      return json(response, 200, { url: `/api/media/${id}/index.m3u8`, audioConverted: job.plan.convertAudio, durationSeconds, startSeconds: job.startSeconds || 0 });
+    } catch {
+      return json(response, 422, { error: "Media could not be prepared for browser playback." });
+    }
+  }
+  const remove = url.pathname.match(/^\/api\/media\/([a-f0-9]{36})$/);
+  if (request.method === "DELETE" && remove) {
+    if (!sameOriginRequest(request)) return json(response, 403, { error: "Media compatibility request was rejected." });
+    const job = mediaJobs.get(remove[1]);
+    if (job) {
+      mediaJobs.delete(remove[1]);
+      try { await job.cleanup(); } catch { /* Stale temp-file cleanup must not turn DELETE into an unhandled server error. */ }
+    }
+    response.writeHead(204, { "cache-control": "no-store" });
+    response.end();
+    return true;
+  }
+  const match = url.pathname.match(/^\/api\/media\/([a-f0-9]{36})\/(index\.m3u8|segment\d{5}\.ts)$/);
+  if (!match || request.method !== "GET") { mediaDebug("unmatched", { method: request.method, kind: routeKind }); return false; }
+  if (!sameOriginRequest(request)) return json(response, 403, { error: "Media compatibility request was rejected." });
+  const job = mediaJobs.get(match[1]);
+  if (!job) return json(response, 404, { error: "Media playback expired." });
+  const isPlaylist = match[2] === "index.m3u8";
+  const filename = isPlaylist ? job.playlist : join(job.directory, match[2]);
+  try {
+    const data = isPlaylist ? await readPlaylistWithRetry(filename) : await readMediaFile(filename);
+    if (!data) throw new Error("Playlist is being updated.");
+    if (isPlaylist) job.lastPlaylist = data;
+    response.writeHead(200, { "content-type": isPlaylist ? "application/vnd.apple.mpegurl" : "video/mp2t", "content-length": data.byteLength, "cache-control": "no-store", ...(request.headers.origin ? { "access-control-allow-origin": request.headers.origin } : {}) });
+    mediaDebug("served", { kind: routeKind, status: 200, bytes: data.byteLength });
+    response.end(data);
+  } catch {
+    // FFmpeg atomically replaces EVENT playlists via temp_file. A concurrent
+    // hls.js level reload can briefly see ENOENT during rename; return the last
+    // complete manifest instead of a fatal 503 that stops playback.
+    if (isPlaylist && job.lastPlaylist) {
+      mediaDebug("served_cached", { kind: "playlist", status: 200, bytes: job.lastPlaylist.byteLength });
+      response.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "content-length": job.lastPlaylist.byteLength, "cache-control": "no-store", ...(request.headers.origin ? { "access-control-allow-origin": request.headers.origin } : {}) });
+      response.end(job.lastPlaylist);
+      return true;
+    }
+    mediaDebug("unavailable", { kind: routeKind, status: 503 });
+    response.writeHead(503, { "retry-after": "2", "cache-control": "no-store", "content-type": "text/plain" });
+    response.end("Preparing media");
+  }
+  return true;
+}
 
 function json(response, status, value) {
   const body = JSON.stringify(value);
@@ -69,7 +171,8 @@ function publicCatalogue(records) {
 }
 
 export async function route(request, response, url) {
-  if (request.method === "OPTIONS") { response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "content-type" }); response.end(); return; }
+  if (request.method === "OPTIONS") { response.writeHead(204, { "access-control-allow-origin": request.headers?.origin || "null", "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "content-type" }); response.end(); return; }
+  if (url.pathname.startsWith("/api/media/")) { const handled = await mediaRoute(request, response, url); if (handled !== false) return; }
   if (request.method === "POST" && url.pathname === "/api/connect") {
     try {
       const input = await body(request);
@@ -192,6 +295,21 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     const address = server.address();
     const listeningPort = address && typeof address === "object" ? address.port : port;
     console.log(`Companion service listening on http://127.0.0.1:${listeningPort}`);
+  });
+
+  const mediaCleanup = setInterval(() => {
+    for (const [id, job] of mediaJobs) if (job.finishedAt && Date.now() - job.finishedAt > 10 * 60 * 1000) {
+      mediaJobs.delete(id);
+      void job.cleanup().catch(() => undefined);
+    }
+  }, 60_000);
+  mediaCleanup.unref();
+  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {
+    clearInterval(mediaCleanup);
+    void Promise.allSettled([...mediaJobs.values()].map((job) => job.cleanup())).finally(() => {
+      mediaJobs.clear();
+      server.close(() => process.exit(0));
+    });
   });
 
   setInterval(() => {
