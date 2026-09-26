@@ -2,7 +2,7 @@
 
 ![Substream launch screen](public/branding/substream-splash.png)
 
-**Substream** is a subtitle-first IPTV VOD player for Samsung Tizen TVs. It turns an M3U or Xtream-compatible provider into a browsable on-demand library, then helps viewers find, select, size, and time subtitles during playback.
+**Substream** is an IPTV live TV and VOD player for Samsung Tizen TVs. It browses an M3U or Xtream-compatible on-demand library, plays live channels, and selects available subtitles during playback.
 
 > OpenSubtitles is an external service. Substream uses its API when you provide a key; it is not affiliated with or endorsed by OpenSubtitles.
 >
@@ -18,6 +18,7 @@
 - Browse and manage local favourites for movie genres and series provider categories.
 - View TMDb title details before playback, including artwork, synopsis, rating, genres, runtime, subtitle availability, and series episode selection.
 - Play through the browser's native video element or Samsung AVPlay on Tizen 3.0-compatible TVs.
+- Browse Finnish live channels and select embedded subtitles when the provider stream carries them.
 
 ## Quick start
 
@@ -116,5 +117,8 @@ Automated tests use synthetic data only. Run `npm run check` before making chang
 
 For the current implementation details, constraints, planned work, and remote-navigation contract, see [docs/status.md](docs/status.md), [docs/roadmap.md](docs/roadmap.md), and [docs/navigation.md](docs/navigation.md).
 
-For the live DVB subtitle investigation, browser safety boundaries, and the
-remaining worker-integration work, see [docs/live-dvb-subtitles.md](docs/live-dvb-subtitles.md).
+Live TV uses AVPlay's embedded text tracks on Tizen and a bounded DVB subtitle
+worker in the browser. Both prefer Finnish, then English when those tracks are
+present. A provider stream that omits subtitle packets cannot display them.
+See [docs/live-dvb-subtitles.md](docs/live-dvb-subtitles.md) for safety limits,
+verification, and provider-specific findings.

@@ -28,8 +28,16 @@ describe("LiveDvbOverlay", () => {
     expect(canvas.height).toBe(2);
     expect(canvas.style).toMatchObject({ display: "block", left: "10px", top: "20px", width: "400px", height: "225px" });
 
+    overlay.present({ type: "frame", width: 2, height: 1, screenWidth: 4, screenHeight: 2, x: 1, y: 1, rgba: new ArrayBuffer(8) });
+    // Reusing dimensions avoids reallocating a full video-sized canvas for
+    // every DVB frame; only the prior subtitle rectangle is cleared.
+    expect(canvas.width).toBe(4);
+    expect(canvas.height).toBe(2);
+    expect(context.clearRect).toHaveBeenLastCalledWith(1, 1, 2, 1);
+    expect(context.putImageData).toHaveBeenCalledTimes(2);
+
     overlay.present({ type: "frame", width: 2, height: 1, screenWidth: 4, screenHeight: 2, x: 1, y: 1, rgba: new ArrayBuffer(3) });
-    expect(context.putImageData).toHaveBeenCalledOnce();
+    expect(context.putImageData).toHaveBeenCalledTimes(2);
     overlay.clear();
     expect(canvas.style).toMatchObject({ display: "none" });
     overlay.dispose();

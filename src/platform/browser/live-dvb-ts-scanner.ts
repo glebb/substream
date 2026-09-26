@@ -12,10 +12,12 @@ export class LiveDvbTsScanner {
   private tracks: ScannedDvbTrack[] = [];
   private selected: ScannedDvbTrack | undefined;
   private pes: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+  private activePids = new Set<number>();
 
   select(id: string): void { this.selected = this.tracks.find((track) => track.id === id); this.pes = new Uint8Array(0); }
   getTracks(): ScannedDvbTrack[] { return this.tracks.slice(0, 32); }
   getSelected(): ScannedDvbTrack | undefined { return this.selected; }
+  getActiveTracks(): ScannedDvbTrack[] { return this.getTracks().filter((track) => this.activePids.has(track.pid)); }
 
   scan(input: Uint8Array): Uint8Array[] {
     const bytes = input.subarray(0, LIVE_DVB_MAX_FRAGMENT_BYTES);
@@ -23,6 +25,7 @@ export class LiveDvbTsScanner {
     for (let offset = 0; offset + PACKET <= bytes.length; offset += PACKET) {
       if (bytes[offset] !== 0x47) continue;
       const pid = ((bytes[offset + 1]! & 0x1f) << 8) | bytes[offset + 2]!;
+      this.activePids.add(pid);
       const payloadStart = (bytes[offset + 1]! & 0x40) !== 0;
       const adaptation = (bytes[offset + 3]! >> 4) & 3;
       if (adaptation === 0 || adaptation === 2) continue;
@@ -32,7 +35,9 @@ export class LiveDvbTsScanner {
       const payload = bytes.subarray(start, offset + PACKET);
       if (pid === 0 && payloadStart) this.readPat(payload);
       else if (pid === this.pmtPid) this.readPmt(payload, payloadStart);
-      else if (pid === this.selected?.pid) this.readPes(payload, payloadStart, output);
+      else if (pid === this.selected?.pid) {
+        this.readPes(payload, payloadStart, output);
+      }
     }
     return output.slice(0, 16);
   }
@@ -106,7 +111,9 @@ export class LiveDvbTsScanner {
 }
 
 function filterSelectedPage(pes: Uint8Array, selected: ScannedDvbTrack): Uint8Array | undefined {
-  if (pes.length < 16 || pes[0] !== 0 || pes[1] !== 0 || pes[2] !== 1 || pes[6] !== 0x80) return undefined;
+  // Byte 6 also carries valid PES flags (such as data_alignment_indicator).
+  // Only its two MPEG-2 marker bits identify the optional-header form.
+  if (pes.length < 16 || pes[0] !== 0 || pes[1] !== 0 || pes[2] !== 1 || (pes[6]! & 0xc0) !== 0x80) return undefined;
   const payloadStart = 9 + pes[8]!;
   if (payloadStart + 2 > pes.length || pes[payloadStart] !== 0x20) return undefined;
   const segments: Uint8Array[] = [];

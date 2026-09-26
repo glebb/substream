@@ -41,6 +41,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [playerControlIndex, setPlayerControlIndex] = useState(0);
   const [playbackState, setPlaybackState] = useState<PlaybackState>("loading");
+  const [hasStartedPlayback, setHasStartedPlayback] = useState(false);
   const [liveBufferWindow, setLiveBufferWindow] = useState<LiveBufferWindow | null>(null);
   const playbackStateRef = useRef<PlaybackState>("loading");
   const [liveSubtitleStatus, setLiveSubtitleStatus] = useState("");
@@ -70,8 +71,8 @@ export function LiveTv({ onMainMenu }: Props) {
       }
       remaining = remaining.filter((track) => track.id !== preferred.id);
     }
-    if (player.selectEmbeddedSubtitleTrack?.("off")) setLiveSubtitleStatus("Subtitles: off");
-    else setLiveSubtitleStatus("Subtitles unavailable");
+    player.selectEmbeddedSubtitleTrack?.("off");
+    setLiveSubtitleStatus("Subtitles unavailable");
   }
   const isTizen = isTizenRuntime() || __SUBSTREAM_TV_UI_PREVIEW__;
 
@@ -144,15 +145,22 @@ export function LiveTv({ onMainMenu }: Props) {
 
   useEffect(() => {
     if (!selected || !client) return;
+    setHasStartedPlayback(false);
     const player = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {}) : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
     if (!player) { setPlaybackState("error"); return; }
     playerRef.current = player;
-    // Browser worker activation is intentionally held back until it has passed
-    // a real-stream responsiveness check. AVPlay inspects its native tracks
-    // without invoking any browser-side transport or renderer work.
-    player.setLiveSubtitleMode?.(isTizen);
+    // Live TV enables embedded subtitle discovery on browser and AVPlay players.
+    player.setLiveSubtitleMode?.(true);
     player.setEventHandlers({
-      onStateChange: setPlaybackState,
+      onStateChange: (state) => {
+        playbackStateRef.current = state;
+        setPlaybackState(state);
+        if (state === "playing") setHasStartedPlayback(true);
+        // DVB descriptors may be found while the video is still connecting.
+        // Reconcile again once playback starts so early track discovery is not
+        // left unselected.
+        if (state === "playing") reconcileEmbeddedSubtitles(player, player.getEmbeddedSubtitleTracks?.() ?? []);
+      },
       onLiveBufferWindowChange: setLiveBufferWindow,
       onEmbeddedSubtitleTracksChange: (tracks) => reconcileEmbeddedSubtitles(player, tracks),
     });
@@ -306,7 +314,7 @@ export function LiveTv({ onMainMenu }: Props) {
     <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span></header>
     <div className="player-stage">
       {isTizenAvPlayAvailable() ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
-      {playbackState === "loading" || playbackState === "buffering" ? <div className="buffering-overlay">Connecting…</div> : null}
+      {playbackState === "loading" || (playbackState === "buffering" && !hasStartedPlayback) ? <div className="buffering-overlay">Connecting…</div> : null}
       {playbackState === "error" && <div className="playback-error-overlay"><strong>Channel unavailable</strong><span>The stream could not be played on this device.</span></div>}
     </div>
     <div className="player-controls live-controls">
@@ -317,7 +325,7 @@ export function LiveTv({ onMainMenu }: Props) {
       {hasLiveBuffer && <button type="button" disabled={bufferBehindSeconds < 1} onClick={() => playerRef.current?.seekLiveBuffer?.(liveBufferWindow!.currentSeconds - 30)} ref={(element) => { playerControlRefs.current[4] = element; }}>Rewind 30 seconds</button>}
       {hasLiveBuffer && <button type="button" disabled={atLiveEdge} onClick={() => playerRef.current?.goLive?.()} ref={(element) => { playerControlRefs.current[5] = element; }}>Go live</button>}
       <button type="button" onClick={leavePlayer} ref={(element) => { playerControlRefs.current[6] = element; }}>Back to channels</button>
-      <span className="playback-status">{playbackState === "playing" ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}</span>
+      <span className="playback-status">{playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}</span>
       {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}
     </div>
   </main>;

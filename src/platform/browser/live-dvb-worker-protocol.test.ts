@@ -53,4 +53,18 @@ describe("worker DVB boundary", () => {
     client.dispose();
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
+
+  it("copies a bounded packet-aligned discovery window from a later offset", () => {
+    const posted: LiveDvbWorkerRequest[] = [];
+    const worker: WorkerPort = {
+      postMessage: (message) => { posted.push(message); }, addEventListener: () => {}, removeEventListener: () => {}, terminate: () => {},
+    };
+    const client = new LiveDvbWorkerClient(worker, { onMessage: () => {} });
+    const source = new Uint8Array(1_024);
+    source.fill(0x7f, 376, 564);
+    expect(client.pushFragment(source.buffer, 0, 188, 376)).toBe(true);
+    const fragment = posted[0] as Extract<LiveDvbWorkerRequest, { type: "fragment" }>;
+    expect(fragment.buffer.byteLength).toBe(188);
+    expect(new Uint8Array(fragment.buffer)[0]).toBe(0x7f);
+  });
 });

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HtmlVideoPlayer } from "./html-video-player.ts";
 
+vi.mock("hls.js", () => ({ default: { Events: { ERROR: "error" }, isSupported: () => false } }));
+
 function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElement; dispatch(type: string): void; tracks: HTMLTrackElement[] } {
   const listeners = new Map<string, EventListener[]>();
   const tracks: HTMLTrackElement[] = [];
@@ -22,10 +24,11 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
   return { video, dispatch: (type) => listeners.get(type)?.forEach((listener) => listener(new Event(type))), tracks };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("HtmlVideoPlayer", () => {
   it("reports loading, buffering, playing, pause, and completion from video events", () => {
+    vi.useFakeTimers();
     const { video, dispatch } = fakeVideo();
     const player = new HtmlVideoPlayer(video);
     const states: string[] = [];
@@ -35,10 +38,58 @@ describe("HtmlVideoPlayer", () => {
     dispatch("loadstart");
     dispatch("playing");
     dispatch("waiting");
+    vi.advanceTimersByTime(750);
     dispatch("pause");
     dispatch("ended");
 
     expect(states).toEqual(["loading", "loading", "playing", "buffering", "paused", "ended"]);
+    player.destroy();
+  });
+
+  it("does not report buffering for a transient live waiting event", () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    dispatch("waiting");
+    dispatch("playing");
+    vi.advanceTimersByTime(750);
+
+    expect(states).toEqual(["playing"]);
+    player.destroy();
+  });
+
+  it("does not report buffering when frames continue advancing during waiting", () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    dispatch("waiting");
+    video.currentTime = 1;
+    vi.advanceTimersByTime(750);
+
+    expect(states).toEqual([]);
+    player.destroy();
+  });
+
+  it("treats a live timeupdate as playing even if readyState briefly lags", () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    (video as unknown as { readyState: number }).readyState = 1;
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    dispatch("waiting");
+    video.currentTime = 1;
+    dispatch("timeupdate");
+    vi.advanceTimersByTime(750);
+
+    expect(states).toEqual(["playing"]);
     player.destroy();
   });
 
@@ -197,6 +248,24 @@ describe("HtmlVideoPlayer", () => {
 
     expect(() => player.load("https://private.example/signed")).not.toThrow();
     expect(states).toEqual(["loading", "error"]);
+  });
+
+  it("falls back to native HLS when hls.js is unsupported in live subtitle mode", async () => {
+    const { video } = fakeVideo();
+    (video as unknown as { canPlayType(type: string): string }).canPlayType = vi.fn(() => "probably");
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.setLiveSubtitleMode(true);
+
+    player.load("https://example.invalid/live.m3u8");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(video.src).toBe("https://example.invalid/live.m3u8");
+    expect(video.load).toHaveBeenCalledOnce();
+    expect(video.play).toHaveBeenCalledOnce();
+    expect(states).toEqual(["loading"]);
+    player.destroy();
   });
 
   it("rebuilds browser WebVTT tracks from the original subtitle and revokes replaced and destroyed URLs", async () => {

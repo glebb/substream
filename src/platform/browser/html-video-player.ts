@@ -2,20 +2,28 @@ import type { AudioTrack, EmbeddedSubtitleTrack, LiveBufferWindow, MediaPlayer, 
 import { srtToWebVtt } from "../../core/subtitles/srt-to-vtt.ts";
 import { shiftWebVttCues } from "../../core/subtitles/webvtt-timing.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
-import { createLiveDvbWorkerClient, LIVE_DVB_DISCOVERY_FRAGMENT_BYTES, LIVE_DVB_MAX_FRAGMENT_BYTES, type LiveDvbWorkerClient, type LiveDvbWorkerResponse, type LiveDvbWorkerTrack, type WorkerPort } from "./live-dvb-worker-protocol.ts";
+import { createLiveDvbWorkerClient, LIVE_DVB_MAX_FRAGMENT_BYTES, type LiveDvbWorkerClient, type LiveDvbWorkerResponse, type LiveDvbWorkerTrack, type WorkerPort } from "./live-dvb-worker-protocol.ts";
 import { LiveDvbOverlay } from "./live-dvb-overlay.ts";
 
 const PLAYBACK_START_TIMEOUT_MS = 8_000;
+const BUFFERING_GRACE_MS = 750;
+const DVB_WORKER_WATCHDOG_MS = 8_000;
+const TS_PACKET_BYTES = 188;
+const DVB_MAX_CAPTURED_FRAGMENT_BYTES = 10 * 1024 * 1024;
+const DVB_CAPTURE_WINDOW_BYTES = Math.floor(LIVE_DVB_MAX_FRAGMENT_BYTES / TS_PACKET_BYTES) * TS_PACKET_BYTES;
 
 export class HtmlVideoPlayer implements MediaPlayer {
   private hls: HlsSubtitleController | undefined;
   private liveSubtitleMode = false;
-  private liveHlsSubtitleTracks: Array<{ id: number; label: string; language?: string; selected: boolean }> = [];
   private liveDvbSubtitleTracks: LiveDvbWorkerTrack[] = [];
   private selectedDvbSubtitleId: string | undefined;
+  private subtitlesDisabled = false;
   private dvbWorker: LiveDvbWorkerClient | undefined;
   private dvbOverlay: LiveDvbOverlay | undefined;
   private dvbHlsListeners: Array<[string, (event: string, data: Record<string, unknown>) => void]> = [];
+  private dvbWatchdog: ReturnType<typeof setTimeout> | undefined;
+  private dvbCaptureFragment: { payload: ArrayBuffer; startSeconds: number; nextOffset: number; byteLength: number } | undefined;
+  private dvbSeenFragments = new WeakSet<object>();
   private selectedNativeSubtitleTrack: TextTrack | undefined;
   private loadGeneration = 0;
   private subtitleObjectUrl: string | undefined;
@@ -28,21 +36,33 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private eventHandlers: MediaPlayerEventHandlers | null = null;
   private pendingSeekSeconds: number | null = null;
   private playbackStartTimer: ReturnType<typeof setTimeout> | undefined;
+  private bufferingTimer: ReturnType<typeof setTimeout> | undefined;
+  private bufferingStartTime: number | undefined;
   private readonly eventListeners: Array<[string, EventListener]>;
 
   constructor(private readonly video: HTMLVideoElement, private readonly workerFactory?: () => WorkerPort) {
     this.eventListeners = [
       ["loadstart", () => this.emit("loading")],
-      ["playing", () => this.emit("playing")],
-      ["canplay", () => this.emitPlayingIfMediaIsAdvancing()],
-      ["waiting", () => this.emit("buffering")],
-      ["pause", () => { if (!this.video.ended) this.emit("paused"); }],
-      ["ended", () => this.emit("ended")],
-      ["error", () => { this.clearPlaybackStartTimer(); this.emit("error"); }],
+      ["playing", () => { this.clearBufferingTimer(); this.emit("playing"); }],
+      ["canplay", () => { this.clearBufferingTimer(); this.emitPlayingIfMediaIsAdvancing(); }],
+      // hls.js can issue a short waiting event while it appends the next live
+      // segment even though frames keep arriving. Do not flash "Connecting"
+      // for that harmless transition.
+      ["waiting", () => this.armBufferingTimer()],
+      ["pause", () => { this.clearBufferingTimer(); if (!this.video.ended) this.emit("paused"); }],
+      ["ended", () => { this.clearBufferingTimer(); this.emit("ended"); }],
+      ["error", () => { this.clearPlaybackStartTimer(); this.clearBufferingTimer(); this.emit("error"); }],
       ["loadedmetadata", () => this.applyPendingSeek()],
       ["loadedmetadata", () => this.refreshEmbeddedSubtitleTracks()],
       ["playing", () => this.refreshEmbeddedSubtitleTracks()],
-      ["timeupdate", () => { this.emitPlayingIfMediaIsAdvancing(); this.emitProgress(); this.emitLiveBufferWindow(); this.dvbWorker?.setTime(this.video.currentTime); }],
+      ["timeupdate", () => {
+        // A timeupdate is conclusive evidence that media is advancing, even
+        // when Chromium briefly reports an older readyState during an HLS
+        // append. It wins over a preceding transient waiting event.
+        this.clearBufferingTimer();
+        this.emit("playing");
+        this.emitProgress(); this.emitLiveBufferWindow(); this.dvbWorker?.setTime(this.video.currentTime);
+      }],
       ["durationchange", () => { this.emitProgress(); this.emitLiveBufferWindow(); }],
       ["progress", () => this.emitLiveBufferWindow()],
       ["loadedmetadata", () => this.emitLiveBufferWindow()],
@@ -59,9 +79,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   setLiveSubtitleMode(enabled: boolean): void {
     this.liveSubtitleMode = enabled;
+    this.subtitlesDisabled = false;
     if (enabled) this.suppressNativeSubtitleDefaults();
     else {
-      this.liveHlsSubtitleTracks = [];
       this.disposeDvbSubtitlePath();
     }
     this.refreshEmbeddedSubtitleTracks();
@@ -70,18 +90,34 @@ export class HtmlVideoPlayer implements MediaPlayer {
   load(streamUrl: string): void {
     const generation = ++this.loadGeneration;
     this.disposeDvbSubtitlePath();
-    this.liveHlsSubtitleTracks = [];
+    this.subtitlesDisabled = false;
     this.selectedNativeSubtitleTrack = undefined;
     this.hls?.destroy();
     this.hls = undefined;
     this.clearPlaybackStartTimer();
     this.emit("loading");
     this.armPlaybackStartTimer(generation);
-    if (/\.m3u8(?:[?#]|$)/i.test(streamUrl)
-      && (this.liveSubtitleMode || !this.video.canPlayType("application/vnd.apple.mpegurl"))) {
+    const isHlsStream = /\.m3u8(?:[?#]|$)/i.test(streamUrl);
+    const supportsNativeHls = isHlsStream && !!this.video.canPlayType("application/vnd.apple.mpegurl");
+    if (isHlsStream && (this.liveSubtitleMode || !supportsNativeHls)) {
+      const loadNativeHls = () => {
+        try {
+          this.video.src = streamUrl;
+          this.video.load();
+          void this.requestPlay();
+        } catch {
+          this.emit("error");
+        }
+      };
       void import("hls.js").then(({ default: Hls }) => {
         if (generation !== this.loadGeneration) return;
-        if (!Hls.isSupported()) { this.emit("error"); return; }
+        // Safari can play HLS itself even when hls.js cannot. Keep native
+        // playback available; fragment-based DVB discovery requires hls.js.
+        if (!Hls.isSupported()) {
+          if (supportsNativeHls) loadNativeHls();
+          else this.emit("error");
+          return;
+        }
         // Keep MPEG-TS demuxing off the UI thread so malformed or unusually
         // busy transport streams cannot make the controls unresponsive.
         const hls = new Hls({
@@ -93,24 +129,26 @@ export class HtmlVideoPlayer implements MediaPlayer {
           enableWebVTT: false,
           enableIMSC1: false,
           enableCEA708Captions: false,
+          // Keep a modest live cushion so a short worker/UI task cannot turn a
+          // transient append delay into a visible rebuffer.
+          maxBufferLength: 60,
+          maxMaxBufferLength: 120,
+          backBufferLength: 30,
         });
         this.hls = hls;
         if (this.liveSubtitleMode) {
           const events = Hls.Events as unknown as Record<string, string>;
-          const updateTracks = () => { this.captureHlsSubtitleTracks(hls); this.refreshEmbeddedSubtitleTracks(); };
-          const trackEvents = hls as unknown as {
-            on(event: string, callback: (event: string, data: Record<string, unknown>) => void): void;
-            off(event: string, callback: (event: string, data: Record<string, unknown>) => void): void;
-          };
-          if (events.SUBTITLE_TRACKS_UPDATED) trackEvents.on(events.SUBTITLE_TRACKS_UPDATED, updateTracks);
-          if (events.SUBTITLE_TRACK_SWITCH) trackEvents.on(events.SUBTITLE_TRACK_SWITCH, updateTracks);
           this.initializeDvbSubtitlePath(hls, events);
         }
         hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) this.emit("error"); });
         hls.loadSource(streamUrl);
         hls.attachMedia(this.video);
         void this.requestPlay();
-      }).catch(() => this.emit("error"));
+      }).catch(() => {
+        if (generation !== this.loadGeneration) return;
+        if (supportsNativeHls) loadNativeHls();
+        else this.emit("error");
+      });
       return;
     }
     try {
@@ -203,8 +241,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
   getEmbeddedSubtitleTracks(): EmbeddedSubtitleTrack[] {
     if (!this.liveSubtitleMode) return [];
     const native = nativeSubtitleTracks(this.video);
-    return [...this.liveHlsSubtitleTracks.map((track) => ({ ...track, id: `hls:${track.id}` })),
-      ...this.liveDvbSubtitleTracks.map((track) => ({ id: `dvb:${track.id}`, label: track.label, language: track.language, selected: this.selectedDvbSubtitleId === track.id })),
+    return [...this.liveDvbSubtitleTracks.map((track) => ({ id: `dvb:${track.id}`, label: track.label, language: track.language, selected: this.selectedDvbSubtitleId === track.id })),
       ...native,
     ];
   }
@@ -212,9 +249,12 @@ export class HtmlVideoPlayer implements MediaPlayer {
   selectEmbeddedSubtitleTrack(id: string): boolean {
     if (!this.liveSubtitleMode) return false;
     if (id === "off") {
-      this.selectedDvbSubtitleId = undefined;
-      this.dvbWorker?.select("");
-      this.dvbOverlay?.clear();
+      if (this.subtitlesDisabled) return true;
+      if (this.selectedDvbSubtitleId !== undefined) {
+        this.selectedDvbSubtitleId = undefined;
+        this.dvbWorker?.select("");
+        this.dvbOverlay?.clear();
+      }
       this.selectedNativeSubtitleTrack = undefined;
       this.disableOtherSubtitleRenderers();
       this.suppressNativeSubtitleDefaults();
@@ -222,12 +262,17 @@ export class HtmlVideoPlayer implements MediaPlayer {
       if (hls && "subtitleTrack" in hls) {
         try { hls.subtitleTrack = -1; hls.subtitleDisplay = false; } catch { /* Older HLS builds may not expose these controls. */ }
       }
+      this.subtitlesDisabled = true;
       return true;
     }
     if (id.startsWith("dvb:")) {
       const trackId = id.slice(4);
       if (!this.dvbWorker || !this.liveDvbSubtitleTracks.some((track) => track.id === trackId)) return false;
+      // The live UI reconciles tracks on every timeupdate. Re-selecting the
+      // current track resets the worker parser and discards every pending cue.
+      if (this.selectedDvbSubtitleId === trackId) return true;
       this.selectedDvbSubtitleId = trackId;
+      this.subtitlesDisabled = false;
       this.dvbWorker.select(trackId);
       this.dvbOverlay?.clear();
       this.disableNativeSubtitleTracks();
@@ -244,7 +289,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
         hls.subtitleTrack = trackId;
         hls.subtitleDisplay = true;
         this.disableNativeSubtitleTracks();
-        return hls.subtitleTrack === trackId;
+        const selected = hls.subtitleTrack === trackId;
+        if (selected) this.subtitlesDisabled = false;
+        return selected;
       } catch { return false; }
     }
     if (id.startsWith("text:")) {
@@ -259,7 +306,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
           const track = tracks[candidate];
           if (track && isSubtitleKind(track.kind)) track.mode = candidate === index ? "showing" : "disabled";
         }
-        return tracks[index]?.mode === "showing";
+        const selected = tracks[index]?.mode === "showing";
+        if (selected) this.subtitlesDisabled = false;
+        return selected;
       } catch { return false; }
     }
     return false;
@@ -299,9 +348,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.loadGeneration += 1;
     this.disposeDvbSubtitlePath();
     this.clearPlaybackStartTimer();
+    this.clearBufferingTimer();
     this.hls?.destroy();
     this.hls = undefined;
-    this.liveHlsSubtitleTracks = [];
     const textTracks = this.video.textTracks;
     textTracks?.removeEventListener?.("addtrack", this.onNativeSubtitleTracksChanged);
     textTracks?.removeEventListener?.("removetrack", this.onNativeSubtitleTracksChanged);
@@ -333,6 +382,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     // HAVE_CURRENT_DATA is 2. Keep the numeric threshold so the platform-free
     // unit-test environment does not need a browser HTMLMediaElement global.
     if (!this.video.paused && this.video.readyState >= 2) {
+      this.clearBufferingTimer();
       if (this.video.currentTime > 0) this.clearPlaybackStartTimer();
       this.emit("playing");
     }
@@ -355,6 +405,26 @@ export class HtmlVideoPlayer implements MediaPlayer {
     if (this.playbackStartTimer === undefined) return;
     clearTimeout(this.playbackStartTimer);
     this.playbackStartTimer = undefined;
+  }
+
+  private armBufferingTimer(): void {
+    if (this.bufferingTimer !== undefined) return;
+    this.bufferingStartTime = this.video.currentTime;
+    this.bufferingTimer = setTimeout(() => {
+      this.bufferingTimer = undefined;
+      // A canplay/playing/timeupdate event clears this first. If the stream is
+      // still waiting after the grace window, expose a genuine buffer state.
+      const progressed = this.bufferingStartTime !== undefined && this.video.currentTime > this.bufferingStartTime;
+      this.bufferingStartTime = undefined;
+      if (!progressed) this.emit("buffering");
+    }, BUFFERING_GRACE_MS);
+  }
+
+  private clearBufferingTimer(): void {
+    if (this.bufferingTimer === undefined) return;
+    clearTimeout(this.bufferingTimer);
+    this.bufferingTimer = undefined;
+    this.bufferingStartTime = undefined;
   }
 
   private emitProgress(): void {
@@ -403,15 +473,6 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.disableNativeSubtitleTracks();
   }
 
-  private captureHlsSubtitleTracks(hls: HlsSubtitleController): void {
-    const source = hls.subtitleTracks;
-    this.liveHlsSubtitleTracks = Array.isArray(source) ? source.flatMap((track, index) => {
-      const language = cleanTrackText(track.lang);
-      const label = cleanTrackText(track.name) || language || `Subtitle ${index + 1}`;
-      return [{ id: index, label, ...(language ? { language } : {}), selected: hls.subtitleTrack === index }];
-    }) : [];
-  }
-
   private refreshEmbeddedSubtitleTracks(): void {
     if (!this.liveSubtitleMode) return;
     this.eventHandlers?.onEmbeddedSubtitleTracksChange?.(this.getEmbeddedSubtitleTracks());
@@ -424,12 +485,30 @@ export class HtmlVideoPlayer implements MediaPlayer {
         this.disposeDvbSubtitlePath();
         this.refreshEmbeddedSubtitleTracks();
       });
-      this.dvbWorker = createLiveDvbWorkerClient((message) => this.onDvbWorkerMessage(message), this.workerFactory);
+      this.dvbWorker = createLiveDvbWorkerClient((message) => this.onDvbWorkerMessage(message), this.workerFactory, () => this.onDvbWorkerAck());
       const onFragment = (_event: string, data: Record<string, unknown>) => {
         const fragment = data.frag as { type?: string; start?: number } | undefined;
         if (fragment?.type !== "main" || !(data.payload instanceof ArrayBuffer)) return;
-        this.dvbWorker?.pushFragment(data.payload, Number(fragment.start) || 0,
-          this.liveDvbSubtitleTracks.length ? LIVE_DVB_MAX_FRAGMENT_BYTES : LIVE_DVB_DISCOVERY_FRAGMENT_BYTES);
+        // Hls.js may surface the same media fragment through more than one
+        // event. Fragment identity deduplicates those without assuming that
+        // FRAG_DECRYPTED fires for main-media payloads.
+        if (this.dvbSeenFragments.has(fragment)) return;
+        this.dvbSeenFragments.add(fragment);
+        if (this.dvbCaptureFragment) {
+          return;
+        }
+        if (data.payload.byteLength > DVB_MAX_CAPTURED_FRAGMENT_BYTES) {
+          return;
+        }
+        // Retain one fragment at a time and scan every packet-aligned window
+        // in order. The cap bounds memory and total work for a single fragment.
+        this.dvbCaptureFragment = {
+          payload: data.payload,
+          startSeconds: Number(fragment.start) || 0,
+          nextOffset: 0,
+          byteLength: data.payload.byteLength,
+        };
+        this.pumpDvbCaptureWindow();
       };
       hls.on(events.FRAG_LOADED, onFragment);
       hls.on(events.FRAG_DECRYPTED, onFragment);
@@ -443,8 +522,12 @@ export class HtmlVideoPlayer implements MediaPlayer {
     if (message.type === "tracks") {
       const previous = this.liveDvbSubtitleTracks.map((track) => `${track.id}:${track.language}`).join("|");
       this.liveDvbSubtitleTracks = message.tracks;
-      if (previous !== message.tracks.map((track) => `${track.id}:${track.language}`).join("|")) this.refreshEmbeddedSubtitleTracks();
-    } else if (message.type === "frame") this.dvbOverlay?.present(message);
+      if (previous !== message.tracks.map((track) => `${track.id}:${track.language}`).join("|")) {
+        this.refreshEmbeddedSubtitleTracks();
+      }
+    } else if (message.type === "frame") {
+      this.dvbOverlay?.present(message);
+    }
     else if (message.type === "clear") this.dvbOverlay?.clear();
     else if (message.type === "error") {
       this.disposeDvbSubtitlePath();
@@ -452,7 +535,45 @@ export class HtmlVideoPlayer implements MediaPlayer {
     }
   }
 
+  private onDvbWorkerAck(): void {
+    if (this.dvbWorker?.pendingFragments) { this.armDvbWatchdog(); return; }
+    if (this.dvbCaptureFragment && this.dvbCaptureFragment.nextOffset < this.dvbCaptureFragment.byteLength) {
+      this.pumpDvbCaptureWindow();
+    } else {
+      this.dvbCaptureFragment = undefined;
+      this.clearDvbWatchdog();
+    }
+  }
+
+  private pumpDvbCaptureWindow(): void {
+    const capture = this.dvbCaptureFragment;
+    if (!capture || this.dvbWorker?.pendingFragments) return;
+    const offset = capture.nextOffset;
+    const captureBytes = Math.min(DVB_CAPTURE_WINDOW_BYTES, capture.byteLength - offset);
+    const accepted = this.dvbWorker?.pushFragment(capture.payload, capture.startSeconds, captureBytes, offset) ?? false;
+    if (!accepted) return;
+    capture.nextOffset += captureBytes;
+    this.armDvbWatchdog();
+  }
+
+  private armDvbWatchdog(): void {
+    this.clearDvbWatchdog();
+    this.dvbWatchdog = setTimeout(() => {
+      this.dvbWatchdog = undefined;
+      this.disposeDvbSubtitlePath();
+      this.refreshEmbeddedSubtitleTracks();
+    }, DVB_WORKER_WATCHDOG_MS);
+  }
+
+  private clearDvbWatchdog(): void {
+    if (this.dvbWatchdog !== undefined) clearTimeout(this.dvbWatchdog);
+    this.dvbWatchdog = undefined;
+  }
+
   private disposeDvbSubtitlePath(): void {
+    this.clearDvbWatchdog();
+    this.dvbCaptureFragment = undefined;
+    this.dvbSeenFragments = new WeakSet<object>();
     const hls = this.hls as HlsSubtitleController | undefined;
     for (const [event, listener] of this.dvbHlsListeners) {
       try { hls?.off?.(event, listener); } catch { /* Subtitle cleanup must not affect playback. */ }

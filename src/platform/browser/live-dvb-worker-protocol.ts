@@ -1,6 +1,5 @@
-/** Message contract for the optional browser DVB worker. Payloads are capped. */
+/** Message contract for the browser DVB subtitle worker. Payloads are capped. */
 export const LIVE_DVB_MAX_FRAGMENT_BYTES = 512 * 1024;
-export const LIVE_DVB_DISCOVERY_FRAGMENT_BYTES = 64 * 1024;
 export const LIVE_DVB_MAX_FRAME_BYTES = 4 * 1024 * 1024;
 export const LIVE_DVB_MAX_QUEUED_FRAGMENTS = 2;
 
@@ -25,12 +24,13 @@ export interface WorkerPort {
   terminate(): void;
 }
 
-/** Explicit construction keeps the worker completely dormant by default. */
+/** Creates the worker client used by the live subtitle path. */
 export function createLiveDvbWorkerClient(
   onMessage: (message: LiveDvbWorkerResponse) => void,
   workerFactory: () => WorkerPort = () => new Worker(new URL("./live-dvb-subtitle.worker.ts", import.meta.url), { type: "module" }),
+  onAck?: () => void,
 ): LiveDvbWorkerClient {
-  return new LiveDvbWorkerClient(workerFactory(), { onMessage });
+  return new LiveDvbWorkerClient(workerFactory(), { onMessage, ...(onAck ? { onAck } : {}) });
 }
 
 /**
@@ -43,7 +43,7 @@ export class LiveDvbWorkerClient {
   private readonly onMessage = (event: Event) => {
     const response = (event as MessageEvent<LiveDvbWorkerResponse>).data;
     if (!response || typeof response !== "object") return;
-    if (response.type === "ack") { this.queuedFragments = Math.max(0, this.queuedFragments - 1); return; }
+    if (response.type === "ack") { this.queuedFragments = Math.max(0, this.queuedFragments - 1); this.handlers.onAck?.(); return; }
     if (response.type === "frame") {
       if (!(response.rgba instanceof ArrayBuffer) || response.rgba.byteLength > LIVE_DVB_MAX_FRAME_BYTES
         || !Number.isInteger(response.width) || !Number.isInteger(response.height)
@@ -59,15 +59,19 @@ export class LiveDvbWorkerClient {
   };
   private readonly onError = () => this.handlers.onMessage({ type: "error" });
 
-  constructor(private readonly worker: WorkerPort, private readonly handlers: { onMessage: (message: LiveDvbWorkerResponse) => void }) {
+  constructor(private readonly worker: WorkerPort, private readonly handlers: { onMessage: (message: LiveDvbWorkerResponse) => void; onAck?: () => void }) {
     worker.addEventListener("message", this.onMessage);
     worker.addEventListener("error", this.onError);
   }
 
-  pushFragment(payload: ArrayBuffer, startSeconds: number, captureBytes = LIVE_DVB_MAX_FRAGMENT_BYTES): boolean {
+  get pendingFragments(): number { return this.queuedFragments; }
+
+  pushFragment(payload: ArrayBuffer, startSeconds: number, captureBytes = LIVE_DVB_MAX_FRAGMENT_BYTES, offset = 0): boolean {
     if (this.disposed || this.queuedFragments >= LIVE_DVB_MAX_QUEUED_FRAGMENTS || payload.byteLength === 0) return false;
-    const length = Math.min(payload.byteLength, LIVE_DVB_MAX_FRAGMENT_BYTES, Math.max(0, captureBytes));
-    const copy = payload.slice(0, length);
+    const start = Math.min(payload.byteLength, Math.max(0, Math.floor(offset)));
+    const length = Math.min(payload.byteLength - start, LIVE_DVB_MAX_FRAGMENT_BYTES, Math.max(0, captureBytes));
+    if (length === 0) return false;
+    const copy = payload.slice(start, start + length);
     this.queuedFragments++;
     this.worker.postMessage({ type: "fragment", buffer: copy, startSeconds: Number.isFinite(startSeconds) ? Math.max(0, startSeconds) : 0 }, [copy]);
     // Worker messages are processed in order. A bounded count provides

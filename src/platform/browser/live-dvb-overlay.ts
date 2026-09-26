@@ -7,6 +7,7 @@ export class LiveDvbOverlay {
   private readonly canvas: OverlayCanvas;
   private readonly context: CanvasRenderingContext2D;
   private disposed = false;
+  private lastPaint: { x: number; y: number; width: number; height: number } | undefined;
   private readonly reposition = () => this.position();
 
   constructor(private readonly video: HTMLVideoElement, private readonly onError: () => void = () => undefined) {
@@ -43,12 +44,19 @@ export class LiveDvbOverlay {
         || width > 1920 || height > 1080 || screenWidth > 1920 || screenHeight > 1080
         || x < 0 || y < 0 || x + width > screenWidth || y + height > screenHeight
         || width * height * 4 !== rgba.byteLength) return;
-      this.canvas.width = screenWidth;
-      this.canvas.height = screenHeight;
+      // Assigning either canvas dimension clears and reallocates its entire
+      // backing store. DVB frames commonly arrive several times a second, so
+      // doing that for a 1080p video on every cue can starve playback.
+      if (this.canvas.width !== screenWidth || this.canvas.height !== screenHeight) {
+        this.canvas.width = screenWidth;
+        this.canvas.height = screenHeight;
+        this.lastPaint = undefined;
+      }
       const pixels = new Uint8ClampedArray(rgba);
       const image = new ImageData(pixels, width, height);
-      this.context.clearRect(0, 0, screenWidth, screenHeight);
+      if (this.lastPaint) this.context.clearRect(this.lastPaint.x, this.lastPaint.y, this.lastPaint.width, this.lastPaint.height);
       this.context.putImageData(image, x, y);
+      this.lastPaint = { x, y, width, height };
       this.canvas.style.display = "block";
       this.position();
     } catch {
@@ -58,7 +66,11 @@ export class LiveDvbOverlay {
 
   clear(): void {
     if (this.disposed) return;
-    try { this.context.clearRect(0, 0, this.canvas.width, this.canvas.height); this.canvas.style.display = "none"; }
+    try {
+      if (this.lastPaint) this.context.clearRect(this.lastPaint.x, this.lastPaint.y, this.lastPaint.width, this.lastPaint.height);
+      this.lastPaint = undefined;
+      this.canvas.style.display = "none";
+    }
     catch { this.onError(); }
   }
 

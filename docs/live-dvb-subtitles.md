@@ -1,172 +1,92 @@
-# Live DVB subtitles: investigation and implementation status
+# Embedded live subtitles
 
-## Scope
+## Release behavior
 
-This document records the work on embedded subtitles for Finnish live TV in
-Substream. It deliberately contains no playlist URLs, provider credentials,
-signed media URLs, or captured stream payloads.
+Live TV enables embedded subtitles in normal browser and Tizen builds. The
+browser HLS adapter scans MPEG-TS media in a dedicated worker and draws DVB
+bitmap cues on a canvas over the video. Tizen uses AVPlay's native `TEXT`
+tracks. Both prefer Finnish, then English; other languages remain off by
+default. The browser offers a DVB track only after packets appear on its
+advertised transport PID. A PMT descriptor alone does not make an empty track
+selectable.
 
-The goal is browser and Tizen support for embedded live subtitles without
-allowing malformed provider subtitle data to interrupt, delay, or freeze video
-playback.
+The subtitle path is optional to playback. If worker creation, parsing,
+rendering, or acknowledgement fails, the browser removes its worker and canvas
+while video continues. Browser HLS keeps WebVTT, IMSC1, and CEA-708 decoding
+disabled because enabling those hls.js decoders made an affected provider
+stream unresponsive. Browser-native `TextTrack` support is not assumed for DVB
+bitmap subtitles.
+When hls.js is unavailable but the browser supports native HLS, live video
+falls back to native playback. Native tracks may still be exposed by that
+browser; fragment-based DVB worker discovery requires hls.js.
 
-## What was observed
+## Browser safety boundaries
 
-- A Finnish entertainment channel played normally in Chrome when browser-side
-  embedded subtitle handling was disabled.
-- Chrome exposed no native `TextTrack` entries for the same stream. This is
-  consistent with DVB bitmap subtitles carried in MPEG-TS rather than browser
-  WebVTT tracks.
-- The old browser capability gate depended on a provider channel-name marker
-  (`multi sub`). That metadata did not describe every channel that carried
-  embedded subtitles and therefore was not a reliable discovery mechanism.
-- Enabling hls.js subtitle decoders in Chrome caused the affected live stream
-  to stop responding. The same happened after an initial custom DVB path was
-  enabled, including in fresh browser tabs.
-
-## What works today
-
-### Tizen
-
-Tizen uses AVPlay's native embedded `TEXT` tracks. It enumerates and selects
-tracks through the Tizen adapter, with Finnish preferred over English. This
-does not require browser-side transport parsing.
-
-### Browser playback safety
-
-Browser live playback keeps hls.js WebVTT, IMSC1, and CEA-708 decoders
-disabled. This is intentional: it restores responsive playback for the
-affected stream.
-
-The app enables embedded live subtitle mode only for Tizen at present. Browser
-video playback must remain independent of every subtitle component.
-
-### Safe DVB implementation foundation
-
-The browser now contains an isolated DVB worker pipeline, but it is dormant by
-default:
-
-1. `live-dvb-ts-scanner.ts` scans MPEG-TS PAT/PMT/PES data in a Worker and
-   identifies DVB descriptor (`0x59`) tracks.
-2. `live-dvb-subtitle.worker.ts` owns the DOM-free `libbitsub` `DvbParser`,
-   rebases PES timestamps, and emits only capped RGBA bitmap frames.
-3. `live-dvb-worker-protocol.ts` limits main-thread input/output, validates
-   frames, applies backpressure, and terminates cleanly.
-4. `live-dvb-overlay.ts` is a narrow canvas host for validated frames. It has
-   no access to transport data.
-5. `HtmlVideoPlayer` contains lifecycle wiring for this path, including
-   listener, worker, and overlay cleanup. It is not activated by `LiveTv` in
-   browser playback until real-stream validation passes.
-
-The production build emits the worker and WebAssembly as separate chunks.
-
-## Safety limits
-
-| Boundary | Limit / behavior |
+| Boundary | Limit or behavior |
 | --- | --- |
-| Discovery fragment | First 64 KiB only |
-| Active worker fragment | First 512 KiB only |
-| Worker backpressure | At most two unacknowledged fragments |
-| Worker frame | At most 4 MiB RGBA, validated dimensions and byte count |
-| Legacy scanner slice | 32 MPEG-TS packets per timer slice |
-| PES reconstruction | 128 KiB maximum |
-| Error handling | Subtitle worker/overlay is disposed; video player remains active |
+| Source fragment | At most one retained MPEG-TS fragment, up to 10 MiB; another arrival while busy or a larger fragment is skipped |
+| Worker transfer | Consecutive, TS-packet-aligned windows of at most 512 KiB, advanced after acknowledgement |
+| Worker backpressure | At most two unacknowledged fragment messages; the current player normally sends one at a time |
+| Watchdog | Eight seconds without completing worker work disposes only subtitle resources |
+| PES reconstruction | 128 KiB maximum; malformed or unrelated private PES is rejected before the decoder |
+| Decoder | At most 256 retained cues; bitmap rendering is limited to one frame per 500 ms |
+| Canvas frame | At most 4 MiB RGBA with dimensions and bounds checked before painting |
 
-Malformed or unrelated private PES data is filtered before it reaches the DVB
-WASM parser. This is important because a transport PID advertised as private or
-DVB is not, by itself, proof that every payload is valid DVB subtitle data.
+Only capped RGBA bitmap data crosses from the worker to the UI. The worker owns TS
+scanning and the `libbitsub` WebAssembly parser. The overlay reuses its canvas
+and clears the previous cue bounds. Worker, HLS listeners, overlay, and retained
+fragment are released on a channel change or player teardown. The older
+main-thread transport parser has been removed.
 
-## Approaches tried
+The worker and WebAssembly are separate build assets. The browser path requires
+worker and media capabilities available in its runtime. If they are missing,
+the subtitle path fails locally and playback remains available.
 
-### 1. Channel-name opt-in
+## Verification
 
-The browser previously enabled its embedded subtitle path only for channel
-names marked `multi sub`.
+Synthetic tests cover descriptor discovery, packet-activity gating, selected
+page PES filtering, complete bounded-fragment capture, oversized fragments,
+worker backpressure, invalid frame rejection, subtitle cleanup, and playback
+failure isolation. Run `npm run check`, `npm run build`, and
+`npm run build:tizen` before packaging. Production activation does not replace
+a long-running browser or physical-TV smoke test.
 
-**Result:** insufficient. Provider naming is metadata, not a capability
-contract. It missed streams that carried embedded subtitles.
+After activation without a query flag, a local Chrome Teema Fem FHD smoke test
+reached `readyState` 4 with an advancing media clock. The subtitle canvas was
+removed after leaving playback, and no browser errors were reported. Captions
+were unavailable on that sampled provider feed.
 
-### 2. Enable hls.js subtitle decoders for every live stream
+A local Chrome test previously displayed Finnish DVB bitmap captions on TV5
+FHD. Later Chrome checks of Yle TV1, TV2, and Teema Fem variants kept video
+responsive but did not establish captions on those provider renditions:
 
-WebVTT, IMSC1, and CEA-708 were enabled to discover stream subtitles without
-channel-specific rules.
+| Provider entry | Observed subtitle transport data |
+| --- | --- |
+| Yle TV1 FHD | Four advertised DVB PIDs, zero packets across complete HLS fragments and a separate 10 MiB direct TS sample |
+| Yle TV1 HD | One advertised DVB PID, zero packets across complete sampled HLS fragments |
+| Yle TV1 standard | No private DVB or teletext stream in sampled PMT data |
+| Yle Teema Fem FHD | Four advertised DVB PIDs, zero packets across complete HLS fragments and a separate approximately 10 MiB direct TS sample |
+| Yle Teema Fem HD | No private DVB or teletext stream in sampled PMT data |
+| Yle TV2 FHD and HD | Advertised DVB PIDs had zero packets in earlier rotating-window samples |
+| Yle TV2 standard | A later run had one active DVB PID but emitted no decoded bitmap; recheck after the PES header fix |
 
-**Result:** failed. The affected provider stream froze Chrome. The decoders are
-therefore disabled again for browser playback.
+A different provider was reported to show switchable Finnish subtitles on Yle
+TV1 and Teema Fem. That is compatible with the observations above: the sampled
+Substream provider renditions either did not carry packets on their advertised
+subtitle PIDs or did not advertise a subtitle stream. These checks describe
+sampled time intervals, not a permanent property of either provider.
 
-### 3. Parse DVB transport fragments on the browser main thread
+All real-stream checks kept URLs, credentials, signed media links, and payloads
+out of logs and documentation. Tests use synthetic transport fixtures only.
 
-An initial `LiveDvbSubtitles` implementation inspected hls.js fragment events
-and created a `libbitsub` renderer associated with the HTML video element.
+## Remaining release checks
 
-**Result:** failed the real-stream responsiveness test. Bounded copies and
-smaller parsing slices reduced the risk but did not make it safe enough to
-activate.
+- Run a sustained modern-browser smoke test on a stream with active DVB
+  packets, including channel changes, subtitle selection, and worker failure.
+- Verify AVPlay Finnish and English track selection on the target physical TV.
+- Recheck standard Yle TV2's active DVB PID and any future Yle provider feed
+  whose subtitle packets become available.
 
-### 4. Worker-owned scanner, decoder, and bitmap-frame protocol
-
-Transport scanning and low-level DVB decoding were moved behind a Web Worker;
-only bounded fragments enter and only validated bitmap frames leave.
-
-**Result:** implementation and synthetic tests work. However, activating the
-full browser path against the affected real stream still made the browser
-automation unresponsive. The route remains dormant until the activation cost
-is profiled and eliminated.
-
-## Verification completed
-
-- `npm run check` passes: 44 test files and 210 tests at the time of this
-  document.
-- `npm run build` succeeds and produces separate worker/WASM assets.
-- Synthetic tests cover TS descriptor discovery, selected-page PES filtering,
-  oversized fragments, bounded active fragments, worker backpressure, invalid
-  frame rejection, overlay lifecycle, and player cleanup/error isolation.
-- A fresh Chrome smoke test confirms the affected live channel plays normally
-  with browser DVB worker activation disabled.
-
-## Known issues
-
-1. Browser DVB subtitles are not user-visible yet. The worker/overlay path is
-   intentionally dormant.
-2. The exact activation failure has not been profiled at the browser task or
-   worker-message level. The observed symptom is a non-responsive browser
-   renderer after the path is enabled for the affected provider stream.
-3. Native browser `TextTrack` support is unavailable for this stream, so
-   generic WebVTT selection is not a fallback for its DVB bitmap subtitles.
-4. Tizen behavior still requires physical-TV verification for the target
-   firmware and provider stream.
-
-## Next steps
-
-1. Add local, credential-free performance instrumentation around worker
-   creation, first fragment transfer, WASM initialization, parser feed, frame
-   generation, and overlay paint. Record durations and byte counts only; never
-   log stream URLs or payloads.
-2. Reproduce against a synthetic TS fixture containing a valid DVB PMT/PES
-   sequence and progressively increase fragment size/rate to locate the costly
-   stage.
-3. In Chrome DevTools, profile the real stream only on a personal machine and
-   inspect main-thread long tasks and worker CPU. Do not export provider
-   requests, URLs, or media data.
-4. Gate browser activation behind a short watchdog. If startup does not remain
-   responsive, terminate the worker and remove the overlay without touching
-   hls.js or the video element.
-5. Enable the worker path first behind an explicit development-only flag, then
-   run the live smoke test. Promote it to normal browser playback only after it
-   plays continuously, selects a Finnish track, renders frames, and survives
-   channel changes without long tasks.
-6. Run the physical Tizen smoke test separately, confirming that AVPlay track
-   selection still works with Finnish and English preference.
-
-## Acceptance criteria for browser activation
-
-- Video begins and remains responsive when no DVB track exists.
-- Video begins and remains responsive when a DVB track exists but decoding or
-  rendering fails.
-- Worker creation, worker termination, and channel changes leave no canvas,
-  hls.js listener, or worker behind.
-- No raw transport data crosses from the worker to the UI; only bounded bitmap
-  frames do.
-- A Finnish track is preferred, English is the fallback, and unrelated
-  languages remain off by default.
-- A subtitle failure never changes the video playback state.
+If a provider feed omits subtitle packets, the player cannot reconstruct them
+from another provider's broadcast. The feed must carry a usable subtitle
+track for the browser worker or AVPlay to display it.

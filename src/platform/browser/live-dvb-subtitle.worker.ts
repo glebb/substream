@@ -5,11 +5,16 @@ import { LiveDvbTsScanner } from "./live-dvb-ts-scanner.ts";
 const scope = self as unknown as { postMessage(message: LiveDvbWorkerResponse, transfer?: Transferable[]): void; addEventListener(type: "message", listener: (event: MessageEvent<LiveDvbWorkerRequest>) => void): void };
 const scanner = new LiveDvbTsScanner();
 const MAX_DECODER_CUES = 256;
+// Bitmap cues are static between subtitle changes. Rendering/transferring them
+// at every media timeupdate makes the main-thread canvas a bottleneck even
+// though parsing is in a worker.
+const MIN_FRAME_INTERVAL_MS = 500;
 let parser: DvbParser | undefined;
 let firstPts: number | undefined;
 let firstPtsFragmentStart: number | undefined;
 let currentTime = 0;
 let disposed = false;
+let lastFrameRenderAt = -Infinity;
 
 scope.addEventListener("message", (event) => {
   const request = event.data;
@@ -21,10 +26,12 @@ scope.addEventListener("message", (event) => {
     return;
   }
   if (request.type === "select") {
+    if (scanner.getSelected()?.id === request.trackId || (!request.trackId && !scanner.getSelected() && !parser)) return;
     scanner.select(request.trackId);
     parser?.reset();
     firstPts = undefined;
     firstPtsFragmentStart = undefined;
+    lastFrameRenderAt = -Infinity;
     scope.postMessage({ type: "clear" });
     return;
   }
@@ -43,15 +50,20 @@ async function processFragment(request: Extract<LiveDvbWorkerRequest, { type: "f
     if (request.buffer.byteLength > 512 * 1024) return;
     const selectedBeforeScan = scanner.getSelected()?.id;
     const pesPackets = scanner.scan(new Uint8Array(request.buffer));
-    scope.postMessage({ type: "tracks", tracks: scanner.getTracks().map(({ id, language }) => ({ id, language, label: `${language} · DVB` })) });
+    const playableTracks = scanner.getActiveTracks().map(({ id, language }) => ({ id, language, label: `${language} · DVB` }));
+    scope.postMessage({ type: "tracks", tracks: playableTracks });
     if (selectedBeforeScan && scanner.getSelected()?.id !== selectedBeforeScan) {
       parser?.reset();
       firstPts = undefined;
       firstPtsFragmentStart = undefined;
+      lastFrameRenderAt = -Infinity;
       scope.postMessage({ type: "clear" });
     }
     if (pesPackets.length) {
-      if (!parser) { await initWasm(); parser = new DvbParser(); }
+      if (!parser) {
+        await initWasm();
+        parser = new DvbParser();
+      }
       for (const pes of pesPackets) {
         const rebased = rebasePesPts(pes, request.startSeconds);
         parser.feed(rebased);
@@ -59,6 +71,7 @@ async function processFragment(request: Extract<LiveDvbWorkerRequest, { type: "f
           parser.reset();
           firstPts = undefined;
           firstPtsFragmentStart = undefined;
+          lastFrameRenderAt = -Infinity;
           scope.postMessage({ type: "clear" });
           break;
         }
@@ -67,7 +80,7 @@ async function processFragment(request: Extract<LiveDvbWorkerRequest, { type: "f
     }
   } catch {
     // Decoder/parser errors are local to subtitles and never escape the worker.
-    scope.postMessage({ type: "clear" });
+    failWorker();
   } finally {
     scope.postMessage({ type: "ack" });
   }
@@ -76,6 +89,9 @@ async function processFragment(request: Extract<LiveDvbWorkerRequest, { type: "f
 function renderAtCurrentTime(): void {
   if (!parser || parser.count === 0) return;
   try {
+    const now = performance.now();
+    if (now - lastFrameRenderAt < MIN_FRAME_INTERVAL_MS) return;
+    lastFrameRenderAt = now;
     const frame = parser.renderFrameDataAtTimestamp(currentTime, { crop: "bounds" });
     if (!frame) { scope.postMessage({ type: "clear" }); return; }
     const image = frame.imageData;
@@ -83,7 +99,14 @@ function renderAtCurrentTime(): void {
     if (image.width < 1 || image.height < 1 || bytes.byteLength > LIVE_DVB_MAX_FRAME_BYTES) { scope.postMessage({ type: "clear" }); return; }
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     scope.postMessage({ type: "frame", width: image.width, height: image.height, screenWidth: frame.screenWidth, screenHeight: frame.screenHeight, x: frame.offsetX, y: frame.offsetY, rgba: buffer }, [buffer]);
-  } catch { scope.postMessage({ type: "clear" }); }
+  } catch { failWorker(); }
+}
+
+function failWorker(): void {
+  disposed = true;
+  try { parser?.dispose(); } catch { /* Failure cleanup must stay inside the subtitle worker. */ }
+  parser = undefined;
+  scope.postMessage({ type: "error" });
 }
 
 function rebasePesPts(pes: Uint8Array, fragmentStart: number): Uint8Array {

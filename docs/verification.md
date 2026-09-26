@@ -46,6 +46,17 @@ Keep the personal preview local. Never print, paste into notes, capture in logs,
 
 ## Physical-TV smoke check
 
+For browser live DVB subtitles, use a local release build and an authorized
+MPEG-TS live feed known to carry subtitle packets. Confirm Finnish selection,
+English fallback, Off, an advancing video clock, and captions after channel
+changes. Repeat with no advertised track, an advertised but inactive PID, and
+a subtitle worker failure; video and controls must remain responsive and no
+worker, HLS listener, or canvas may remain after leaving playback. A channel
+label such as `Multi-Sub` is not proof that its current media segments carry
+subtitle packets. Record only numeric counts and timing, never provider URLs,
+credentials, or transport data. Physical AVPlay subtitle selection needs its
+own TV check.
+
 Use a separate synthetic test playlist/provider where practical; do not print personal URLs or credentials in diagnostics.
 
 Build and deploy with the verified VS Code flow in [`tizen/README.md`](../tizen/README.md): `prepare`, sign in VS Code, `collect`, then `launch` with the TV IP. For the QE65Q70AATXXH, test `tizen6.wgt`; it intentionally uses the legacy/SystemJS entry to avoid Tizen 6's modern-module splash-screen failure.
