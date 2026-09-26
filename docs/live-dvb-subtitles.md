@@ -51,33 +51,11 @@ failure isolation. Run `npm run check`, `npm run build`, and
 `npm run build:tizen` before packaging. Production activation does not replace
 a long-running browser or physical-TV smoke test.
 
-After activation without a query flag, a local Chrome Teema Fem FHD smoke test
-reached `readyState` 4 with an advancing media clock. The subtitle canvas was
-removed after leaving playback, and no browser errors were reported. Captions
-were unavailable on that sampled provider feed.
+## Historical provider observations
 
-A local Chrome test previously displayed Finnish DVB bitmap captions on TV5
-FHD. Later Chrome checks of Yle TV1, TV2, and Teema Fem variants kept video
-responsive but did not establish captions on those provider renditions:
+Earlier local Chrome checks displayed Finnish DVB captions on TV5 FHD. Sampled Yle TV1, TV2 and Teema Fem variants either lacked active subtitle packets or did not produce decoded bitmaps; an active standard TV2 PID still needs a recheck after the PES header fix. These were time-limited observations, not guarantees about current provider feeds. Video remained responsive in the later Teema Fem check and the canvas was removed on exit.
 
-| Provider entry | Observed subtitle transport data |
-| --- | --- |
-| Yle TV1 FHD | Four advertised DVB PIDs, zero packets across complete HLS fragments and a separate 10 MiB direct TS sample |
-| Yle TV1 HD | One advertised DVB PID, zero packets across complete sampled HLS fragments |
-| Yle TV1 standard | No private DVB or teletext stream in sampled PMT data |
-| Yle Teema Fem FHD | Four advertised DVB PIDs, zero packets across complete HLS fragments and a separate approximately 10 MiB direct TS sample |
-| Yle Teema Fem HD | No private DVB or teletext stream in sampled PMT data |
-| Yle TV2 FHD and HD | Advertised DVB PIDs had zero packets in earlier rotating-window samples |
-| Yle TV2 standard | A later run had one active DVB PID but emitted no decoded bitmap; recheck after the PES header fix |
-
-A different provider was reported to show switchable Finnish subtitles on Yle
-TV1 and Teema Fem. That is compatible with the observations above: the sampled
-Substream provider renditions either did not carry packets on their advertised
-subtitle PIDs or did not advertise a subtitle stream. These checks describe
-sampled time intervals, not a permanent property of either provider.
-
-All real-stream checks kept URLs, credentials, signed media links, and payloads
-out of logs and documentation. Tests use synthetic transport fixtures only.
+A track advertised in the PMT may carry no packets. Record packet activity and decoder output separately when diagnosing missing captions; do not infer subtitle support from a channel name. Keep media URLs, credentials and transport payloads out of diagnostics.
 
 ## Remaining release checks
 

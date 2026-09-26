@@ -1,38 +1,39 @@
-# Browse navigation
+# Keyboard and remote navigation
 
-The application home is the top navigation boundary. It uses the launch-splash presentation with Live TV and Video-On-Demand actions centered near the bottom. Arrow keys move between those actions; Enter opens the focused card and Back stays at home. Live TV first lists the provider's Finnish categories, then opens the selected category's channels in a separate view. In both lists Up/Down moves one row and Left/Right moves ten rows. Up from the first row reaches the header actions, and Left/Right moves between Categories and Main menu. Enter opens the focused category or tunes the focused channel. Escape and Samsung Return/Back use the same resolver: Back unwinds playback to channels, channels to categories, and categories to the main menu while restoring focus. On-screen Previous/Next never wrap at a list boundary.
+The yellow focus highlight identifies the control Enter activates. Selection, DOM focus, and the rendered item must stay synchronized; movement must not infer layout from computed CSS.
 
-Browse focus has one invariant: the selected item index, the DOM-focused control, and the rendered collection must refer to the same item. Directional movement calculates a destination from the current index and item count; it then updates the index and focuses and scrolls that control in the same interaction. Navigation must not infer layout by parsing computed CSS values, which differ across browser engines.
+## Home and Live TV
 
-Recent and category grids use four columns on wide screens, two on compact screens, and one below the narrow `520px` breakpoint. These values are paired with the breakpoints in `src/app/app.css` through `browseGridColumnCount` in `src/app/remote-navigation.ts`. The narrow mode applies to home/category cards only; title browsing remains a one-column list on compact web and Tizen.
+| View | Arrows | Enter | Back / Escape / Samsung Return |
+| --- | --- | --- | --- |
+| Home | Move between Live TV and Video-On-Demand | Open selected section | Stay home |
+| Live categories/channels | Up/Down one row; Left/Right ten rows; Up from first row reaches header | Open category or tune channel | Channels → categories → home |
+| Live player | Up/Down previous/next channel; windowed Left/Right moves between controls | Activate focused control | Stop playback and return to channels |
 
-## Continue Watching pairs
+Live playback starts fullscreen with controls hidden. Channel changes stop at list boundaries. Windowed controls include fullscreen, previous/next, retry on error, and Back to channels. Browser live-buffer controls appear only when a buffer is available. Browser-native fullscreen exit also returns to channels unless the app requested that exit. Live playback does not use the VOD seek/pause key behavior.
 
-Continue Watching is a paired control list in the DOM: Resume, Remove, then the next title's Resume and Remove. It intentionally does not use generic grid movement. Up and Down move to the adjacent title while preserving Resume or Remove; Left and Right move only within that title's pair. Up from either control in the first pair returns to the selected browse tab. This behavior is shared by web arrow keys and the Tizen remote.
+## VOD browsing
 
-## TV compact title-list rules
+- Category cards use four columns on wide screens, two on compact screens, and one below 520px. Web title lists use two columns on wide screens and one on compact screens.
+- Tizen title lists use a bounded single-column viewport. Up/Down moves one title; held keys are throttled. A fresh Up at the first title reaches Sort; a fresh Down at the last reaches pagination. Repeated keys at the endpoints stay in the list.
+- On Tizen, Left/Right changes page, focusing the last title when going left and the first when going right. Back restores the prior page, title focus, and list scroll.
+- Left/Right on browse tabs changes collection while retaining tab focus. Down enters its first item, search field, or empty-state action.
+- Continue Watching uses Resume/Remove pairs: Up/Down changes title while retaining the action; Left/Right changes action within that title. Up from the first pair reaches the selected tab.
+- The Samsung red key toggles the focused group's favourite state. Browser/touch users have a favourite button.
 
-On Tizen, title browsing is a single-column list inside a bounded scroll viewport. The catalogue header, sort and group controls, and pagination remain in place while the list scrolls; the viewport uses the available screen height up to 650px, which shows roughly 8–10 title rows on common TV resolutions. Up and Down move to the adjacent title. Held Up/Down follows the TV's native repeat events at a throttled rate; keyup stops movement immediately, and repeated presses at the top or bottom stay in the list. A fresh Up at the first title focuses Sort; a fresh Down at the final title focuses pagination.
+Keep `browseGridColumnCount` and title-grid helpers in `src/app/remote-navigation.ts` aligned with `src/app/app.css`. Focus/scroll helpers must scroll only the bounded TV list rather than moving the header or page.
 
-Left and Right jump to the previous or next page from any title. The new page focuses its last title when moving left and its first title when moving right. The on-screen hint and page buttons label these directions. Page loads and Back restore the selected index, DOM focus, and list scroll together. The focus helper preserves page and ancestor scroll positions around `.focus()` and then scrolls only the list viewport, leaving room for the yellow focus ring on Chromium 47.
+## VOD player and editing
 
-Web retains its responsive two-column title grid on wide screens and one-column list on compact screens, with matching grid navigation. Recent and Movies/Series category cards remain responsive grids.
+| Fullscreen state | Arrows | Tizen Enter | Back |
+| --- | --- | --- | --- |
+| Controls hidden | Left/Right seek 60 seconds; Up/Down reveal controls | Toggle playback | Exit fullscreen |
+| Controls visible | Navigate controls | Activate focused control | Hide controls |
 
-At the top edge, Up returns from a home grid to the selected Recent / Movies / Series tab. In the narrow one-column home grid, Down advances exactly one item and Left/Right stop at each row edge; the final item remains vertically reachable and is scrolled into view. Settings remains above the tab row; Back continues to follow the active screen hierarchy.
+The main row includes playback, restart, fullscreen, subtitles, and Subtitles & more. The advanced panel holds aspect, subtitle search, size, timing, and information. Back closes that panel first and restores its opener's focus. Dedicated media keys remain available; web Space toggles playback from the video area or fullscreen.
 
-Left and Right on the main browse tabs change the collection while keeping focus on the selected tab. Down enters the selected collection: the first item, the search field, or an empty-state action. Choosing an empty-state action may move focus directly into the destination collection.
+Settings and episode selection use explicit remote focus. TV editable controls require Enter to begin editing; Back and directional exit paths restore navigation. Browser controls retain native editing. Text editing handles its keys before player shortcuts. Settings confirmations keep focus within their current controls.
 
-## Settings and player controls
+## When changing navigation
 
-Settings uses the same persistent yellow remote-focus treatment as browse tiles and player controls. Focus follows the current control through conditional API-key setup and confirmation dialogs; do not rely on the older Tizen browser's native `:focus` rendering. Settings keeps Back to library first in focus order.
-
-On web, Space toggles playback when the video area is active or while fullscreen. On Tizen, Enter toggles playback in fullscreen only while controls are hidden; when controls are visible, Enter activates the highlighted control. Hidden controls use Left/Right to seek and Up/Down to show the controls with Play/Pause highlighted. The main control row offers playback, restart, fullscreen, subtitle access, and Subtitles & more; Left/Right seek when controls are hidden. The advanced panel contains aspect, subtitle search, size, timing, and stream information controls. Back closes that panel and restores focus to its opener; in fullscreen, a subsequent Back hides the main controls and restores video-area focus. Back with controls hidden follows the app's fullscreen exit hierarchy. Dedicated media keys remain available in both states. Text-entry controls retain their editing keys and handle Back before fullscreen navigation.
-
-## Safe navigation change checklist
-
-- Add synthetic cases for movement from index zero in each direction, row edges, and incomplete final rows in home grids; test adjacent title movement, held-key throttling and release, endpoint behavior, page jumps, and focus restoration separately.
-- Keep explicit home-grid and web title-grid column helpers aligned with CSS breakpoints and test compact and wide values.
-- Keep Tizen title-list CSS single-column with a bounded viewport; preserve web's responsive title grid.
-- Update React selection and DOM focus together; scroll the newly focused tile into view.
-- Check paired Continue Watching movement, top-edge tab/sort transitions, bottom-edge pagination, TV Left/Right page transitions and focus restoration, Settings focus visibility, and Back after changing browse movement.
-- Run `npm run check` and smoke-test web keyboard and TV remote navigation with a synthetic catalogue.
+Use synthetic tests for row/page boundaries, incomplete grids, repeat throttling, paired actions, conditional Settings controls, editing, and focus restoration. Run `npm run check`, then follow the keyboard-only and physical-remote checks in [verification.md](verification.md).

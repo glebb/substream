@@ -1,128 +1,55 @@
 # Substream
 
-![Substream launch screen](public/branding/substream-splash.png)
+Substream is an IPTV live TV and video-on-demand player for Samsung Tizen TVs and browsers. It supports M3U libraries, on-demand Xtream catalogues, TMDb details, OpenSubtitles downloads, local favourites, and playback resume.
 
-**Substream** is an IPTV live TV and VOD player for Samsung Tizen TVs. It browses an M3U or Xtream-compatible on-demand library, plays live channels, and selects available subtitles during playback.
+Live TV currently requires an Xtream-compatible `get.php` source. It browses Finnish provider categories, shows available programme information, and plays embedded subtitles when the stream and device support them.
 
-> OpenSubtitles is an external service. Substream uses its API when you provide a key; it is not affiliated with or endorsed by OpenSubtitles.
->
-> Movie and series metadata is provided by [TMDb](https://www.themoviedb.org/). Substream uses the TMDb API but is not endorsed or certified by TMDb.
+## Start in a browser
 
-## Highlights
-
-- Browse movies and series from M3U playlists, preserving entries whose type cannot be confidently identified.
-- Use Xtream-compatible `get.php` sources efficiently: load categories first, then fetch titles and episodes only when needed.
-- Search and download subtitle choices through the OpenSubtitles API, with TV subtitle overlays and browser-native subtitle tracks.
-- Adjust subtitle size and timing, and retain per-title timing offsets on the device.
-- Resume playback, sort and page through a local catalogue, and use a TV-remote-friendly interface with visible focus states.
-- Browse and manage local favourites for movie genres and series provider categories.
-- View TMDb title details before playback, including artwork, synopsis, rating, genres, runtime, subtitle availability, and series episode selection.
-- Play through the browser's native video element or Samsung AVPlay on Tizen 3.0-compatible TVs.
-- Browse Finnish live channels and select embedded subtitles when the provider stream carries them.
-
-## Quick start
-
-Prerequisites: a current Node.js LTS release and npm.
+Use Node.js 22.18+ (or a newer supported LTS) and npm. The inspection command needs Node's built-in TypeScript support.
 
 ```sh
 npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite and add your playlist from the app's setup screen. Configure an OpenSubtitles API key and optional TMDb credentials from **Settings**; TMDb's read access token is preferred, with its API key accepted as a fallback.
+Open the URL printed by Vite, add a playlist, and choose Live TV or Video-On-Demand. Add OpenSubtitles and TMDb credentials in Settings if needed. TMDb accepts a read access token (preferred) or API key.
 
-### Search in the web app
+Search works without a TV: import an M3U catalogue or refresh the full Xtream catalogue from Search. Cached titles remain searchable offline; playback still needs access to the provider.
 
-Search is part of the normal Substream web app and does not require a TV or LAN relay. Add an Xtream `get.php` playlist in the browser app and refresh the full movie and series catalogue from Search. Search also works against an imported M3U catalogue already stored in that browser. Xtream search results are cached in IndexedDB and remain searchable offline; selecting a result opens the regular details view. In a browser, details offer **Play here** and **Play on TV**. Only **Play on TV** requires the optional LAN relay and an active TV connection.
+## Personal development
 
-### Optional TV playback over the LAN
-
-To use Play on TV during personal web development, start both the web app and relay with one command:
+Copy [`.env.example`](.env.example) to the ignored `.env`. Personal commands require `IPTV_M3U_URL`, `OPENSUBTITLES_API_KEY`, and either `TMDB_API_READ_ACCESS_TOKEN` or `TMDB_API_KEY`.
 
 ```sh
 npm run dev:personal
 ```
 
-The web app opens at Vite's local URL, and the relay listens on port `8787` (`COMPANION_PORT` can change it). Set `COMPANION_SERVER_URL` to its LAN address in `.env` and rebuild the TV app. The TV registers its active provider session at startup and retries automatically if the relay is unavailable; **Settings → TV connection → Connect** remains available for manual connection. In the browser, open **Settings → TV connection**, enter and save the relay's LAN address, then use **Check TV connection** to see whether the relay is reachable, a TV is connected, and its provider matches. During Vite development, an empty address sends `/api` requests through the dev proxy to `localhost:8787` (or `COMPANION_SERVER_URL` when configured). The browser's Search and catalogue refresh use the playlist configured in that browser app directly. The relay and TV are needed only when choosing **Play on TV**. TV playback supports Xtream `get.php` sources; M3U titles can be searched and played locally in the web app.
+This starts Vite with personal defaults and the LAN relay; Ctrl+C stops both. Personal builds embed credentials in the client bundle. Anyone with the bundle can recover them: never share or commit personal builds, `.env`, playlist URLs, tokens, or signed media URLs. UI-entered configuration is stored locally on the device; it is not a secret vault.
 
-See [the Search and TV connection guide](docs/companion-search.md) for setup, connection behavior, caching, security boundaries, and troubleshooting.
+Standard builds do not embed those credentials. The optional `COMPANION_SERVER_URL` address is embedded even in standard builds. Development proxies do not make client-supplied credentials secret; a distributed service needs a server-side design to protect them.
 
-For personal builds, copy the variable names from `.env.example` into a local, ignored `.env` file. `dev:personal`, `build:personal`, and the personal Tizen build commands require the playlist URL, OpenSubtitles API key, and either `TMDB_API_READ_ACCESS_TOKEN` or `TMDB_API_KEY`. The commands read these values at build startup; they do not load credentials from the app at runtime.
-
-TMDb credentials are used for metadata and artwork only. The app uses the TMDb API with a development proxy in local Vite development and the configured credentials in a personal build. Keep the required [TMDb attribution](https://www.themoviedb.org/documentation/api/terms-of-use) visible in any distributed product.
-
-## Commands
+## Common commands
 
 | Command | Purpose |
 | --- | --- |
-| `npm run check` | Typecheck and run the synthetic unit tests. |
-| `npm run build` | Produce a standard browser build in `dist/`. |
-| `npm run build:tizen` | Produce the Tizen web payload in `tizen/dist/`. |
-| `npm run build:tizen:6` | Produce a Chromium 76-compatible Tizen 6+ web payload in `tizen/dist/`. |
-| `npm run preview:chromium47` | Open the Tizen 3 build in a local Chromium 47 Docker browser. Add `-- stop` to close it. |
-| `npm run preview:chromium47:personal` | Open Chromium 47 with the supported `.env` values embedded. |
-| `npm run package:tizen` | Build and sign `tizen3.wgt` and `tizen6.wgt` with the configured Tizen CLI. |
-| `npm run prepare:tizen3:personal` / `prepare:tizen6:personal` | Prepare a signed-package payload for the VS Code Tizen extension. |
-| `npm run collect:tizen3` / `collect:tizen6` | Rename the extension-produced package to its compatibility-specific name. |
-| `npm run launch:tizen3 -- TV_IP` / `launch:tizen6 -- TV_IP` | Install and launch a signed package on a TV without changing VS Code settings. |
-| `npm run deploy:tizen3` / `deploy:tizen6` | Prepare a personal build, pause for VS Code signing, then collect and launch it on the configured TV. |
-| `npm run inspect:m3u` | Print a credential-safe summary of the private playlist configured in `.env`. |
-| `npm run companion:dev` | Start the optional LAN development relay for sending playback to a TV on port `8787`. |
-| `npm run dev:personal` | Start the personal Vite web app and LAN relay together. Ctrl+C stops both. |
+| `npm run check` | Typecheck and run synthetic unit tests |
+| `npm run build` | Browser output in `dist/` |
+| `npm run build:tizen` | Tizen 3 web payload in `tizen/dist/` |
+| `npm run build:tizen:6` | Tizen 6+ payload in the same directory |
+| `npm run preview:chromium47` | Docker-based legacy UI preview; append `-- stop` to clean up |
+| `npm run preview:chromium47:personal` | Preview with private `.env` defaults |
+| `npm run inspect:m3u` | Fetch the configured private playlist and print a credential-safe summary |
 
-## Tizen TV build and deployment
+Build commands also have `:personal` variants. See [package.json](package.json) for the complete script list. Tizen web builds are not signed installable packages.
 
-The Tizen application has its own manifest and launcher icon at [`tizen/config.xml`](tizen/config.xml) and [`tizen/icon.png`](tizen/icon.png). The preferred workflow uses the working VS Code Tizen extension for signing, then deploys by IP without changing VS Code settings.
+## Guides
 
-```sh
-npm run check
-npm run prepare:tizen6:personal
-# Sign the generated package with the VS Code Tizen extension.
-npm run collect:tizen6
-npm run launch:tizen6 -- TV_IP
-```
+- [Current behavior and architecture](docs/status.md): supported features, source map, and remaining limitations.
+- [Tizen setup and deployment](tizen/README.md): certificates, signing, installation, and troubleshooting.
+- [Search and Play on TV](docs/companion-search.md): optional LAN relay and browser media compatibility.
+- [Remote navigation](docs/navigation.md): keyboard/remote behavior and focus rules.
+- [Verification](docs/verification.md): automated checks, legacy preview, and device smoke tests.
+- [Embedded live subtitles](docs/live-dvb-subtitles.md): decoder limits and provider diagnostics.
 
-For the shorter interactive workflow, copy `.tizen-devices.local.example` to the ignored `.tizen-devices.local`, set each TV address, then run `npm run deploy:tizen3` or `npm run deploy:tizen6`. The command pauses while you perform the VS Code signing action and continues after you press Enter.
-
-Use `tizen3` for Samsung Tizen 3.0 / Chromium 47 TVs. It includes the legacy JavaScript entry and static-color/flexbox UI fallback required by those browsers. Follow the complete [Tizen setup, packaging, and deployment guide](tizen/README.md) for certificates, device connection, packaging, and installation.
-
-To inspect the Tizen 3 build locally, start Docker Desktop and run `npm run preview:chromium47`. The command serves a standard, non-personal Tizen 3 build and opens a local noVNC window containing Chromium 47.0.2526.0. Enter a playlist in the app if you want to load a library. The isolated container proxies provider requests through the app's origin to mirror the cross-origin access granted by the Tizen manifest; Chromium web security stays enabled. For automatic setup from `.env`, use `npm run preview:chromium47:personal`; it embeds the playlist URL, OpenSubtitles key, and TMDb credential in the temporary client build. Stop either preview and remove its temporary build with `npm run preview:chromium47 -- stop`. Anyone who can access the bundle or browser container can recover embedded values, so keep this personal preview local. Both commands run Chromium in an x86 Linux container under Docker emulation; this does not reproduce Samsung TV APIs or AVPlay.
-
-To avoid exporting the local Tizen SDK path for every package build, copy `.tizen-cli.local.example` to `.tizen-cli.local` and set its `TIZEN_CLI` value. The local file is ignored by Git.
-
-The app's Tizen ID is `Substream0.Substream`; it installs separately from the prior My M3U development build.
-
-## Browser MKV audio compatibility
-
-For local Chrome playback, install `ffmpeg` and `ffprobe` on `PATH` and run `npm run dev:personal`. H.264 MKVs with AC-3 or E-AC-3 audio are remuxed to HLS when Chrome reports that audio codec unsupported; audio becomes stereo AAC and video is copied. Supported audio tracks play directly. DTS and TrueHD are not converted by this fallback. Production builds and Tizen playback are unaffected.
-
-## Personal configuration and security
-
-Substream keeps playlist URLs and provider credentials in local device storage when entered through the UI. Do not commit `.env`, playlist URLs, API keys, read access tokens, signed media URLs, or packaged personal builds.
-
-The `dev:personal`, `build:personal`, and `build:tizen:personal` commands deliberately embed values from `.env` into a client bundle for personal development. Anyone able to inspect that bundle can recover those values, so never share or distribute its output. This applies equally to the TMDb read access token/API key and the OpenSubtitles key. A production deployment needs a server-side proxy to protect provider credentials.
-
-## Project layout
-
-| Path | Responsibility |
-| --- | --- |
-| `src/core/` | Platform-independent M3U parsing, catalogue import, classification, and subtitle logic. |
-| `src/platform/` | Browser, Tizen AVPlay, storage, provider, and OpenSubtitles adapters. |
-| `src/app/` | React application and remote-navigation UI. |
-| `tizen/` | Tizen manifest, launcher icon, build configuration, and deployment notes. |
-
-The core deliberately has no browser, React, Node.js, or Tizen global dependencies.
-
-## Verification
-
-Automated tests use synthetic data only. Run `npm run check` before making changes, then use the keyboard-only personal Chromium 47 flow in [docs/verification.md](docs/verification.md) as the default end-to-end verification for user-visible work. The guide also covers regression scenarios and the physical-TV smoke checklist.
-
-## Status and roadmap
-
-For the current implementation details, constraints, planned work, and remote-navigation contract, see [docs/status.md](docs/status.md), [docs/roadmap.md](docs/roadmap.md), and [docs/navigation.md](docs/navigation.md).
-
-Live TV uses AVPlay's embedded text tracks on Tizen and a bounded DVB subtitle
-worker in the browser. Both prefer Finnish, then English when those tracks are
-present. A provider stream that omits subtitle packets cannot display them.
-See [docs/live-dvb-subtitles.md](docs/live-dvb-subtitles.md) for safety limits,
-verification, and provider-specific findings.
+TMDb supplies metadata and artwork; Substream is not endorsed or certified by TMDb. Keep the required TMDb attribution visible when distributing the app. OpenSubtitles is an external service; Substream is not affiliated with or endorsed by it.

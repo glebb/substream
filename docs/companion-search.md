@@ -2,7 +2,7 @@
 
 Search is part of the normal Substream web app. It works without a TV or LAN relay. Search an imported M3U catalogue stored in the browser, or use an Xtream-compatible `get.php` playlist to refresh and search the provider's full movie and series catalogue. Choosing a result opens the regular title details view.
 
-The standalone companion page has been retired. The optional LAN service is used only to send playback commands from the browser to a TV. It is intended for a trusted home LAN, not as an internet-facing service or production backend.
+The normal app provides Search; there is no separate companion page. The optional LAN service handles TV playback commands and the development-only MKV audio fallback. It is intended for a trusted home LAN, not as an internet-facing service or production backend.
 
 ## Search
 
@@ -48,7 +48,7 @@ TV playback requires a reachable relay, an active TV session, and a matching Xtr
 | LAN relay memory | TV's active Xtream credentials and provider records, plus pending playback commands |
 | Web browser IndexedDB | Safe Xtream title metadata, content type, provider IDs, source fingerprint, extension/category metadata, and refresh timestamp; imported M3U catalogue data is held by the app's local catalogue store |
 | Browser provider connection | The playlist configured in that browser, used to refresh Xtream Search and resolve **Play here** |
-| Search/API responses | Catalogue metadata and playback identifiers; no credentials or stream URLs |
+| Catalogue/search responses | Catalogue metadata and playback identifiers; no credentials or stream URLs |
 
 When the TV registers, it sends its playlist URL and credentials to the relay, which keeps them in memory for the active session. The relay intentionally has no authentication gate and uses plain HTTP for local development. Keep it on a trusted LAN and do not expose it to the internet. A public service needs HTTPS/WSS, authentication and rate limiting, and secure server-side credential storage. Never print or commit `.env`, playlist URLs, OpenSubtitles credentials, tokens, or signed media URLs. Tests use synthetic catalogue fixtures only.
 
@@ -59,3 +59,9 @@ When the TV registers, it sends its playlist URL and credentials to the relay, w
 - **Search works offline but looks stale:** reconnect the browser to its configured provider and refresh the Xtream catalogue.
 - **Play here fails:** confirm the browser can reach its configured provider and that the selected title belongs to it.
 - **Play on TV is unavailable or fails:** confirm the relay address is correct, the relay and TV are online, the TV listener has registered, and the browser and TV use the same Xtream account/source. Guest Wi-Fi, client isolation, or a firewall can block LAN traffic.
+
+## Browser MKV audio
+
+For local browser development, install `ffmpeg` and `ffprobe` on PATH and run `npm run dev:personal`. The browser can ask the relay to prepare H.264 MKVs when AC-3/E-AC-3 support is missing. Unsupported AC-3/E-AC-3 audio becomes stereo AAC in HLS output while video is copied; supported audio is copied. DTS and TrueHD are not converted by this fallback. Production builds and Tizen AVPlay do not use this development path.
+
+This route receives a media URL and creates temporary media output, unlike the identifier-only Play on TV commands. The relay is therefore also required for this browser compatibility fallback, even without a connected TV.

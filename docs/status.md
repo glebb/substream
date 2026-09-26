@@ -1,72 +1,56 @@
-# Project guide
+# Current behavior and architecture
 
-Substream is a Samsung Tizen IPTV live TV and VOD player with OpenSubtitles-powered subtitle discovery. The shared TypeScript catalogue, live selection, and subtitle logic lives in `src/core`; browser and Tizen behavior is implemented by platform adapters.
+This is the implementation reference, not a record of completed plans. Hardware-dependent behavior must still pass the [verification checklist](verification.md).
 
-## Home and Live TV
+## Catalogue and title details
 
-- The app launches into a network-independent menu that matches the branded splash, with only Live TV and Video-On-Demand actions centered near the bottom. Both sections retain separate UI state and provide a direct Main menu action.
-- Xtream live categories and streams are fetched lazily. Live TV lists every normalized `Finland - ...` provider category in provider order, then fetches and displays only the selected category's channels in a separate view. Category and channel results are cached per provider account. Channel records retain classification evidence and variants and deduplicate exact stream identifiers.
-- Account-scoped channel metadata is cached without playback URLs. Cached channels display immediately and refresh in the background; a refresh failure does not clear a usable list.
-- Live playback opens in a video-only fullscreen presentation by default, hiding its title and controls until fullscreen is exited. The windowed player provides an explicit fullscreen toggle. Browsers use HLS.js and a bounded worker for embedded DVB subtitle discovery and rendering; Tizen uses AVPlay and provider TS output. Keyboard and remote controls expose previous/next, fullscreen, retry, and back without VOD seek, pause, restart, or Continue Watching behavior. Embedded live subtitles select Finnish first, English second, and otherwise stay off. A worker failure leaves browser video playing; provider feeds with no subtitle packets cannot display captions. Long browser playback and physical AVPlay subtitle behavior still need hardware validation.
-- M3U-only live discovery and physical Tizen stream compatibility remain provider/device-dependent release work; the implemented phase-one live catalogue requires an Xtream-compatible `get.php` playlist.
+Xtream-compatible `get.php` sources load movie/series categories first, titles when a category opens, and episodes when a series opens. Category IDs identify groups even when names repeat. M3U import is the fallback; confidently classified VOD entries retain their evidence, and unknown entries remain stored separately rather than being discarded or shown as VOD.
 
-## Everyday commands
+The local IndexedDB catalogue uses schema version 7. Imports write a staged generation and promote it only after all batches succeed, keeping the last ready catalogue on failure. Startup reports migration progress and offers retry if another tab blocks an upgrade. Streaming import is preferred; whole-response fallback requires an exposed, uncompressed Content-Length of at most 8 MiB before reading the body.
 
-```sh
-npm run check       # typecheck and synthetic tests
-npm run build       # standard browser build
-npm run build:tizen # standard Tizen web payload
-npm run prepare:tizen6:personal # prepare the verified Tizen 6+ package for VS Code signing
-npm run launch:tizen6 -- TV_IP # deploy a signed Tizen 6+ WGT by IP
-npm run inspect:m3u # credential-safe summary of the private playlist in .env
-```
+Browsing supports title, playlist-order, and release-year sorting; unknown years sort last. Playlist order is not a reliable date-added timestamp. Search uses the imported M3U catalogue or an account-scoped Xtream cache. See [Search and Play on TV](companion-search.md).
 
-`npm run dev:personal`, `npm run build:personal`, and `npm run build:tizen:personal` are explicitly opt-in development commands. They embed `.env` values in the resulting client bundle, so their output must never be committed, shared, or distributed. See [the Tizen deployment guide](../tizen/README.md) for packaging details.
+TMDb provides cached artwork and details when matching is sufficiently confident, with Finnish lookup and English fallback. Series details load episodes on demand and require an episode selection before playback. Favourites store movie genres and series provider categories locally. Continue Watching stores VOD progress with Resume and Remove actions.
 
-## Catalogue and configuration
+## Live TV
 
-- Small configuration values are read from local storage when available; denied storage safely falls back to bundled personal-build defaults or an in-session value.
-- Xtream-compatible `get.php` playlists use the provider catalogue first: movie and series categories are saved locally, while opened categories and episodes are fetched on demand. Provider category IDs—not display names—identify categories. M3U import remains the fallback.
-- M3U responses stream into the parser where supported. Legacy whole-response imports require an exposed, uncompressed `Content-Length` of at most 8 MiB before any body is read.
-- IndexedDB version 7 stages each replacement in a new generation and promotes it only after every batch succeeds. A failed import leaves the last ready catalogue visible. Confident VOD entries retain classifier evidence; unclassified entries are retained separately and never shown as VOD.
-- Local browsing is paged and sorted by normalized title, playlist order, or release year. Unknown years sort last. The main navigation includes Search: imported M3U entries are searched from the browser's local catalogue, while Xtream search refreshes and searches the configured browser provider's full catalogue. Results open the shared title-details view and restore Search on Back.
-- Startup reports migration progress, closes connections on version changes, and offers a retry action if another tab blocks an upgrade.
+Home opens independently of VOD catalogue initialization. Live TV fetches matching Finnish provider categories and then the chosen category's channels, preserving provider order and stream variants. Selection rules recognize normalized Finland/Finnish/Suomi aliases; they do not infer country from channel names. Account-scoped category/channel metadata is cached without playback URLs and refreshed in the background.
 
-## Playback and subtitles
+Channel rows show the current programme, progress, remaining minutes, and the next programme for the focused row when the provider supplies short EPG data. Requests fetch up to ten programmes per channel with four concurrent requests; cached guides expire after twelve minutes or the current programme ends. Missing guide data does not prevent tuning.
 
-- Browser playback uses the native video element. Tizen 3.0 / Chromium 47 builds use AVPlay's hardware surface when available, including its fixed 1920×1080 display coordinate system.
-- Both adapters report loading, buffering, playing, paused, ended, and error states. AVPlay preparation and stale callbacks are generation-guarded.
-- The remote UI supports arrow/Enter/Back navigation, media keys, ±60-second skips, Auto/Fit/Fill display modes, full-screen video, and subtitle-size controls. Web Space toggles playback from the video area or while fullscreen; Tizen Enter toggles playback while fullscreen controls are hidden and activates the focused control when visible.
-- OpenSubtitles queries exact series/season/episode records where possible. Browser playback converts SRT to WebVTT; the TV renders parsed SRT cues as an app overlay because this firmware rejects AVPlay external-subtitle paths.
-- Subtitle preferences retain the preferred language order (Finnish/English by default), the last selected language, font size, and per-title timing offsets. Provider formatting such as ASS/SSA overrides and inline HTML is normalized before rendering.
+Playback uses browser HLS/native video or Tizen AVPlay with provider TS output. It starts fullscreen. Up/Down changes channels without wrapping; Back returns to the list. Browser adapters expose Rewind 30 seconds and Go live when a usable live buffer exists. This is limited to the available buffer, not recording or provider catch-up. Live playback does not create VOD resume records.
 
-## Metadata, favourites, and title details
+Embedded subtitles prefer Finnish, then English. The browser's DVB worker requires actual subtitle packets; Tizen uses AVPlay text tracks. See [embedded live subtitles](live-dvb-subtitles.md) for transport limits and diagnostic guidance.
 
-- TMDb supplies cached title metadata and artwork when a confident match is available. Finnish search is preferred with English fallback; ambiguous matches do not attach potentially incorrect metadata.
-- Movie and series details are shown before playback. Series details load episodes on demand and expose a compact Season → Episode picker, avoiding a long combined list for multi-season shows.
-- On Tizen, title-details controls use explicit yellow remote focus. Arrow keys move Back → Season/Episode → Play selected episode; Action/Enter opens or confirms the picker and starts playback only from the Play control. Back returns from episodes to seasons and then to details.
-- Movie genres and series provider categories can be marked as favourites and are available through the dedicated Favourites browse view.
+## VOD playback and configuration
 
-## Search and TV relay
+Browser playback uses HTML video; Tizen uses AVPlay when available. Both report playback/loading/error states and guard against stale playback callbacks. VOD supports resume, ±60-second skips, fullscreen, Auto/Fit/Fill aspect modes, and subtitle size/timing controls.
 
-- Search is integrated into the normal web application and works without a TV or relay. Xtream refresh uses the provider configured in that browser; safe catalogue records are cached in IndexedDB, scoped by an account-aware provider fingerprint so accounts on the same host remain separate. The cache remains searchable offline. Imported M3U entries use the browser's local catalogue.
-- Web details provide **Play here** and **Play on TV**. The TV keeps provider credentials and derives stream URLs locally. It verifies the provider fingerprint; the relay also validates episode membership before accepting a series episode command.
-- The LAN service serves the built web app at its root and API routes under `/api`. The TV maintains a 30-minute active session and refreshes it shortly before expiry while its listener is active. Only **Play on TV** commands require that session and a matching provider.
-- `npm run dev:personal` starts the personal Vite web app and LAN relay as one supervised foreground command; Ctrl+C stops both. Plain `npm run dev` remains web-only, and `npm run companion:dev` remains relay-only. Web Settings provides a relay address and connection check; in Vite development an unset address uses the local `/api` proxy.
-- Xtream full-catalogue refresh and TV playback support Xtream `get.php` sources. M3U entries can be searched in the local catalogue and played in the web app. The relay is for trusted-LAN development: it has no authentication gate and should not be exposed publicly.
-- See [companion-search.md](companion-search.md) for setup, operation, cache behavior, and security constraints.
+OpenSubtitles searches use series/season/episode identifiers where possible. Browser playback converts SRT to WebVTT; Tizen renders parsed SRT cues over AVPlay rather than relying on external-subtitle paths rejected by the previously tested firmware. Formatting tags are normalized. Preferred language, size, and per-title timing offsets are saved locally.
 
-## UI and remote focus
+Settings holds playlist and API configuration. If local storage is denied, configuration falls back to bundled defaults or in-session values. Personal build defaults remain extractable from the package even after a saved override is removed. See the [README](../README.md#personal-development) for credential handling.
 
-- Continue Watching keeps Resume and Remove as a visual and navigation pair: Up/Down change titles and Left/Right changes the action for that title.
-- Settings has state-driven yellow remote focus for all actions, conditional API-key controls, and confirmations. Configured API keys are managed only from Settings; the player exposes setup only when a key is absent.
-- Tizen 3 receives a complete static-color and flexbox baseline before modern CSS enhancements. This preserves the dark UI, visible focus state, four-column category layout, and a bounded single-column title list on Chromium 47.
+## Code map
 
-## Constraints and next work
+| Location | Responsibility |
+| --- | --- |
+| `src/core/m3u`, `src/core/catalog` | Parsing, classification evidence, normalization, import orchestration |
+| `src/core/live`, `src/core/subtitles` | Live selection/EPG and subtitle rules |
+| `src/platform/xtream`, `tmdb`, `opensubtitles` | External service adapters |
+| `src/platform/browser`, `web`, `tizen` | Playback, device storage, network and remote integration |
+| `src/platform/companion` | Search cache and LAN client |
+| `src/app/App.tsx`, `LiveTv.tsx` | VOD/application shell and live UI |
+| `src/app/remote-navigation.ts`, `remote-editable.tsx` | Focus decisions and deliberate TV text editing |
+| `scripts/`, `vite.config.ts`, `tizen/` | Development services, build targets, packaging and deployment |
 
-- Large non-streaming playlist responses remain unsupported; a file-backed Tizen import path is future work.
-- Playlist order is the only reliable source-order signal; the source does not provide a trustworthy catalogue-added timestamp.
-- A key embedded in a client package can be extracted. The local development proxy avoids that exposure; a production proxy is required to protect a production key.
-- Full browser integration coverage and physical-TV validation are still required. Follow [verification.md](verification.md) for the automated and TV smoke checks.
+`src/core` must remain independent of browser, React, Node, and Tizen globals. Keep integrations behind adapters, sanitize network errors, and use only synthetic fixtures in tests. Navigation belongs in the app layer; see [the navigation contract](navigation.md).
 
-The product backlog is maintained in [roadmap.md](roadmap.md).
+## Limits and remaining work
+
+- Live discovery requires Xtream; M3U-only live import/browsing is not implemented.
+- Recording, provider catch-up, non-Finnish live browsing, and live Play on TV commands are not implemented.
+- Large non-streaming M3U responses need a future file-backed import path.
+- Browser playback depends on provider access, CORS, and codec support. The development MKV fallback is described in [the browser/relay guide](companion-search.md#browser-mkv-audio).
+- Physical Tizen playback, embedded subtitles, remote responsiveness, and sustained browser live playback require device checks. Builds and unit tests do not establish hardware compatibility.
+
+Completed live-TV and Tizen UX plans have been consolidated here and in the navigation/verification guides. New work should be scoped against the implementation above rather than the retired plans.

@@ -1,6 +1,6 @@
 # Project
 
-Samsung Tizen IPTV VOD player. The shared core is platform-independent TypeScript; browser and Tizen integrations must sit behind adapters.
+Samsung Tizen IPTV live TV and VOD player. The shared core is platform-independent TypeScript; browser and Tizen integrations must sit behind adapters.
 
 # Commands
 
