@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { selectFinnishChannels, selectFinnishLiveCategories, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
+import { selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { loadPlaylistUrl } from "../platform/browser/playlist-config.ts";
 import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
@@ -13,6 +13,35 @@ type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCateg
 const CACHE_PREFIX = "substream.live.v2.";
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 const BROWSER_PLAYBACK_START_TIMEOUT_MS = 8_000;
+const EPG_CACHE_PREFIX = "substream.epg.v1.";
+const EPG_CACHE_TTL_MS = 12 * 60 * 1000;
+const EPG_CONCURRENCY = 4;
+const EPG_LIMIT = 10;
+
+type CachedGuide = { savedAt: number; programmes: EpgProgramme[] };
+
+function safeGuideCache(key: string): CachedGuide | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? "null") as CachedGuide | null;
+    return value && typeof value.savedAt === "number" && Array.isArray(value.programmes) ? value : null;
+  } catch { return null; }
+}
+
+function guideIsFresh(guide: CachedGuide, now: number): boolean {
+  const programmeAtFetch = guide.programmes.find((item) => item.startTime <= guide.savedAt && item.endTime > guide.savedAt);
+  return now - guide.savedAt < EPG_CACHE_TTL_MS && (!programmeAtFetch || now < programmeAtFetch.endTime);
+}
+
+function programmeTime(value: number): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function programmeProgress(programme: EpgProgramme, now: number): number {
+  const duration = programme.endTime - programme.startTime;
+  return duration > 0 ? Math.max(0, Math.min(100, (now - programme.startTime) / duration * 100)) : 0;
+}
 
 function safeCache(key: string): CachedLive | null {
   try {
@@ -36,6 +65,10 @@ export function LiveTv({ onMainMenu }: Props) {
   const [channels, setChannels] = useState<LiveChannel[]>([]);
   const [status, setStatus] = useState(cached ? "Showing saved categories while checking for updates…" : "Loading Finnish categories…");
   const [focusIndex, setFocusIndex] = useState(0);
+  const [guideByChannel, setGuideByChannel] = useState<Record<string, CachedGuide>>({});
+  const [guideFailures, setGuideFailures] = useState<Record<string, boolean>>({});
+  const [guideNow, setGuideNow] = useState(() => Date.now());
+  const [guideRefresh, setGuideRefresh] = useState(0);
   const [categoryFocusIndex, setCategoryFocusIndex] = useState(0);
   const [selected, setSelected] = useState<LiveChannel | null>(null);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
@@ -137,6 +170,76 @@ export function LiveTv({ onMainMenu }: Props) {
   };
 
   useEffect(() => { void refreshCategories(); return () => { requestRef.current += 1; }; }, [cacheKey]);
+
+  useEffect(() => {
+    if (!selectedCategory || !channels.length || !client) return;
+    let cancelled = false;
+    const cachePrefix = EPG_CACHE_PREFIX + client.pairingFingerprint() + ".";
+    const initial: Record<string, CachedGuide> = {};
+    channels.forEach((channel) => {
+      const cachedGuide = safeGuideCache(cachePrefix + channel.providerStreamId);
+      if (cachedGuide) initial[channel.id] = cachedGuide;
+    });
+    setGuideByChannel((previous) => ({ ...previous, ...initial }));
+    setGuideFailures({});
+
+    const missing = channels
+      .map((channel, index) => ({ channel, index }))
+      .filter(({ channel }) => {
+        const guide = initial[channel.id];
+        return !guide || !guideIsFresh(guide, Date.now());
+      })
+      .sort((left, right) => Math.abs(left.index - focusIndex) - Math.abs(right.index - focusIndex));
+    let cursor = 0;
+    const worker = async () => {
+      while (!cancelled && cursor < missing.length) {
+        const item = missing[cursor++];
+        if (!item) return;
+        const { channel } = item;
+        try {
+          const programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT);
+          if (cancelled) return;
+          const guide = { savedAt: Date.now(), programmes };
+          setGuideByChannel((previous) => ({ ...previous, [channel.id]: guide }));
+          setGuideFailures((previous) => ({ ...previous, [channel.id]: false }));
+          try { localStorage.setItem(cachePrefix + channel.providerStreamId, JSON.stringify(guide)); } catch { /* guide cache is optional */ }
+        } catch {
+          if (cancelled) return;
+          setGuideFailures((previous) => ({ ...previous, [channel.id]: true }));
+        }
+      }
+    };
+    for (let workerIndex = 0; workerIndex < Math.min(EPG_CONCURRENCY, missing.length); workerIndex += 1) void worker();
+    return () => { cancelled = true; };
+  }, [cacheKey, channels, client, guideRefresh, selectedCategory]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setGuideNow(Date.now()), 30_000);
+    const onResume = () => {
+      if (document.visibilityState === "visible") {
+        setGuideNow(Date.now());
+        setGuideRefresh((value) => value + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", onResume);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onResume); };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCategory || !channels.length) return;
+    let nextEnd = Infinity;
+    channels.forEach((channel) => {
+      (guideByChannel[channel.id]?.programmes ?? []).forEach((programme) => {
+        if (programme.endTime > guideNow) nextEnd = Math.min(nextEnd, programme.endTime);
+      });
+    });
+    if (!Number.isFinite(nextEnd)) return;
+    const timer = window.setTimeout(() => {
+      setGuideNow(Date.now());
+      setGuideRefresh((value) => value + 1);
+    }, Math.max(1_000, nextEnd - guideNow + 500));
+    return () => window.clearTimeout(timer);
+  }, [channels, guideByChannel, guideNow, selectedCategory]);
 
   useEffect(() => {
     if (selectedCategory || !categories.length) return;
@@ -348,7 +451,19 @@ export function LiveTv({ onMainMenu }: Props) {
     <div className="live-list">
       {channels.map((channel, index) => <button className={`live-row ${index === focusIndex ? "remote-focused" : ""}`} type="button" key={channel.id} ref={(element) => { rowRefs.current[index] = element; }} onFocus={() => setFocusIndex(index)} onClick={() => tune(channel)}>
         <span className="live-logo">{channel.logo ? <img src={channel.logo} alt="" loading="lazy" /> : channel.name.charAt(0).toLocaleUpperCase()}</span>
-        <strong>{channel.name}</strong>{channel.variant && <span className="live-variant">{channel.variant}</span>}
+        <span className="live-channel-copy"><span className="live-channel-heading"><strong>{channel.name}</strong>{channel.variant && <span className="live-variant">{channel.variant}</span>}</span>
+          {(() => {
+            const guide = guideByChannel[channel.id];
+            const { current, next } = selectCurrentAndNextProgramme(guide?.programmes ?? [], guideNow);
+            if (!current) return <span className="live-guide-unavailable">{guideFailures[channel.id] || guide ? "Programme information unavailable" : "Loading programme information…"}</span>;
+            const remaining = Math.max(0, Math.ceil((current.endTime - guideNow) / 60_000));
+            return <span className="live-guide">
+              <span className="live-guide-current"><strong>{current.title}</strong><span>{programmeTime(current.startTime)}–{programmeTime(current.endTime)} · {remaining} min left</span></span>
+              <progress className="live-guide-progress" max={100} value={programmeProgress(current, guideNow)} aria-label={`${programmeProgress(current, guideNow).toFixed(0)}% of ${current.title}`} />
+              {index === focusIndex && next && <span className="live-guide-next">Next: {next.title} · {programmeTime(next.startTime)}</span>}
+            </span>;
+          })()}
+        </span>
       </button>)}
       {!channels.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No channels</h2><p>Refresh this category to try again.</p><button type="button" onClick={() => void openCategory(selectedCategory)}>Refresh</button></div>}
     </div>

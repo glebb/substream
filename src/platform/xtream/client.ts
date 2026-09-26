@@ -1,6 +1,6 @@
 import { normalizeTitle, searchTerms, stableId, type VodCatalogItem } from "../../core/catalog/index.ts";
 import { providerRequestUrl } from "../provider-request.ts";
-import type { LiveCategory, ProviderLiveStream } from "../../core/live/index.ts";
+import type { EpgProgramme, LiveCategory, ProviderLiveStream } from "../../core/live/index.ts";
 
 type Request = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
@@ -22,6 +22,16 @@ type XtreamVodResponse = { stream_id?: string | number; name?: string; container
 type XtreamSeriesResponse = { series_id?: string | number; name?: string; year?: string | number; last_modified?: string | number };
 type XtreamSeriesInfoResponse = { episodes?: Record<string, Array<{ id?: string | number; title?: string; episode_num?: string | number; container_extension?: string }>> };
 type XtreamLiveResponse = { stream_id?: string | number; category_id?: string | number; name?: string; stream_icon?: string; epg_channel_id?: string; num?: string | number };
+type XtreamEpgResponse = {
+  title?: string;
+  description?: string;
+  start?: string | number;
+  end?: string | number;
+  start_timestamp?: string | number;
+  stop_timestamp?: string | number;
+  end_timestamp?: string | number;
+};
+type XtreamShortEpgPayload = { epg_listings?: unknown };
 
 export class XtreamRequestError extends Error {
   constructor(readonly status?: number) {
@@ -84,6 +94,34 @@ export class XtreamClient {
       return [{ streamId, categoryId: resolvedCategoryId, name, order,
         ...(record.stream_icon?.trim() ? { logo: record.stream_icon.trim() } : {}),
         ...(record.epg_channel_id?.trim() ? { epgId: record.epg_channel_id.trim() } : {}),
+      }];
+    });
+  }
+
+  /** Returns the short guide for one channel, keyed by the provider stream ID. */
+  async shortEpg(streamId: string, limit = 10): Promise<EpgProgramme[]> {
+    if (!/^\d{1,20}$/.test(streamId)) throw new Error("Invalid provider stream identifier");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid EPG programme limit");
+    const payload = await this.get<unknown>("get_short_epg", { stream_id: streamId, limit: String(limit) });
+    const records = Array.isArray(payload)
+      ? payload
+      : payload && typeof payload === "object" && Array.isArray((payload as XtreamShortEpgPayload).epg_listings)
+        ? (payload as XtreamShortEpgPayload).epg_listings as unknown[]
+        : [];
+    return records.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const record = value as XtreamEpgResponse;
+      const startTime = epgTime(record.start_timestamp ?? record.start);
+      const endTime = epgTime(record.stop_timestamp ?? record.end_timestamp ?? record.end);
+      const title = providerText(record.title);
+      if (startTime === null || endTime === null || endTime <= startTime || !title) return [];
+      const description = providerText(record.description);
+      return [{
+        channelId: streamId,
+        title,
+        startTime,
+        endTime,
+        ...(description ? { description } : {}),
       }];
     });
   }
@@ -186,9 +224,16 @@ export class XtreamClient {
     url.searchParams.set("password", this.connection.password);
     url.searchParams.set("action", action);
     for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
-    const response = await this.request(url.toString());
-    if (!response.ok) throw new XtreamRequestError(response.status);
-    return response.json() as Promise<T>;
+    try {
+      const response = await this.request(url.toString());
+      if (!response.ok) throw new XtreamRequestError(response.status);
+      return await response.json() as T;
+    } catch (error) {
+      if (error instanceof XtreamRequestError) throw error;
+      // Request implementations often include the full credential-bearing URL in
+      // their errors. Never let that URL escape the provider adapter.
+      throw new XtreamRequestError();
+    }
   }
 
   private categoriesFor(records: XtreamCategoryResponse[], contentType: XtreamCategory["contentType"]): XtreamCategory[] {
@@ -209,4 +254,33 @@ function numberOrNull(value: string | number | undefined): number | null {
   if (typeof value === "string" && value.trim() === "") return null;
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
+function epgTime(value: string | number | undefined): number | null {
+  if (typeof value === "number" || (typeof value === "string" && /^\d+$/.test(value.trim()))) {
+    const timestamp = numberOrNull(value);
+    if (timestamp === null) return null;
+    // Xtream commonly reports Unix seconds, though some providers send ms.
+    return timestamp < 100_000_000_000 ? timestamp * 1000 : timestamp;
+  }
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = Date.parse(value.trim().replace(" ", "T"));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function providerText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const text = value.trim();
+  if (!text || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)) return text;
+  try {
+    const binary = atob(text);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+    // Avoid interpreting ordinary short words as base64 by requiring padding,
+    // non-ASCII decoded text, or a sufficiently long encoded value.
+    if (decoded && (text.includes("=") || /[^\x20-\x7e]/.test(decoded) || text.length >= 12)) return decoded;
+  } catch {
+    // Keep provider text unchanged when it is not valid encoded UTF-8.
+  }
+  return text;
 }

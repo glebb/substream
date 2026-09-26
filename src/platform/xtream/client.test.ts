@@ -17,6 +17,52 @@ describe("XtreamClient", () => {
     expect(JSON.stringify(await client!.liveStreams("7"))).not.toContain("secret");
     expect(urls.every((url) => url.includes("action=get_live_"))).toBe(true);
   });
+
+  it("loads short EPG, normalizes timestamps and decodes provider text", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => [
+      { title: "Uutiset", start_timestamp: "1790438400", stop_timestamp: 1790440200, description: "VGFya2VtcGkgdGllZG90" },
+      { title: "V2VhdGhlcg==", start: "2026-09-26 19:00:00", end: "2026-09-26 19:30:00" },
+      { title: "Missing end", start_timestamp: 1790438400 },
+      { title: "Reversed", start_timestamp: 1790440200, stop_timestamp: 1790438400 },
+    ] });
+    const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=secret", request);
+    if (!client) throw new Error("Expected Xtream client");
+
+    await expect(client.shortEpg("42", 5)).resolves.toEqual([
+      { channelId: "42", title: "Uutiset", startTime: 1790438400000, endTime: 1790440200000, description: "Tarkempi tiedot" },
+      { channelId: "42", title: "Weather", startTime: Date.parse("2026-09-26T19:00:00"), endTime: Date.parse("2026-09-26T19:30:00") },
+    ]);
+    const requestedUrl = request.mock.calls[0]?.[0];
+    if (typeof requestedUrl !== "string") throw new Error("Expected an EPG request URL");
+    const requestUrl = new URL(requestedUrl);
+    expect(requestUrl.searchParams.get("action")).toBe("get_short_epg");
+    expect(requestUrl.searchParams.get("stream_id")).toBe("42");
+    expect(requestUrl.searchParams.get("limit")).toBe("5");
+  });
+
+  it("accepts the epg_listings response wrapper", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ epg_listings: [
+      { title: "Evening news", start_timestamp: 1790438400, stop_timestamp: 1790440200 },
+    ] }) });
+    const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=pass", request);
+    if (!client) throw new Error("Expected Xtream client");
+
+    await expect(client.shortEpg("42")).resolves.toEqual([
+      { channelId: "42", title: "Evening news", startTime: 1790438400000, endTime: 1790440200000 },
+    ]);
+  });
+
+  it("validates short EPG arguments and sanitizes request errors", async () => {
+    const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=secret", async () => {
+      throw new Error("failed https://iptv.example/player_api.php?username=user&password=secret");
+    });
+    if (!client) throw new Error("Expected Xtream client");
+
+    await expect(client.shortEpg("42/other")).rejects.toThrow("Invalid provider stream identifier");
+    await expect(client.shortEpg("42", 0)).rejects.toThrow("Invalid EPG programme limit");
+    await expect(client.shortEpg("42")).rejects.toMatchObject({ message: "Provider request failed" });
+    await expect(client.shortEpg("42")).rejects.not.toThrow("secret");
+  });
   it("detects a get.php playlist and lazily maps a movie category", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => [{ stream_id: 7, name: "FI:Example Movie - 2024", container_extension: "mkv" }] });
     const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=pass&type=m3u_plus", request);

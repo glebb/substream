@@ -30,3 +30,17 @@ export interface ProviderLiveStream {
   epgId?: string;
   order: number;
 }
+
+/** A single provider EPG entry. Times are Unix timestamps in milliseconds. */
+export interface EpgProgramme {
+  channelId: string;
+  title: string;
+  startTime: number;
+  endTime: number;
+  description?: string;
+}
+
+export interface CurrentAndNextProgramme {
+  current: EpgProgramme | null;
+  next: EpgProgramme | null;
+}

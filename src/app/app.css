@@ -23,6 +23,16 @@ body { margin: 0; overflow-x: hidden; }
 .live-list { display: flex; flex-direction: column; gap: .5rem; max-height: 66vh; overflow-y: auto; padding: .5rem; }
 .live-row { align-items: center; background: #151d2b; border: 1px solid #273349; color: #f4f7ff; display: flex; gap: 1rem; min-height: 4.5rem; padding: .65rem 1rem; text-align: left; width: 100%; }
 .live-row strong { flex: 1; font-size: 1.1rem; }
+.live-channel-copy { display: flex; flex: 1; flex-direction: column; gap: .25rem; min-width: 0; }
+.live-channel-heading { align-items: center; display: flex; flex-wrap: wrap; gap: .6rem; min-width: 0; }
+.live-channel-heading strong { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-guide { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.live-guide-current { align-items: baseline; display: flex; flex-wrap: wrap; gap: .35rem .75rem; min-width: 0; }
+.live-guide-current strong { flex: 0 1 auto; font-size: .95rem; font-weight: 650; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-guide-current > span, .live-guide-next, .live-guide-unavailable { color: #b8c4d7; font-size: .78rem; font-variant-numeric: tabular-nums; }
+.live-guide-progress { accent-color: #82b7ff; height: .28rem; max-width: 28rem; width: 100%; }
+.live-guide-next { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-focused .live-guide-current > span, .remote-focused .live-guide-next, .remote-focused .live-guide-unavailable { color: #243142; }
 .live-category-row { min-height: 5rem; }
 .live-category-mark { color: #82b7ff; font-size: 1.2rem; width: 2rem; }
 .live-category-arrow { color: #b8c4d7; font-size: 2rem; }
@@ -33,6 +43,7 @@ body { margin: 0; overflow-x: hidden; }
 .live-badge { font-size: 1rem; }
 .live-controls { margin-top: 1rem; }
 .live-buffer-status { color: #b8c4d7; font-size: .85rem; font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) { .live-list { max-height: 70vh; } .live-row { gap: .65rem; padding: .6rem .7rem; } .live-logo { flex: 0 0 3.4rem; width: 3.4rem; } }
 @media (max-width: 700px) { .home-cards { align-items: center; flex-direction: column; } .home-card { min-height: 4.5rem; width: min(19rem, 90vw); } }
 .screen { min-height: 100vh; width: 100%; max-width: 1600px; margin: 0 auto; padding: 32px 48px; }
 .eyebrow { color: #82b7ff; font-size: 12px; font-weight: 800; letter-spacing: 3px; margin: 0 0 6px; }
