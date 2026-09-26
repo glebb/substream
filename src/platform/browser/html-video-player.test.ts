@@ -96,6 +96,25 @@ describe("HtmlVideoPlayer", () => {
     player.destroy();
   });
 
+  it("exposes and seeks only within a provider's rolling live window", () => {
+    const { video, dispatch } = fakeVideo();
+    const media = video as unknown as { currentTime: number; seekable: TimeRanges };
+    media.currentTime = 115;
+    media.seekable = { length: 1, start: () => 90, end: () => 120 } as TimeRanges;
+    const player = new HtmlVideoPlayer(video);
+    const windows: unknown[] = [];
+    player.setEventHandlers({ onStateChange: () => undefined, onLiveBufferWindowChange: (value) => windows.push(value) });
+
+    expect(player.getLiveBufferWindow()).toEqual({ startSeconds: 90, endSeconds: 120, currentSeconds: 115 });
+    player.seekLiveBuffer?.(20);
+    expect(video.currentTime).toBe(90);
+    player.goLive?.();
+    expect(video.currentTime).toBe(119.75);
+    dispatch("progress");
+    expect(windows).toContainEqual({ startSeconds: 90, endSeconds: 120, currentSeconds: 119.75 });
+    player.destroy();
+  });
+
   it("resumes at a saved position after metadata loads and exposes only video dimensions", () => {
     const { video, dispatch } = fakeVideo();
     const media = video as unknown as { readyState: number; videoWidth: number; videoHeight: number; currentTime: number };

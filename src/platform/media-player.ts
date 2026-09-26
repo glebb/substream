@@ -29,6 +29,17 @@ export interface PlaybackProgress {
   durationSeconds: number;
 }
 
+/**
+ * A seekable, rolling portion of a live stream. It is present only when the
+ * provider and playback engine expose DVR-style HLS segments; it is not an
+ * estimate of how much data happens to be downloaded locally.
+ */
+export interface LiveBufferWindow {
+  startSeconds: number;
+  endSeconds: number;
+  currentSeconds: number;
+}
+
 /** A user-selectable embedded audio rendition. Never contains a stream URL. */
 export interface AudioTrack {
   /** Platform-specific, opaque identifier used only for selecting this track. */
@@ -54,6 +65,7 @@ export interface EmbeddedSubtitleTrack {
 export interface MediaPlayerEventHandlers {
   onStateChange(state: PlaybackState): void;
   onProgress?(progress: PlaybackProgress): void;
+  onLiveBufferWindowChange?(window: LiveBufferWindow | null): void;
   /** Fires when selectable embedded live subtitle renditions become available or change. */
   onEmbeddedSubtitleTracksChange?(tracks: EmbeddedSubtitleTrack[]): void;
 }
@@ -65,6 +77,12 @@ export interface MediaPlayer {
   load(streamUrl: string): void;
   /** Seeks to an absolute playhead position, including while the stream is preparing. */
   seekTo?(seconds: number): void;
+  /** Returns the provider's currently seekable live/DVR window, if it exposes one. */
+  getLiveBufferWindow?(): LiveBufferWindow | null;
+  /** Seeks within the reported live/DVR window. */
+  seekLiveBuffer?(seconds: number): void;
+  /** Returns playback to the newest available point of a live/DVR window. */
+  goLive?(): void;
   /** Returns source dimensions only; adapters must not expose stream metadata or URLs. */
   getVideoResolution?(): string | null;
   /** Lists embedded audio tracks when the playback engine makes them available. */

@@ -15,8 +15,3 @@ export function preferredEmbeddedSubtitleTrack<T extends SubtitleLanguageCandida
   return tracks.find((track) => FINNISH_CODES.has(normalizedLanguage(track)))
     ?? tracks.find((track) => ENGLISH_CODES.has(normalizedLanguage(track)));
 }
-
-/** Provider metadata opt-in for the costly live transport subtitle path. */
-export function expectsEmbeddedLiveSubtitles(channelName: string): boolean {
-  return /(?:^|[\s([])multi[\s-]*sub(?:$|[\s)\]])/i.test(channelName);
-}

@@ -16,8 +16,18 @@ const PTS_WRAP = 0x200000000;
 // for zero-length/malformed packets, but never repeatedly copy an unbounded
 // transport payload on the browser's main thread.
 const MAX_PENDING_PES_BYTES = 128 * 1024;
-const TS_PACKETS_PER_TASK = 256;
+// Keep each main-thread parsing slice short. hls.js and video playback own
+// their workers independently; this reader must never monopolize the UI.
+const TS_PACKETS_PER_TASK = 32;
 const MAX_QUEUED_FRAGMENTS = 8;
+// Even after discovery, accept only a bounded portion of each media fragment.
+// A dropped tail is recovered from the next PAT/PMT/PES repetition.
+const MAX_ACTIVE_FRAGMENT_BYTES = 512 * 1024;
+// PAT/PMT tables are repeated at the beginning of ordinary HLS TS segments.
+// Until one advertises a DVB subtitle descriptor, retain only this bounded
+// prefix. This keeps subtitle discovery safe for channels with large or noisy
+// transport streams that carry no subtitles at all.
+const DISCOVERY_FRAGMENT_BYTES = 64 * 1024;
 
 /**
  * Extracts DVB subtitle PES packets from HLS MPEG-TS media fragments. hls.js
@@ -70,7 +80,11 @@ export class LiveDvbSubtitles {
     if (!(payload instanceof ArrayBuffer) || fragment?.type !== "main" || this.disposed) return;
     // HLS may transfer the source buffer to its demux worker as soon as this
     // event returns, so retain one local copy for time-sliced subtitle parsing.
-    this.queuedFragments.push({ bytes: new Uint8Array(payload).slice(), start: Math.max(0, Number(fragment.start) || 0), cc: fragment.cc, offset: 0 });
+    // Before a DVB descriptor is discovered, copy only the PAT/PMT prefix.
+    const source = new Uint8Array(payload);
+    const captureLimit = this.tracks.length ? MAX_ACTIVE_FRAGMENT_BYTES : DISCOVERY_FRAGMENT_BYTES;
+    const bytes = source.subarray(0, Math.min(source.length, captureLimit)).slice();
+    this.queuedFragments.push({ bytes, start: Math.max(0, Number(fragment.start) || 0), cc: fragment.cc, offset: 0 });
     while (this.queuedFragments.length > MAX_QUEUED_FRAGMENTS) this.queuedFragments.shift();
     this.scheduleFragmentWork();
   };
@@ -152,6 +166,24 @@ export class LiveDvbSubtitles {
 
   isSelected(id: string): boolean {
     return `${this.selected?.pid}:${this.selected?.compositionPageId}` === id;
+  }
+
+  selectTrack(id: string): boolean {
+    const next = this.tracks.find((track) => `${track.pid}:${track.compositionPageId}` === id);
+    if (!next || this.rendererFailed) return false;
+    const previousId = this.selected && `${this.selected.pid}:${this.selected.compositionPageId}`;
+    this.selected = next;
+    this.enabled = true;
+    if (previousId === id) return true;
+    this.selectionVersion++;
+    this.pendingPes = new Uint8Array(0);
+    this.queuedPes = [];
+    this.queuedBytes = 0;
+    this.history.length = 0;
+    this.historyBytes = 0;
+    this.onTracksChange?.(this.getTracks());
+    void this.ensureRenderer().catch((error: unknown) => this.handleRendererError(error));
+    return true;
   }
 
   setEnabled(enabled: boolean): void {
@@ -340,9 +372,13 @@ export class LiveDvbSubtitles {
 }
 
 function filterPesPages(pes: Uint8Array, selected: DvbTrack): Uint8Array | undefined {
-  if (pes.length < 16 || pes[0] !== 0 || pes[1] !== 0 || pes[2] !== 1 || pes[6] !== 0x80) return pes;
+  // A stream can mark a private PID as DVB while also sending malformed or
+  // unrelated PES payloads. Never hand those bytes to the WASM renderer: its
+  // parser is intentionally optimized for valid subtitle segments, not input
+  // recovery. The TS reader can safely resynchronize at the next PES start.
+  if (pes.length < 16 || pes[0] !== 0 || pes[1] !== 0 || pes[2] !== 1 || pes[6] !== 0x80) return undefined;
   const payloadStart = 9 + pes[8]!;
-  if (payloadStart + 2 > pes.length || pes[payloadStart] !== 0x20) return pes;
+  if (payloadStart + 2 > pes.length || pes[payloadStart] !== 0x20) return undefined;
   const allowedPages = new Set([selected.compositionPageId, selected.ancillaryPageId]);
   const segments: Uint8Array[] = [];
   let offset = payloadStart + 2;
@@ -350,7 +386,7 @@ function filterPesPages(pes: Uint8Array, selected: DvbTrack): Uint8Array | undef
     const pageId = (pes[offset + 2]! << 8) | pes[offset + 3]!;
     const segmentLength = (pes[offset + 4]! << 8) | pes[offset + 5]!;
     const end = offset + 6 + segmentLength;
-    if (end > pes.length) return pes;
+    if (end > pes.length) return undefined;
     if (allowedPages.has(pageId)) segments.push(pes.subarray(offset, end));
     offset = end;
   }

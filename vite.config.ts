@@ -25,6 +25,9 @@ export default defineConfig(({ mode }) => {
   };
   return {
     base: "./",
+    // The optional DVB decoder uses a module worker so its WASM decoder and
+    // worker-only dependencies never enter the browser UI bundle.
+    worker: { format: "es" },
     // libbitsub resolves its DVB decoder WASM relative to its own module URL.
     // Keeping it out of Vite's development prebundle preserves that package
     // relationship; production builds still emit a hashed WASM asset.

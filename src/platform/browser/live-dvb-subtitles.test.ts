@@ -35,7 +35,8 @@ describe("LiveDvbSubtitles TS demux and renderer handoff", () => {
     const pat = withCrc([0, 0xb0, 13, 0, 1, 0xc1, 0, 0, 0, 1, 0xe1, 0]);
     const pmt = withCrc([2, 0xb0, 36, 0, 1, 0xc1, 0, 0, 0xe1, 0x20, 0xf0, 0,
       6, 0xe1, 0x20, 0xf0, 18, 0x59, 16, 0x66, 0x69, 0x6e, 0x10, 0, 1, 0, 1, 0x73, 0x77, 0x65, 0x10, 0, 2, 0, 2]);
-    const pes = [0, 0, 1, 0xbd, 0, 9, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1, 0x20];
+    const pes = [0, 0, 1, 0xbd, 0, 16, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1,
+      0x20, 0, 0x0f, 0x14, 0, 1, 0, 0];
     const fragment = concat(
       ts(0, [0, ...pat]),
       ts(0x100, [0, ...pmt]),
@@ -45,7 +46,7 @@ describe("LiveDvbSubtitles TS demux and renderer handoff", () => {
     );
     const payload = fragment.buffer.slice(fragment.byteOffset, fragment.byteOffset + fragment.byteLength) as ArrayBuffer;
     listeners.get("frag")?.("frag", { payload, frag: { type: "main", start: 0, cc: 4 } });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(subtitles.getTracks()).toEqual([
       { id: "288:1", label: "fin · DVB", language: "fin", selected: true },
       { id: "288:2", label: "swe · DVB", language: "swe", selected: false },
@@ -77,14 +78,80 @@ describe("LiveDvbSubtitles TS demux and renderer handoff", () => {
     const pmt = withCrc([2, 0xb0, 28, 0, 1, 0xc1, 0, 0, 0xe1, 0x20, 0xf0, 0,
       6, 0xe1, 0x20, 0xf0, 10, 0x59, 8, 0x66, 0x69, 0x6e, 0x10, 0, 1, 0, 1]);
     const continuation = Array.from({ length: 300 }, () => ts(0x120, new Array(184).fill(0x55), false));
-    const pes = [0, 0, 1, 0xbd, 0, 9, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1, 0x20];
+    const pes = [0, 0, 1, 0xbd, 0, 16, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1,
+      0x20, 0, 0x0f, 0x14, 0, 1, 0, 0];
     const fragment = concat(ts(0, [0, ...pat]), ts(0x100, [0, ...pmt]), ...continuation, ts(0x120, pes));
     const payload = fragment.buffer.slice(fragment.byteOffset, fragment.byteOffset + fragment.byteLength) as ArrayBuffer;
     listeners.get("pts")?.("pts", { id: "main", initPTS: 0, timescale: 90_000, frag: { cc: 1 } });
     listeners.get("frag")?.("frag", { payload, frag: { type: "main", start: 0, cc: 1 } });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(append).toHaveBeenCalledOnce();
+    subtitles.dispose();
+  });
+
+  it("allows a discovered DVB language track to be selected without channel metadata", async () => {
+    const listeners = new Map<string, (event: string, data: Record<string, unknown>) => void>();
+    const hls = { on: (event: string, fn: (event: string, data: Record<string, unknown>) => void) => listeners.set(event, fn), off: vi.fn() };
+    const subtitles = new LiveDvbSubtitles({} as HTMLVideoElement, hls, { FRAG_LOADED: "frag", FRAG_DECRYPTED: "decrypted", INIT_PTS_FOUND: "pts" }, async () => ({ append: async () => 0, reset: async () => {}, dispose: () => {} }));
+    const pat = withCrc([0, 0xb0, 13, 0, 1, 0xc1, 0, 0, 0, 1, 0xe1, 0]);
+    const pmt = withCrc([2, 0xb0, 36, 0, 1, 0xc1, 0, 0, 0xe1, 0x20, 0xf0, 0,
+      6, 0xe1, 0x20, 0xf0, 18, 0x59, 16, 0x66, 0x69, 0x6e, 0x10, 0, 1, 0, 1, 0x73, 0x77, 0x65, 0x10, 0, 2, 0, 2]);
+    const fragment = concat(ts(0, [0, ...pat]), ts(0x100, [0, ...pmt]));
+    const payload = fragment.buffer.slice(fragment.byteOffset, fragment.byteOffset + fragment.byteLength) as ArrayBuffer;
+    listeners.get("frag")?.("frag", { payload, frag: { type: "main", start: 0, cc: 1 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(subtitles.selectTrack("288:2")).toBe(true);
+    expect(subtitles.getTracks()).toMatchObject([{ language: "fin", selected: false }, { language: "swe", selected: true }]);
+    subtitles.dispose();
+  });
+
+  it("copies only a bounded transport prefix until a DVB descriptor is found", async () => {
+    const listeners = new Map<string, (event: string, data: Record<string, unknown>) => void>();
+    const hls = { on: (event: string, fn: (event: string, data: Record<string, unknown>) => void) => listeners.set(event, fn), off: vi.fn() };
+    const subtitles = new LiveDvbSubtitles({} as HTMLVideoElement, hls, { FRAG_LOADED: "frag", FRAG_DECRYPTED: "decrypted", INIT_PTS_FOUND: "pts" });
+    const oversized = new Uint8Array(128 * 1024).fill(0xff);
+    const pat = withCrc([0, 0xb0, 13, 0, 1, 0xc1, 0, 0, 0, 1, 0xe1, 0]);
+    const pmt = withCrc([2, 0xb0, 28, 0, 1, 0xc1, 0, 0, 0xe1, 0x20, 0xf0, 0,
+      6, 0xe1, 0x20, 0xf0, 10, 0x59, 8, 0x66, 0x69, 0x6e, 0x10, 0, 1, 0, 1]);
+    oversized.set(ts(0, [0, ...pat]), 0);
+    // This valid DVB descriptor is deliberately beyond the discovery prefix.
+    oversized.set(ts(0x100, [0, ...pmt]), TS_PACKET * 400);
+    const payload = oversized.buffer.slice(oversized.byteOffset, oversized.byteOffset + oversized.byteLength) as ArrayBuffer;
+    listeners.get("frag")?.("frag", { payload, frag: { type: "main", start: 0, cc: 1 } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // A full fragment scan would find the valid descriptor at packet 400.
+    expect(subtitles.getTracks()).toEqual([]);
+    subtitles.dispose();
+  });
+
+  it("caps fragment capture after discovery so oversized live segments stay bounded", async () => {
+    const listeners = new Map<string, (event: string, data: Record<string, unknown>) => void>();
+    const hls = { on: (event: string, fn: (event: string, data: Record<string, unknown>) => void) => listeners.set(event, fn), off: vi.fn() };
+    const append = vi.fn(async (_data: Uint8Array) => 0);
+    const renderer = { append, reset: vi.fn(async () => {}), dispose: vi.fn() };
+    const subtitles = new LiveDvbSubtitles({} as HTMLVideoElement, hls,
+      { FRAG_LOADED: "frag", FRAG_DECRYPTED: "decrypted", INIT_PTS_FOUND: "pts" }, async () => renderer);
+    subtitles.setEnabled(true);
+
+    const pat = withCrc([0, 0xb0, 13, 0, 1, 0xc1, 0, 0, 0, 1, 0xe1, 0]);
+    const pmt = withCrc([2, 0xb0, 28, 0, 1, 0xc1, 0, 0, 0xe1, 0x20, 0xf0, 0,
+      6, 0xe1, 0x20, 0xf0, 10, 0x59, 8, 0x66, 0x69, 0x6e, 0x10, 0, 1, 0, 1]);
+    const pes = [0, 0, 1, 0xbd, 0, 16, 0x80, 0x80, 5, 0x21, 0, 1, 0, 1,
+      0x20, 0, 0x0f, 0x14, 0, 1, 0, 0];
+    const prefix = concat(ts(0, [0, ...pat]), ts(0x100, [0, ...pmt]));
+    const oversized = new Uint8Array(1024 * 1024).fill(0xff);
+    oversized.set(prefix);
+    oversized.set(ts(0x120, pes), 600 * 1024);
+    listeners.get("pts")?.("pts", { id: "main", initPTS: 0, timescale: 90_000, frag: { cc: 1 } });
+    const payload = oversized.buffer.slice(oversized.byteOffset, oversized.byteOffset + oversized.byteLength) as ArrayBuffer;
+    listeners.get("frag")?.("frag", { payload, frag: { type: "main", start: 0, cc: 1 } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(subtitles.getTracks()).toHaveLength(1);
+    expect(append).not.toHaveBeenCalled();
     subtitles.dispose();
   });
 });

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { selectFinnishChannels, selectFinnishLiveCategories, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
-import { expectsEmbeddedLiveSubtitles, preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
+import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { loadPlaylistUrl } from "../platform/browser/playlist-config.ts";
 import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
-import type { MediaPlayer, PlaybackState } from "../platform/media-player.ts";
+import type { LiveBufferWindow, MediaPlayer, PlaybackState } from "../platform/media-player.ts";
 import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avplay-player.ts";
 import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "../platform/tizen/remote.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
@@ -41,6 +41,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [playerControlIndex, setPlayerControlIndex] = useState(0);
   const [playbackState, setPlaybackState] = useState<PlaybackState>("loading");
+  const [liveBufferWindow, setLiveBufferWindow] = useState<LiveBufferWindow | null>(null);
   const playbackStateRef = useRef<PlaybackState>("loading");
   const [liveSubtitleStatus, setLiveSubtitleStatus] = useState("");
   const [retryCount, setRetryCount] = useState(0);
@@ -146,13 +147,13 @@ export function LiveTv({ onMainMenu }: Props) {
     const player = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {}) : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
     if (!player) { setPlaybackState("error"); return; }
     playerRef.current = player;
-    const subtitleMode = expectsEmbeddedLiveSubtitles(selected.name);
-    if (!isTizen && expectsEmbeddedLiveSubtitles(selected.name)) {
-      setLiveSubtitleStatus("Embedded subtitles unavailable in browser playback");
-    }
-    player.setLiveSubtitleMode?.(subtitleMode);
+    // Browser worker activation is intentionally held back until it has passed
+    // a real-stream responsiveness check. AVPlay inspects its native tracks
+    // without invoking any browser-side transport or renderer work.
+    player.setLiveSubtitleMode?.(isTizen);
     player.setEventHandlers({
       onStateChange: setPlaybackState,
+      onLiveBufferWindowChange: setLiveBufferWindow,
       onEmbeddedSubtitleTracksChange: (tracks) => reconcileEmbeddedSubtitles(player, tracks),
     });
     player.load(client.liveStreamUrl(selected.providerStreamId, isTizenAvPlayAvailable() ? "ts" : "m3u8"));
@@ -211,6 +212,7 @@ export function LiveTv({ onMainMenu }: Props) {
     setRetryCount(0);
     setPlayerControlIndex(0);
     setLiveSubtitleStatus("Finding Finnish subtitles…");
+    setLiveBufferWindow(null);
     setPlayerFullscreen(true);
     if (!isTizen && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
     setSelected(channel);
@@ -239,6 +241,7 @@ export function LiveTv({ onMainMenu }: Props) {
     const index = Math.max(0, channels.findIndex((channel) => channel.id === selected?.id));
     exitFullscreen();
     setSelected(null); setFocusIndex(index);
+    setLiveBufferWindow(null);
     window.requestAnimationFrame(() => rowRefs.current[index]?.focus());
   };
 
@@ -295,6 +298,10 @@ export function LiveTv({ onMainMenu }: Props) {
 
   if (selected) {
     const selectedIndex = channels.findIndex((channel) => channel.id === selected.id);
+    const bufferBehindSeconds = liveBufferWindow ? Math.max(0, liveBufferWindow.currentSeconds - liveBufferWindow.startSeconds) : 0;
+    const behindLiveSeconds = liveBufferWindow ? Math.max(0, liveBufferWindow.endSeconds - liveBufferWindow.currentSeconds) : 0;
+    const hasLiveBuffer = !!liveBufferWindow && liveBufferWindow.endSeconds - liveBufferWindow.startSeconds >= 2;
+    const atLiveEdge = behindLiveSeconds < 3;
     return <main className={`screen player-screen live-player-screen ${playerFullscreen ? "is-fullscreen" : ""}`}>
     <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span></header>
     <div className="player-stage">
@@ -307,8 +314,11 @@ export function LiveTv({ onMainMenu }: Props) {
       <button type="button" disabled={selectedIndex >= channels.length - 1} onClick={() => changeChannel(1)} ref={(element) => { playerControlRefs.current[1] = element; }}>Next channel</button>
       <button type="button" onClick={toggleFullscreen} ref={(element) => { playerControlRefs.current[2] = element; }}>{playerFullscreen ? "Exit full screen" : "Full screen"}</button>
       {playbackState === "error" && <button type="button" onClick={() => { setPlaybackState("loading"); setRetryCount((count) => count + 1); }} ref={(element) => { playerControlRefs.current[3] = element; }}>Retry</button>}
-      <button type="button" onClick={leavePlayer} ref={(element) => { playerControlRefs.current[4] = element; }}>Back to channels</button>
+      {hasLiveBuffer && <button type="button" disabled={bufferBehindSeconds < 1} onClick={() => playerRef.current?.seekLiveBuffer?.(liveBufferWindow!.currentSeconds - 30)} ref={(element) => { playerControlRefs.current[4] = element; }}>Rewind 30 seconds</button>}
+      {hasLiveBuffer && <button type="button" disabled={atLiveEdge} onClick={() => playerRef.current?.goLive?.()} ref={(element) => { playerControlRefs.current[5] = element; }}>Go live</button>}
+      <button type="button" onClick={leavePlayer} ref={(element) => { playerControlRefs.current[6] = element; }}>Back to channels</button>
       <span className="playback-status">{playbackState === "playing" ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}</span>
+      {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}
     </div>
   </main>;
   }

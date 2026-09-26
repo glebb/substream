@@ -115,3 +115,6 @@ Automated tests use synthetic data only. Run `npm run check` before making chang
 ## Status and roadmap
 
 For the current implementation details, constraints, planned work, and remote-navigation contract, see [docs/status.md](docs/status.md), [docs/roadmap.md](docs/roadmap.md), and [docs/navigation.md](docs/navigation.md).
+
+For the live DVB subtitle investigation, browser safety boundaries, and the
+remaining worker-integration work, see [docs/live-dvb-subtitles.md](docs/live-dvb-subtitles.md).
