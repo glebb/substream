@@ -3,12 +3,14 @@ import { TizenAvPlayPlayer, isTizenAvPlayAvailable } from "./avplay-player.ts";
 
 const originalWebapis = (globalThis as typeof globalThis & { webapis?: unknown }).webapis;
 const originalTizen = (globalThis as typeof globalThis & { tizen?: unknown }).tizen;
+const originalXhr = globalThis.XMLHttpRequest;
 
 afterEach(() => {
   if (originalWebapis === undefined) delete (globalThis as typeof globalThis & { webapis?: unknown }).webapis;
   else (globalThis as typeof globalThis & { webapis?: unknown }).webapis = originalWebapis;
   if (originalTizen === undefined) delete (globalThis as typeof globalThis & { tizen?: unknown }).tizen;
   else (globalThis as typeof globalThis & { tizen?: unknown }).tizen = originalTizen;
+  globalThis.XMLHttpRequest = originalXhr;
 });
 
 describe("TizenAvPlayPlayer", () => {
@@ -58,7 +60,7 @@ describe("TizenAvPlayPlayer", () => {
     player.skip(Number.POSITIVE_INFINITY);
     expect(open).toHaveBeenCalledWith("https://example.invalid/stream.mkv");
     expect(setBufferingParam).toHaveBeenNthCalledWith(1, "PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 5);
-    expect(setBufferingParam).toHaveBeenNthCalledWith(2, "PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 15);
+    expect(setBufferingParam).toHaveBeenNthCalledWith(2, "PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 5);
     expect(open.mock.invocationCallOrder[0]).toBeLessThan(setBufferingParam.mock.invocationCallOrder[0]!);
     expect(setBufferingParam.mock.invocationCallOrder[1]).toBeLessThan(prepareAsync.mock.invocationCallOrder[0]!);
     expect(setDisplayRect).toHaveBeenCalledWith(10, 21, 1280, 720);
@@ -124,9 +126,132 @@ describe("TizenAvPlayPlayer", () => {
     player.destroy();
   });
 
-  it("keeps a provider subtitle default hidden, then selects the Finnish TEXT track", () => {
+  it("keeps discovered DVB subtitle tracks when AVPlay rejects its native track query", () => {
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), getTotalTrackInfo: vi.fn(() => { throw new Error("not ready"); }),
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.setLiveSubtitleMode(true);
+    player.load("https://example.invalid/live.m3u8");
+    (player as unknown as { liveDvbTracks: Array<{ id: string; label: string; language: string; selected: boolean }> }).liveDvbTracks = [
+      { id: "dvb:100:1", label: "Finnish · DVB", language: "fin", selected: false },
+    ];
+    expect(player.getEmbeddedSubtitleTracks()).toEqual([
+      { id: "dvb:100:1", label: "Finnish · DVB", language: "fin", selected: false },
+    ]);
+    player.destroy();
+  });
+
+  it("defaults AVPlay audio to Finnish, then English, then the first track", () => {
+    const setSelectTrack = vi.fn();
+    const getTotalTrackInfo = vi.fn(() => [
+      { type: "AUDIO", index: 0, extra_info: '{"language":"swe"}' },
+      { type: "AUDIO", index: 2, extra_info: '{"language":"eng"}' },
+      { type: "AUDIO", index: 5, extra_info: '{"track_lang":"fi"}' },
+    ]);
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), getTotalTrackInfo,
+      getCurrentStreamInfo: vi.fn(() => [{ type: "AUDIO", index: 0, extra_info: "{}" }]), setSelectTrack,
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.load("https://example.invalid/stream.mkv");
+    expect(setSelectTrack).toHaveBeenCalledWith("AUDIO", 5);
+    player.destroy();
+  });
+
+  it("defers AVPlay's first-track default while TS audio languages are being probed", () => {
+    class PendingXhr {
+      timeout = 0;
+      responseText = "";
+      onprogress: (() => void) | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      open(): void {}
+      setRequestHeader(): void {}
+      overrideMimeType(): void {}
+      send(): void {}
+      abort(): void {}
+    }
+    (globalThis as typeof globalThis & { XMLHttpRequest?: unknown }).XMLHttpRequest = PendingXhr as unknown as typeof XMLHttpRequest;
+    const setSelectTrack = vi.fn();
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+      getTotalTrackInfo: vi.fn(() => [
+        { type: "AUDIO", index: 0, extra_info: "{}" },
+        { type: "AUDIO", index: 1, extra_info: "{}" },
+      ]),
+      getCurrentStreamInfo: vi.fn(() => [{ type: "AUDIO", index: 0, extra_info: "{}" }]), setSelectTrack,
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.setLiveSubtitleMode(true);
+    player.setLiveAudioMetadataUrl("https://example.invalid/live.ts");
+    player.load("https://example.invalid/live.m3u8");
+
+    expect(player.isAudioTrackSelectionPending()).toBe(true);
+    expect(setSelectTrack).not.toHaveBeenCalled();
+    player.destroy();
+  });
+
+  it("waits for audio tracks that appear after AVPlay preparation", () => {
+    let listener: { oncurrentplaytime?(milliseconds: number): void } | undefined;
+    const setSelectTrack = vi.fn();
+    let tracksReady = false;
+    const getTotalTrackInfo = vi.fn(() => tracksReady ? [{ type: "AUDIO", index: 3, extra_info: '{"language":"fin"}' }] : []);
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), getTotalTrackInfo,
+      getCurrentStreamInfo: vi.fn(() => []), setSelectTrack,
+      setListener: vi.fn((next: NonNullable<typeof listener>) => { listener = next; }),
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.load("https://example.invalid/stream.mkv");
+    tracksReady = true;
+    listener?.oncurrentplaytime?.(1_000);
+    expect(setSelectTrack).toHaveBeenCalledWith("AUDIO", 3);
+    player.destroy();
+  });
+
+  it("keeps audio and subtitle tracks when AVPlay rejects the current-stream query", () => {
+    const setSelectTrack = vi.fn();
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+      getTotalTrackInfo: vi.fn(() => [
+        { type: "AUDIO", index: "1", extra_info: '{"language":"fin"}' },
+        { type: "TEXT", index: "4", extra_info: '{"track_lang":"fin"}' },
+      ]),
+      getCurrentStreamInfo: vi.fn(() => { throw new Error("not supported"); }), setSelectTrack,
+      setSilentSubtitle: vi.fn(),
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.setLiveSubtitleMode(true);
+    player.load("https://example.invalid/stream.mkv");
+    expect(player.getAudioTracks()).toHaveLength(1);
+    expect(player.getEmbeddedSubtitleTracks()).toHaveLength(1);
+    expect(player.getTrackDiagnostics()).toBe("AVPlay tracks: 1 audio, 1 subtitle, 0 video · TS probe not started");
+    expect(setSelectTrack).toHaveBeenCalledWith("AUDIO", 1);
+    player.destroy();
+  });
+
+  it("keeps native subtitle tracks hidden until an explicit track is selected", () => {
     const setSelectTrack = vi.fn();
     const setSilentSubtitle = vi.fn();
+    let listener: { onbufferingcomplete?(): void } | undefined;
     const getTotalTrackInfo = vi.fn(() => [
       { type: "TEXT", index: 4, extra_info: '{"track_lang":"swe","codec":"DVB"}' },
       { type: "TEXT", index: 6, extra_info: '{"language":"fin","codec":"DVB"}' },
@@ -136,6 +261,7 @@ describe("TizenAvPlayPlayer", () => {
       jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
       setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), getTotalTrackInfo,
       getCurrentStreamInfo: vi.fn(() => [{ type: "TEXT", index: 4, extra_info: "{}" }]), setSelectTrack, setSilentSubtitle,
+      setListener: vi.fn((next: NonNullable<typeof listener>) => { listener = next; }),
     } };
     const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
     const player = new TizenAvPlayPlayer(container, vi.fn());
@@ -151,6 +277,8 @@ describe("TizenAvPlayPlayer", () => {
     ]);
     expect(player.selectEmbeddedSubtitleTrack("6")).toBe(true);
     expect(setSelectTrack).toHaveBeenCalledWith("TEXT", 6);
+    expect(setSilentSubtitle).toHaveBeenLastCalledWith(false);
+    listener?.onbufferingcomplete?.();
     expect(setSilentSubtitle).toHaveBeenLastCalledWith(false);
     expect(player.selectEmbeddedSubtitleTrack("off")).toBe(true);
     expect(setSilentSubtitle).toHaveBeenLastCalledWith(true);

@@ -76,6 +76,14 @@ export interface MediaPlayer {
   setEventHandlers(handlers: MediaPlayerEventHandlers | null): void;
   /** Enables automatic Finnish/English selection for embedded live subtitles. */
   setLiveSubtitleMode?(enabled: boolean): void;
+  /** Supplies the direct transport-stream URL for bounded live track metadata probing. */
+  setLiveAudioMetadataUrl?(url: string): void;
+  /** Supplies a direct transport-stream URL for Tizen's standalone DVB sideband reader. */
+  setLiveDvbSubtitleUrl?(url: string): void;
+  /** Reports whether Tizen's standalone DVB subtitle feed is still discovering tracks. */
+  getLiveDvbSubtitleStatus?(): string;
+  /** Indicates that a platform is still resolving live audio language defaults. */
+  isAudioTrackSelectionPending?(): boolean;
   load(streamUrl: string): void;
   /** Seeks to an absolute playhead position, including while the stream is preparing. */
   seekTo?(seconds: number): void;

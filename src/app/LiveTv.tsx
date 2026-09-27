@@ -9,6 +9,7 @@ import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avp
 import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "../platform/tizen/remote.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { DnaGuideClient } from "../platform/dna/client.ts";
+import { focusTitleListItem } from "./title-list-focus.ts";
 
 type Props = { onMainMenu(): void };
 type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCategory: Record<string, LiveChannel[]> };
@@ -110,9 +111,14 @@ export function LiveTv({ onMainMenu }: Props) {
   const playerRef = useRef<MediaPlayer | null>(null);
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const categoryRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const listViewportRef = useRef<HTMLDivElement | null>(null);
   const mainMenuRef = useRef<HTMLButtonElement | null>(null);
   const categoriesButtonRef = useRef<HTMLButtonElement | null>(null);
   const emptyRefreshRef = useRef<HTMLButtonElement | null>(null);
+  const focusListItem = (element: HTMLButtonElement | null) => {
+    if (isTizenRuntime()) focusTitleListItem(element, listViewportRef.current);
+    else element?.focus();
+  };
   const playerControlRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const requestedFullscreenExitRef = useRef(false);
   const requestRef = useRef(0);
@@ -136,8 +142,19 @@ export function LiveTv({ onMainMenu }: Props) {
       }
       remaining = remaining.filter((track) => track.id !== preferred.id);
     }
+    if (player instanceof TizenAvPlayPlayer) {
+      const status = player.getLiveDvbSubtitleStatus();
+      if (status === "DVB subtitle stream pending") {
+        setLiveSubtitleStatus("Finding Finnish DVB subtitles…");
+        return;
+      }
+      if (status === "DVB subtitle stream unavailable") {
+        setLiveSubtitleStatus("DVB subtitle stream unavailable");
+        return;
+      }
+    }
     player.selectEmbeddedSubtitleTrack?.("off");
-    setLiveSubtitleStatus("Subtitles unavailable");
+    setLiveSubtitleStatus(`Subtitles unavailable${player instanceof TizenAvPlayPlayer ? ` · ${player.getTrackDiagnostics()}` : ""}`);
   }
   function reconcileAudioTracks(player: MediaPlayer | null, tracks: AudioTrack[]): void {
     if (!player) return;
@@ -147,12 +164,22 @@ export function LiveTv({ onMainMenu }: Props) {
     }
     if (audioSelectionManualRef.current) {
       setAudioTracks(tracks);
+      if (player instanceof TizenAvPlayPlayer && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
+        setAudioStatus(`Finnish audio unavailable · ${player.getLiveAudioMetadataStatus()}`);
+      }
+      return;
+    }
+    if (player.isAudioTrackSelectionPending?.()) {
+      setAudioTracks(tracks);
       return;
     }
     const preferred = tracks[preferredAudioTrackIndex(tracks)];
     if (preferred && !preferred.selected && player.selectAudioTrack?.(preferred.id)) {
       setAudioTracks(tracks.map((track) => ({ ...track, selected: track.id === preferred.id })));
     } else setAudioTracks(tracks);
+    if (player instanceof TizenAvPlayPlayer && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
+      setAudioStatus(`Finnish audio unavailable · ${player.getLiveAudioMetadataStatus()}`);
+    }
   }
   const isTizen = isTizenRuntime() || __SUBSTREAM_TV_UI_PREVIEW__;
 
@@ -198,7 +225,8 @@ export function LiveTv({ onMainMenu }: Props) {
       saveCache(finnishCategories);
       window.requestAnimationFrame(() => {
         if (document.activeElement === mainMenuRef.current || document.activeElement === document.body) {
-          (finnishCategories.length ? categoryRefs.current[0] : emptyRefreshRef.current)?.focus();
+          if (finnishCategories.length) focusListItem(categoryRefs.current[0] ?? null);
+          else emptyRefreshRef.current?.focus();
         }
       });
     } catch {
@@ -214,7 +242,7 @@ export function LiveTv({ onMainMenu }: Props) {
     setChannels(savedChannels);
     setFocusIndex(0);
     setStatus(savedChannels.length ? "Showing saved channels while checking for updates…" : `Loading ${categoryLabel(category.name)} channels…`);
-    if (savedChannels.length) window.requestAnimationFrame(() => rowRefs.current[0]?.focus());
+    if (savedChannels.length) window.requestAnimationFrame(() => focusListItem(rowRefs.current[0] ?? null));
     if (!client) return;
     try {
       const streams = await client.liveStreams(category.id);
@@ -223,7 +251,7 @@ export function LiveTv({ onMainMenu }: Props) {
       setChannels(result.channels);
       setStatus(result.channels.length ? `${result.channels.length.toLocaleString()} channels ready` : "No channels were found in this category.");
       saveCache(categories, category.id, result.channels);
-      if (result.channels.length) window.requestAnimationFrame(() => rowRefs.current[0]?.focus());
+      if (result.channels.length) window.requestAnimationFrame(() => focusListItem(rowRefs.current[0] ?? null));
       void dnaClient.channels().then((dnaCatalog) => {
         if (request !== requestRef.current) return;
         const enriched = result.channels.map((channel) => attachDnaFallback(channel, matchDnaChannel(channel, dnaCatalog)));
@@ -242,14 +270,15 @@ export function LiveTv({ onMainMenu }: Props) {
     setSelectedCategory(null);
     setChannels([]);
     setStatus(`${categories.length.toLocaleString()} Finnish categories ready`);
-    window.requestAnimationFrame(() => categoryRefs.current[categoryFocusIndex]?.focus());
+    window.requestAnimationFrame(() => focusListItem(categoryRefs.current[categoryFocusIndex] ?? null));
   };
 
   useEffect(() => {
     if (selected || selectedCategory) return;
     window.requestAnimationFrame(() => {
       if (document.activeElement !== document.body) return;
-      (categories.length ? categoryRefs.current[categoryFocusIndex] : mainMenuRef.current)?.focus();
+      if (categories.length) focusListItem(categoryRefs.current[categoryFocusIndex] ?? null);
+      else mainMenuRef.current?.focus();
     });
   }, []);
   useEffect(() => { void refreshCategories(); return () => { requestRef.current += 1; }; }, [cacheKey]);
@@ -258,7 +287,7 @@ export function LiveTv({ onMainMenu }: Props) {
     if (!selectedCategory || !channels.length) return;
     const activeElement = document.activeElement;
     if (activeElement === document.body || !(activeElement instanceof HTMLElement) || !activeElement.isConnected) {
-      rowRefs.current[focusIndex]?.focus();
+      focusListItem(rowRefs.current[focusIndex] ?? null);
     }
   }, [channels.length, focusIndex, selectedCategory?.id]);
 
@@ -362,7 +391,7 @@ export function LiveTv({ onMainMenu }: Props) {
 
   useEffect(() => {
     if (selectedCategory || !categories.length) return;
-    window.requestAnimationFrame(() => categoryRefs.current[categoryFocusIndex]?.focus());
+    window.requestAnimationFrame(() => focusListItem(categoryRefs.current[categoryFocusIndex] ?? null));
   }, [categories.length, categoryFocusIndex, selectedCategory]);
 
   useEffect(() => {
@@ -370,11 +399,15 @@ export function LiveTv({ onMainMenu }: Props) {
     setHasStartedPlayback(false);
     audioSelectionManualRef.current = false;
     setAudioTracks([]);
-    const player = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {}) : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
+    const player: MediaPlayer | null = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {}) : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
     if (!player) { setPlaybackState("error"); return; }
     playerRef.current = player;
     // Live TV enables embedded subtitle discovery on browser and AVPlay players.
     player.setLiveSubtitleMode?.(true);
+    // AVPlay omits provider audio language metadata; inspect the CORS-enabled
+    // direct TS endpoint while it plays its HLS URL.
+    player.setLiveAudioMetadataUrl?.(client.liveStreamUrl(selected.providerStreamId, "ts"));
+    player.setLiveDvbSubtitleUrl?.(client.liveStreamUrl(selected.providerStreamId, "ts"));
     player.setEventHandlers({
       onStateChange: (state) => {
         const wasPlaying = playbackStateRef.current === "playing";
@@ -393,7 +426,7 @@ export function LiveTv({ onMainMenu }: Props) {
       onEmbeddedSubtitleTracksChange: (tracks) => reconcileEmbeddedSubtitles(player, tracks),
       onAudioTracksChange: (tracks) => reconcileAudioTracks(player, tracks),
     });
-    player.load(client.liveStreamUrl(selected.providerStreamId, isTizenAvPlayAvailable() ? "ts" : "m3u8"));
+    player.load(client.liveStreamUrl(selected.providerStreamId, "m3u8"));
     return () => {
       player.setEventHandlers(null); player.destroy(); if (playerRef.current === player) playerRef.current = null;
     };
@@ -436,7 +469,7 @@ export function LiveTv({ onMainMenu }: Props) {
         const index = Math.max(0, channels.findIndex((channel) => channel.id === selected.id));
         setSelected(null);
         setFocusIndex(index);
-        window.requestAnimationFrame(() => rowRefs.current[index]?.focus());
+        window.requestAnimationFrame(() => focusListItem(rowRefs.current[index] ?? null));
       }
       requestedFullscreenExitRef.current = false;
     };
@@ -490,13 +523,13 @@ export function LiveTv({ onMainMenu }: Props) {
     exitFullscreen();
     setSelected(null); setFocusIndex(index);
     setLiveBufferWindow(null);
-    window.requestAnimationFrame(() => rowRefs.current[index]?.focus());
+    window.requestAnimationFrame(() => focusListItem(rowRefs.current[index] ?? null));
   };
   const selectNextAudioTrack = () => {
     const player = playerRef.current;
     const tracks = player?.getAudioTracks?.() ?? [];
     if (!tracks.length) {
-      setAudioStatus(playbackState === "loading" || playbackState === "buffering" ? "Audio tracks are loading…" : "Audio tracks are unavailable on this device.");
+      setAudioStatus(playbackState === "loading" || playbackState === "buffering" ? "Audio tracks are loading…" : `Audio tracks unavailable${player instanceof TizenAvPlayPlayer ? ` · ${player.getTrackDiagnostics()}` : ""}`);
       return;
     }
     const selectedIndex = tracks.findIndex((track) => track.selected);
@@ -556,7 +589,7 @@ export function LiveTv({ onMainMenu }: Props) {
       if (activeHeaderIndex >= 0) {
         if (key === "ArrowDown") {
           event.preventDefault();
-          if (itemCount > 0) refs.current[currentIndex]?.focus();
+          if (itemCount > 0) focusListItem(refs.current[currentIndex] ?? null);
           else if (emptyRefreshRef.current) emptyRefreshRef.current.focus();
           else if (selectedCategory) headerButtons[activeHeaderIndex === 0 ? 1 : 0]?.focus();
           else mainMenuRef.current?.focus();
@@ -583,7 +616,9 @@ export function LiveTv({ onMainMenu }: Props) {
           return;
         }
         const next = Math.max(0, Math.min(itemCount - 1, currentIndex + (key === "ArrowUp" ? -1 : 1)));
-        selectedCategory ? setFocusIndex(next) : setCategoryFocusIndex(next); refs.current[next]?.focus(); refs.current[next]?.scrollIntoView({ block: "nearest" });
+        selectedCategory ? setFocusIndex(next) : setCategoryFocusIndex(next);
+        focusListItem(refs.current[next] ?? null);
+        if (!isTizenRuntime()) refs.current[next]?.scrollIntoView({ block: "nearest" });
       } else if (key === "ArrowLeft" || key === "ArrowRight") {
         event.preventDefault();
         if (selectedCategory) (key === "ArrowLeft" ? categoriesButtonRef.current : mainMenuRef.current)?.focus();
@@ -628,7 +663,7 @@ export function LiveTv({ onMainMenu }: Props) {
   if (!selectedCategory) return <main className="screen live-screen">
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV</p><h1>Finland</h1></div><button type="button" onClick={onMainMenu} ref={mainMenuRef}>Main menu</button></header>
     <p className="hint" role="status" aria-live="polite">{status}{cacheSavedAt && Date.now() - cacheSavedAt > STALE_AFTER_MS ? " · Saved list may be out of date." : ""}</p>
-    <div className="live-list">
+    <div className="live-list" ref={listViewportRef}>
       {categories.map((category, index) => <button className={`live-row live-category-row ${index === categoryFocusIndex ? "remote-focused" : ""}`} type="button" key={category.id} ref={(element) => { categoryRefs.current[index] = element; }} onFocus={() => setCategoryFocusIndex(index)} onClick={() => void openCategory(category)}>
         <span className="live-category-mark" aria-hidden="true">●</span><strong>{categoryLabel(category.name)}</strong><span className="live-category-arrow" aria-hidden="true">›</span>
       </button>)}
@@ -639,7 +674,7 @@ export function LiveTv({ onMainMenu }: Props) {
   return <main className="screen live-screen">
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV · FINLAND</p><h1>{categoryLabel(selectedCategory.name)}</h1></div><div className="header-actions"><button type="button" onClick={leaveCategory} ref={categoriesButtonRef}>Categories</button><button type="button" onClick={onMainMenu} ref={mainMenuRef}>Main menu</button></div></header>
     <p className="hint" role="status" aria-live="polite">{status}</p>
-    <div className="live-list">
+    <div className="live-list" ref={listViewportRef}>
       {channels.map((channel, index) => <button className={`live-row ${index === focusIndex ? "remote-focused" : ""}`} type="button" key={channel.id} ref={(element) => { rowRefs.current[index] = element; }} onFocus={() => setFocusIndex(index)} onClick={() => tune(channel)}>
         {(() => {
           const failures = logoFailures[channel.id] ?? {};

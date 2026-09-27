@@ -1,6 +1,8 @@
 import type { AudioTrack, EmbeddedSubtitleTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { parseSrtCues, type SubtitleCue } from "../../core/subtitles/srt-cues.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
+import { probeLiveTsAudioMetadata, type LiveTsAudioProbeResult } from "./live-ts-audio-metadata.ts";
+import { TizenLiveDvbSubtitleFeed, type TizenDvbTrack } from "./live-dvb-subtitle-feed.ts";
 
 interface AvPlayApi {
   open(url: string): void;
@@ -31,7 +33,7 @@ interface AvPlayApi {
 
 interface AvPlayStreamInfo {
   type?: string;
-  index?: number;
+  index?: number | string;
   extra_info?: string;
 }
 
@@ -67,8 +69,18 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private pendingSeekMilliseconds: number | null = null;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
   private liveSubtitleMode = false;
+  private liveSubtitleSilent: boolean | undefined;
   private embeddedSubtitleTracksSignature = "";
   private audioTracksSignature = "";
+  private defaultAudioSelectionAttempted = false;
+  private liveAudioMetadataUrl = "";
+  private liveAudioMetadataPending = false;
+  private liveAudioLanguages: string[] = [];
+  private liveAudioMetadataStatus: LiveTsAudioProbeResult["status"] | "pending" | "not-started" = "not-started";
+  private liveDvbSubtitleUrl = "";
+  private liveDvbFeed: TizenLiveDvbSubtitleFeed | undefined;
+  private liveDvbTracks: TizenDvbTrack[] = [];
+  private liveDvbEnabled = true;
 
   constructor(
     private readonly container: HTMLElement,
@@ -81,22 +93,71 @@ export class TizenAvPlayPlayer implements MediaPlayer {
 
   setLiveSubtitleMode(enabled: boolean): void {
     this.liveSubtitleMode = enabled;
+    this.liveDvbEnabled = enabled;
     if (enabled) this.setLiveAvPlaySubtitleSilent(true);
   }
 
+  setLiveAudioMetadataUrl(url: string): void {
+    this.liveAudioMetadataUrl = url;
+  }
+
+  setLiveDvbSubtitleUrl(url: string): void { this.liveDvbSubtitleUrl = url; }
+
+  getLiveDvbSubtitleStatus(): string {
+    if (!this.liveDvbSubtitleUrl) return "DVB subtitle feed not configured";
+    const status = this.liveDvbFeed?.getStatus() ?? "pending";
+    if (status === "available") return "DVB subtitle tracks found";
+    if (status === "unavailable") return "DVB subtitle stream unavailable";
+    return "DVB subtitle stream pending";
+  }
+
+  isAudioTrackSelectionPending(): boolean {
+    return this.liveAudioMetadataPending;
+  }
+
+  getLiveAudioMetadataStatus(): string {
+    const labels: Record<typeof this.liveAudioMetadataStatus, string> = {
+      pending: "TS probe pending",
+      "not-started": "TS probe not started",
+      ok: "TS language metadata found",
+      "no-audio-metadata": "TS probe found no audio languages",
+      "request-failed": "TS probe request failed",
+      timeout: "TS probe timed out",
+      unsupported: "TS probe unavailable",
+    };
+    return labels[this.liveAudioMetadataStatus];
+  }
+
   load(streamUrl: string): void {
+    const liveAudioMetadataUrl = this.liveAudioMetadataUrl;
+    const liveDvbSubtitleUrl = this.liveDvbSubtitleUrl;
     this.destroy();
+    this.liveAudioMetadataUrl = liveAudioMetadataUrl;
+    this.liveDvbSubtitleUrl = liveDvbSubtitleUrl;
     const player = avplay();
     if (!player) {
       this.emit("error");
       return;
     }
     const generation = this.generation;
+    this.liveAudioMetadataPending = this.liveSubtitleMode && Boolean(this.liveAudioMetadataUrl);
+    this.liveAudioLanguages = [];
+    this.liveAudioMetadataStatus = this.liveAudioMetadataPending ? "pending" : "not-started";
     this.emit("loading");
     try {
       player.open(streamUrl);
       this.opened = true;
-      if (this.liveSubtitleMode) try { player.setSilentSubtitle?.(true); } catch { /* Older firmware may not offer subtitle muting. */ }
+      if (this.liveAudioMetadataPending) {
+        void probeLiveTsAudioMetadata(this.liveAudioMetadataUrl).then((result) => {
+          if (!this.isCurrent(generation)) return;
+          this.liveAudioMetadataPending = false;
+          this.liveAudioMetadataStatus = result.status;
+          this.liveAudioLanguages = result.tracks.map((track) => track.language ?? "");
+          this.audioTracksSignature = "";
+          this.selectDefaultAudioTrack();
+          this.emitAudioTracksIfChanged();
+        });
+      }
       this.paused = false;
       this.configureBuffering(player);
       this.setDisplayRect(player);
@@ -105,16 +166,18 @@ export class TizenAvPlayPlayer implements MediaPlayer {
         oncurrentplaytime: (milliseconds) => {
           if (!this.isCurrent(generation)) return;
           this.currentPlayheadMilliseconds = milliseconds;
+          this.liveDvbFeed?.setTime(milliseconds / 1_000);
           this.updateSubtitle(milliseconds);
           this.emitProgress(milliseconds, player);
           this.emitEmbeddedSubtitleTracksIfChanged();
+          this.selectDefaultAudioTrack();
           this.emitAudioTracksIfChanged();
         },
         onbufferingstart: () => { if (this.isCurrent(generation)) this.emit("buffering"); },
         onbufferingcomplete: () => {
           if (!this.isCurrent(generation)) return;
-          this.setLiveAvPlaySubtitleSilent(true);
           this.emitEmbeddedSubtitleTracksIfChanged();
+          this.selectDefaultAudioTrack();
           this.emitAudioTracksIfChanged();
           if (!this.paused) this.emit("playing");
         },
@@ -122,11 +185,13 @@ export class TizenAvPlayPlayer implements MediaPlayer {
         onerror: () => { if (this.isCurrent(generation)) this.fail(generation); },
       });
       player.prepareAsync(
-        () => {
-          if (!this.isCurrent(generation)) return;
-          this.isPrepared = true;
-          this.setLiveAvPlaySubtitleSilent(true);
+          () => {
+            if (!this.isCurrent(generation)) return;
+            this.isPrepared = true;
+            this.setLiveAvPlaySubtitleSilent(true);
+            this.startLiveDvbFeed();
           this.emitEmbeddedSubtitleTracksIfChanged();
+          this.selectDefaultAudioTrack();
           this.emitAudioTracksIfChanged();
           const pendingSeek = this.pendingSeekMilliseconds;
           this.pendingSeekMilliseconds = null;
@@ -266,14 +331,31 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     const player = avplay();
     if (!this.opened || !player?.getTotalTrackInfo) return [];
     try {
-      const selectedIndex = player.getCurrentStreamInfo?.()
-        .find((stream) => stream.type?.toUpperCase() === "AUDIO")?.index;
-      return player.getTotalTrackInfo()
-        .filter((stream) => stream.type?.toUpperCase() === "AUDIO" && Number.isInteger(stream.index))
-        .map((stream) => audioTrackFromAvPlay(stream, stream.index === selectedIndex));
+      const selectedIndex = this.getSelectedTrackIndex(player, "AUDIO");
+      const streams = player.getTotalTrackInfo()
+        .filter((stream) => stream.type?.toUpperCase() === "AUDIO" && avPlayTrackIndex(stream.index) !== undefined);
+      const canMapPmtLanguages = this.liveAudioLanguages.length === streams.length;
+      return streams.map((stream, ordinal) => audioTrackFromAvPlay(
+        stream,
+        avPlayTrackIndex(stream.index) === selectedIndex,
+        canMapPmtLanguages ? this.liveAudioLanguages[ordinal] : undefined,
+      ));
     } catch {
       // AVPlay limits track queries to ready, playing, and paused states.
       return [];
+    }
+  }
+
+  getTrackDiagnostics(): string {
+    const player = avplay();
+    if (!player?.getTotalTrackInfo) return "AVPlay track API missing";
+    try {
+      const tracks = player.getTotalTrackInfo();
+      if (!Array.isArray(tracks)) return "AVPlay track list invalid";
+      const count = (type: string) => tracks.filter((track) => track.type?.toUpperCase() === type).length;
+      return `AVPlay tracks: ${count("AUDIO")} audio, ${count("TEXT")} subtitle, ${count("VIDEO")} video · ${this.getLiveAudioMetadataStatus()}`;
+    } catch {
+      return "AVPlay track query failed";
     }
   }
 
@@ -283,28 +365,63 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     if (!this.opened || !player?.setSelectTrack || !Number.isInteger(index) || index < 0) return false;
     try {
       player.setSelectTrack("AUDIO", index);
+      this.defaultAudioSelectionAttempted = true;
       return true;
     } catch {
       return false;
     }
   }
 
+  private selectDefaultAudioTrack(): void {
+    if (this.defaultAudioSelectionAttempted) return;
+    if (this.liveAudioMetadataPending) return;
+    const tracks = this.getAudioTracks();
+    if (tracks.length === 0) return;
+    const preferred = tracks.find((track) => isFinnishLanguage(track.language))
+      ?? tracks.find((track) => isEnglishLanguage(track.language))
+      ?? tracks[0];
+    if (!preferred) return;
+    if (preferred.selected) { this.defaultAudioSelectionAttempted = true; return; }
+    this.selectAudioTrack(preferred.id);
+  }
+
   getEmbeddedSubtitleTracks(): EmbeddedSubtitleTrack[] {
     const player = avplay();
-    if (!this.opened || !player?.getTotalTrackInfo) return [];
+    if (!this.opened || !player?.getTotalTrackInfo) return [...this.liveDvbTracks];
     try {
-      const selectedIndex = player.getCurrentStreamInfo?.()
-        .find((stream) => stream.type?.toUpperCase() === "TEXT")?.index;
-      return player.getTotalTrackInfo()
-        .filter((stream) => stream.type?.toUpperCase() === "TEXT" && Number.isInteger(stream.index))
-        .map((stream) => subtitleTrackFromAvPlay(stream, stream.index === selectedIndex));
+      const selectedIndex = this.getSelectedTrackIndex(player, "TEXT");
+      const native = player.getTotalTrackInfo()
+        .filter((stream) => stream.type?.toUpperCase() === "TEXT" && avPlayTrackIndex(stream.index) !== undefined)
+        .map((stream) => subtitleTrackFromAvPlay(stream, avPlayTrackIndex(stream.index) === selectedIndex));
+      return [...this.liveDvbTracks, ...native];
     } catch {
-      return [];
+      return [...this.liveDvbTracks];
+    }
+  }
+
+  private getSelectedTrackIndex(player: AvPlayApi, type: "AUDIO" | "TEXT"): number | undefined {
+    try {
+      const selected = player.getCurrentStreamInfo?.()
+        .find((stream) => stream.type?.toUpperCase() === type);
+      return avPlayTrackIndex(selected?.index);
+    } catch {
+      // Older AVPlay versions can reject the current-stream query even while
+      // the full track list is available. Selection state is optional.
+      return undefined;
     }
   }
 
   selectEmbeddedSubtitleTrack(id: string): boolean {
+    if (id.startsWith("dvb:")) {
+      if (!this.liveSubtitleMode || !this.liveDvbFeed?.select(id)) return false;
+      this.liveDvbEnabled = true;
+      this.setLiveAvPlaySubtitleSilent(true);
+      this.emitEmbeddedSubtitleTracksIfChanged();
+      return true;
+    }
     if (this.liveSubtitleMode && id === "off") {
+      this.liveDvbEnabled = false;
+      this.liveDvbFeed?.select(undefined);
       return this.setLiveAvPlaySubtitleSilent(true);
     }
     const index = Number(id);
@@ -360,10 +477,11 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private configureBuffering(player: AvPlayApi): void {
     if (!player.setBufferingParam) return;
     // AVPlay accepts these settings only in IDLE, after open() and before prepareAsync().
-    // Keep the initial threshold modest for Tizen TV memory, while allowing a deeper
-    // reserve if playback stalls and AVPlay needs to refill.
+    // Use the same small threshold for initial playback and rebuffering. A much
+    // larger resume threshold makes AVPlay wait for a different amount of media
+    // after a stall, which can amplify timestamp discontinuities on older TVs.
     try { player.setBufferingParam("PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 5); } catch { /* Older AVPlay versions may not support this setting. */ }
-    try { player.setBufferingParam("PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 15); } catch { /* Buffer tuning must not prevent playback. */ }
+    try { player.setBufferingParam("PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 5); } catch { /* Buffer tuning must not prevent playback. */ }
   }
 
   async setSubtitle(subtitleText: string, _label: string, _language: string): Promise<SubtitleAttachment> {
@@ -384,7 +502,11 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   }
 
   setSubtitleEnabled(enabled: boolean): void {
-    if (this.liveSubtitleMode) this.setLiveAvPlaySubtitleSilent(!enabled);
+    if (this.liveSubtitleMode) {
+      this.liveDvbEnabled = enabled;
+      this.liveDvbFeed?.setEnabled(enabled);
+      this.setLiveAvPlaySubtitleSilent(true);
+    }
     if (this.subtitleCues.length === 0) return;
     this.subtitlesEnabled = enabled;
     this.updateSubtitle(this.currentPlayheadMilliseconds);
@@ -433,7 +555,30 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private setLiveAvPlaySubtitleSilent(silent: boolean): boolean {
     const player = avplay();
     if (!this.liveSubtitleMode || !player || !this.opened || !player.setSilentSubtitle) return false;
-    try { player.setSilentSubtitle(silent); return true; } catch { return false; }
+    if (this.liveSubtitleSilent === silent) return true;
+    try { player.setSilentSubtitle(silent); this.liveSubtitleSilent = silent; return true; } catch { return false; }
+  }
+
+  private startLiveDvbFeed(): void {
+    if (!this.liveSubtitleMode || !this.liveDvbSubtitleUrl || this.liveDvbFeed) return;
+    try {
+      this.liveDvbFeed = new TizenLiveDvbSubtitleFeed(
+        this.liveDvbSubtitleUrl,
+        this.container,
+        () => this.currentPlayheadMilliseconds / 1_000,
+        (tracks) => {
+          this.liveDvbTracks = tracks.map((track) => ({ id: track.id, label: track.label, language: track.language, selected: track.selected }));
+          this.embeddedSubtitleTracksSignature = "";
+          this.emitEmbeddedSubtitleTracksIfChanged();
+        },
+        () => { /* A sideband metadata failure must not interrupt AVPlay. */ },
+      );
+      this.liveDvbFeed.setEnabled(this.liveDvbEnabled);
+      this.liveDvbFeed.start();
+    } catch {
+      this.liveDvbFeed?.dispose();
+      this.liveDvbFeed = undefined;
+    }
   }
 
   private emitEmbeddedSubtitleTracksIfChanged(): void {
@@ -483,12 +628,22 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.visibleCue = "";
     this.subtitleOffsetMilliseconds = 0;
     this.subtitlesEnabled = true;
+    this.liveSubtitleSilent = undefined;
     this.currentPlayheadMilliseconds = 0;
     this.paused = false;
     this.isPrepared = false;
     this.pendingSeekMilliseconds = null;
     this.embeddedSubtitleTracksSignature = "";
     this.audioTracksSignature = "";
+    this.defaultAudioSelectionAttempted = false;
+    this.liveAudioMetadataPending = false;
+    this.liveDvbFeed?.dispose();
+    this.liveDvbFeed = undefined;
+    this.liveDvbTracks = [];
+    this.liveAudioLanguages = [];
+    this.liveAudioMetadataStatus = "not-started";
+    this.liveAudioMetadataUrl = "";
+    this.liveDvbSubtitleUrl = "";
     if (!this.opened) return;
     const player = avplay();
     this.opened = false;
@@ -498,21 +653,40 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   }
 }
 
-function audioTrackFromAvPlay(stream: AvPlayStreamInfo, selected: boolean): AudioTrack {
+function audioTrackFromAvPlay(stream: AvPlayStreamInfo, selected: boolean, inferredLanguage?: string): AudioTrack {
   const details = parseStreamDetails(stream.extra_info);
-  const language = readStreamText(details, "language", "track_lang", "lang");
+  const language = readStreamText(details, "language", "track_lang", "lang") ?? inferredLanguage;
   const codec = readStreamText(details, "codec", "fourCC", "fourcc");
   const channels = readStreamText(details, "channels", "channel");
-  const label = [language, codec, channels].filter(Boolean).join(" · ") || `Audio ${(stream.index ?? 0) + 1}`;
+  const label = [language, codec, channels].filter(Boolean).join(" · ") || `Audio ${(avPlayTrackIndex(stream.index) ?? 0) + 1}`;
   return { id: String(stream.index), label, ...(language ? { language } : {}), ...(codec ? { codec } : {}), selected };
+}
+
+function isFinnishLanguage(language: string | undefined): boolean {
+  const code = language?.trim().toLowerCase().split(/[-_]/, 1)[0];
+  return code === "fi" || code === "fin" || code === "finnish";
+}
+
+function isEnglishLanguage(language: string | undefined): boolean {
+  const code = language?.trim().toLowerCase().split(/[-_]/, 1)[0];
+  return code === "en" || code === "eng" || code === "english";
 }
 
 function subtitleTrackFromAvPlay(stream: AvPlayStreamInfo, selected: boolean): EmbeddedSubtitleTrack {
   const details = parseStreamDetails(stream.extra_info);
   const language = readStreamText(details, "language", "track_lang", "lang");
   const codec = readStreamText(details, "codec", "fourCC", "fourcc", "format");
-  const label = [language, codec].filter(Boolean).join(" · ") || `Subtitle ${(stream.index ?? 0) + 1}`;
+  const label = [language, codec].filter(Boolean).join(" · ") || `Subtitle ${(avPlayTrackIndex(stream.index) ?? 0) + 1}`;
   return { id: String(stream.index), label, ...(language ? { language } : {}), selected };
+}
+
+function avPlayTrackIndex(index: number | string | undefined): number | undefined {
+  if (typeof index === "number") return Number.isSafeInteger(index) && index >= 0 ? index : undefined;
+  if (typeof index === "string" && /^\d+$/.test(index)) {
+    const parsed = Number(index);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function parseStreamDetails(extraInfo: string | undefined): Record<string, unknown> {
