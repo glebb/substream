@@ -9,7 +9,8 @@ const PLAYBACK_START_TIMEOUT_MS = 8_000;
 const BUFFERING_GRACE_MS = 750;
 const DVB_WORKER_WATCHDOG_MS = 8_000;
 const TS_PACKET_BYTES = 188;
-const DVB_MAX_CAPTURED_FRAGMENT_BYTES = 10 * 1024 * 1024;
+const DVB_MAX_CAPTURED_FRAGMENT_BYTES = 20 * 1024 * 1024;
+const DVB_MAX_PENDING_FRAGMENTS = 2;
 const DVB_CAPTURE_WINDOW_BYTES = Math.floor(LIVE_DVB_MAX_FRAGMENT_BYTES / TS_PACKET_BYTES) * TS_PACKET_BYTES;
 
 function logCompatibilityHlsEvent(event: string, value: unknown): void {
@@ -78,6 +79,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private dvbHlsListeners: Array<[string, (event: string, data: Record<string, unknown>) => void]> = [];
   private dvbWatchdog: ReturnType<typeof setTimeout> | undefined;
   private dvbCaptureFragment: { payload: ArrayBuffer; startSeconds: number; nextOffset: number; byteLength: number } | undefined;
+  private dvbPendingFragments: Array<{ payload: ArrayBuffer; startSeconds: number; nextOffset: number; byteLength: number }> = [];
   private dvbSeenFragments = new WeakSet<object>();
   private selectedNativeSubtitleTrack: TextTrack | undefined;
   private loadGeneration = 0;
@@ -662,20 +664,26 @@ export class HtmlVideoPlayer implements MediaPlayer {
         // FRAG_DECRYPTED fires for main-media payloads.
         if (this.dvbSeenFragments.has(fragment)) return;
         this.dvbSeenFragments.add(fragment);
-        if (this.dvbCaptureFragment) {
-          return;
+        if (import.meta.env.DEV && typeof window !== "undefined" && window.location?.search && new URLSearchParams(window.location.search).has("mediaDebug")) {
+          console.info(`[live-dvb] ${JSON.stringify({ bytes: data.payload.byteLength, pending: this.dvbPendingFragments.length, busy: !!this.dvbCaptureFragment, skipped: data.payload.byteLength > DVB_MAX_CAPTURED_FRAGMENT_BYTES })}`);
         }
         if (data.payload.byteLength > DVB_MAX_CAPTURED_FRAGMENT_BYTES) {
           return;
         }
-        // Retain one fragment at a time and scan every packet-aligned window
-        // in order. The cap bounds memory and total work for a single fragment.
-        this.dvbCaptureFragment = {
+        const capture = {
           payload: data.payload,
           startSeconds: Number(fragment.start) || 0,
           nextOffset: 0,
           byteLength: data.payload.byteLength,
         };
+        // A busy worker must not silently lose the next live subtitle segment.
+        // Bound the backlog and prefer the newest segments if playback outruns us.
+        if (this.dvbCaptureFragment) {
+          if (this.dvbPendingFragments.length === DVB_MAX_PENDING_FRAGMENTS) this.dvbPendingFragments.shift();
+          this.dvbPendingFragments.push(capture);
+          return;
+        }
+        this.dvbCaptureFragment = capture;
         this.pumpDvbCaptureWindow();
       };
       hls.on(events.FRAG_LOADED, onFragment);
@@ -708,8 +716,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
     if (this.dvbCaptureFragment && this.dvbCaptureFragment.nextOffset < this.dvbCaptureFragment.byteLength) {
       this.pumpDvbCaptureWindow();
     } else {
-      this.dvbCaptureFragment = undefined;
-      this.clearDvbWatchdog();
+      this.dvbCaptureFragment = this.dvbPendingFragments.shift();
+      if (this.dvbCaptureFragment) this.pumpDvbCaptureWindow();
+      else this.clearDvbWatchdog();
     }
   }
 
@@ -741,6 +750,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private disposeDvbSubtitlePath(): void {
     this.clearDvbWatchdog();
     this.dvbCaptureFragment = undefined;
+    this.dvbPendingFragments = [];
     this.dvbSeenFragments = new WeakSet<object>();
     const hls = this.hls as HlsSubtitleController | undefined;
     for (const [event, listener] of this.dvbHlsListeners) {

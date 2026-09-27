@@ -11,6 +11,9 @@ export class LiveDvbTsScanner {
   private pmtSection: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   private tracks: ScannedDvbTrack[] = [];
   private selected: ScannedDvbTrack | undefined;
+  private videoPid: number | undefined;
+  private fragmentStartSeconds: number | undefined;
+  private fragmentVideoPts: number | undefined;
   private pes: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   private activePids = new Set<number>();
 
@@ -18,8 +21,13 @@ export class LiveDvbTsScanner {
   getTracks(): ScannedDvbTrack[] { return this.tracks.slice(0, 32); }
   getSelected(): ScannedDvbTrack | undefined { return this.selected; }
   getActiveTracks(): ScannedDvbTrack[] { return this.getTracks().filter((track) => this.activePids.has(track.pid)); }
+  getFragmentVideoPts(): number | undefined { return this.fragmentVideoPts; }
 
-  scan(input: Uint8Array): Uint8Array[] {
+  scan(input: Uint8Array, startSeconds?: number): Uint8Array[] {
+    if (startSeconds !== this.fragmentStartSeconds) {
+      this.fragmentStartSeconds = startSeconds;
+      this.fragmentVideoPts = undefined;
+    }
     const bytes = input.subarray(0, LIVE_DVB_MAX_FRAGMENT_BYTES);
     const output: Uint8Array[] = [];
     for (let offset = 0; offset + PACKET <= bytes.length; offset += PACKET) {
@@ -35,6 +43,9 @@ export class LiveDvbTsScanner {
       const payload = bytes.subarray(start, offset + PACKET);
       if (pid === 0 && payloadStart) this.readPat(payload);
       else if (pid === this.pmtPid) this.readPmt(payload, payloadStart);
+      else if (pid === this.videoPid && payloadStart && this.fragmentVideoPts === undefined) {
+        this.fragmentVideoPts = pesPts(payload);
+      }
       else if (pid === this.selected?.pid) {
         this.readPes(payload, payloadStart, output);
       }
@@ -67,11 +78,13 @@ export class LiveDvbTsScanner {
     const end = sectionLength - 1;
     let offset = 12 + ((section[10]! & 15) << 8 | section[11]!);
     const tracks: ScannedDvbTrack[] = [];
+    let videoPid: number | undefined;
     while (offset + 5 <= end && tracks.length < 32) {
       const type = section[offset]!;
       const pid = (section[offset + 1]! & 31) << 8 | section[offset + 2]!;
       const infoLength = (section[offset + 3]! & 15) << 8 | section[offset + 4]!;
       const infoEnd = Math.min(end, offset + 5 + infoLength);
+      if (videoPid === undefined && (type === 0x1b || type === 0x24 || type === 0x02)) videoPid = pid;
       if (type === 6) {
         for (let i = offset + 5; i + 2 <= infoEnd;) {
           const tag = section[i]!; const length = section[i + 1]!; const descriptorEnd = i + 2 + length;
@@ -88,6 +101,7 @@ export class LiveDvbTsScanner {
       offset += 5 + infoLength;
     }
     this.tracks = tracks;
+    this.videoPid = videoPid;
     this.selected = tracks.find((track) => track.id === this.selected?.id);
     this.pmtSection = new Uint8Array(0);
   }
@@ -108,6 +122,13 @@ export class LiveDvbTsScanner {
       this.pes = this.pes.slice(length + 6);
     }
   }
+}
+
+function pesPts(payload: Uint8Array): number | undefined {
+  if (payload.length < 14 || payload[0] !== 0 || payload[1] !== 0 || payload[2] !== 1
+    || (payload[7]! & 0x80) === 0 || payload[8]! < 5) return undefined;
+  return ((payload[9]! & 14) * 0x20000000) + (payload[10]! << 22)
+    + ((payload[11]! & 254) << 14) + (payload[12]! << 7) + ((payload[13]! & 254) >> 1);
 }
 
 function filterSelectedPage(pes: Uint8Array, selected: ScannedDvbTrack): Uint8Array | undefined {

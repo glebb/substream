@@ -24,18 +24,20 @@ browser; fragment-based DVB worker discovery requires hls.js.
 
 | Boundary | Limit or behavior |
 | --- | --- |
-| Source fragment | At most one retained MPEG-TS fragment, up to 10 MiB; another arrival while busy or a larger fragment is skipped |
+| Source fragment | One active MPEG-TS fragment and two pending fragments, each up to 20 MiB; when full, the oldest pending fragment is replaced |
 | Worker transfer | Consecutive, TS-packet-aligned windows of at most 512 KiB, advanced after acknowledgement |
 | Worker backpressure | At most two unacknowledged fragment messages; the current player normally sends one at a time |
 | Watchdog | Eight seconds without completing worker work disposes only subtitle resources |
 | PES reconstruction | 128 KiB maximum; malformed or unrelated private PES is rejected before the decoder |
-| Decoder | At most 256 retained cues; bitmap rendering is limited to one frame per 500 ms |
+| Decoder | At most 256 retained cues; bitmap rendering is limited to one frame per 200 ms |
 | Canvas frame | At most 4 MiB RGBA with dimensions and bounds checked before painting |
 
 Only capped RGBA bitmap data crosses from the worker to the UI. The worker owns TS
 scanning and the `libbitsub` WebAssembly parser. The overlay reuses its canvas
 and clears the previous cue bounds. Worker, HLS listeners, overlay, and retained
-fragment are released on a channel change or player teardown. The older
+fragments are released on a channel change or player teardown. DVB cue times
+are referenced to the first video PES timestamp in the media fragment when
+available, preserving the cue's offset within that fragment. The older
 main-thread transport parser has been removed.
 
 The worker and WebAssembly are separate build assets. The browser path requires
@@ -56,6 +58,12 @@ a long-running browser or physical-TV smoke test.
 Earlier local Chrome checks displayed Finnish DVB captions on TV5 FHD. Sampled Yle TV1, TV2 and Teema Fem variants either lacked active subtitle packets or did not produce decoded bitmaps; an active standard TV2 PID still needs a recheck after the PES header fix. These were time-limited observations, not guarantees about current provider feeds. Video remained responsive in the later Teema Fem check and the canvas was removed on exit.
 
 A track advertised in the PMT may carry no packets. Record packet activity and decoder output separately when diagnosing missing captions; do not infer subtitle support from a channel name. Keep media URLs, credentials and transport payloads out of diagnostics.
+
+In September 2026, the V Film Premiere FHD multi-sub feed produced HLS
+fragments around 12.8 MB. The earlier 10 MiB source-fragment limit skipped
+most of them, causing intermittent missing captions. The limit is now 20 MiB;
+`?mediaDebug` in a development build logs only numeric fragment sizes, backlog
+counts, and whether a fragment exceeded the limit.
 
 ## Remaining release checks
 

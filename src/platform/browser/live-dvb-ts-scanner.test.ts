@@ -45,3 +45,21 @@ it("accepts a complete DVB PES with the data-alignment flag set", () => {
   expect(output).toHaveLength(1);
   expect(Array.from(output[0]!.subarray(6, 13))).toEqual([0x84, 0, 0, 0x20, 0, 0x0f, 0x10]);
 });
+
+it("uses the first video PES timestamp as the fragment clock reference", () => {
+  const pat = [0, 0, 0xb0, 13, 0, 1, 0xc1, 0, 0, 0, 1, 0xe1, 0, 0, 0, 0, 0];
+  const pmt = [0, 2, 0xb0, 33, 0, 1, 0xc1, 0, 0, 0xe1, 0x30, 0xf0, 0,
+    0x1b, 0xe1, 0x30, 0xf0, 0,
+    6, 0xe1, 0x20, 0xf0, 10, 0x59, 8, 0x66, 0x69, 0x6e, 0x10, 0, 1, 0, 1, 0, 0, 0, 0];
+  const scanner = new LiveDvbTsScanner();
+  const tables = new Uint8Array(188 * 2);
+  tables.set(packet(0, pat));
+  tables.set(packet(0x100, pmt), 188);
+  scanner.scan(tables, 12);
+  scanner.scan(packet(0x130, [0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5, 0x21, 0, 5, 191, 33]), 12);
+  expect(scanner.getFragmentVideoPts()).toBe(90_000);
+  scanner.scan(packet(0x130, [0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5, 0x21, 0, 8, 0, 1]), 12);
+  expect(scanner.getFragmentVideoPts()).toBe(90_000);
+  scanner.scan(packet(0x130, [0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5, 0x21, 0, 8, 0, 1]), 20);
+  expect(scanner.getFragmentVideoPts()).not.toBe(90_000);
+});

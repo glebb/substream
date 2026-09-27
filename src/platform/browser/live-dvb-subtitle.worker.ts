@@ -8,10 +8,11 @@ const MAX_DECODER_CUES = 256;
 // Bitmap cues are static between subtitle changes. Rendering/transferring them
 // at every media timeupdate makes the main-thread canvas a bottleneck even
 // though parsing is in a worker.
-const MIN_FRAME_INTERVAL_MS = 500;
+const MIN_FRAME_INTERVAL_MS = 200;
 let parser: DvbParser | undefined;
 let firstPts: number | undefined;
 let firstPtsFragmentStart: number | undefined;
+let fragmentWork = Promise.resolve();
 let currentTime = 0;
 let disposed = false;
 let lastFrameRenderAt = -Infinity;
@@ -41,7 +42,8 @@ scope.addEventListener("message", (event) => {
     return;
   }
   if (request.type === "fragment") {
-    void processFragment(request);
+    // WASM initialization can yield. Preserve TS/PES and decoder feed order.
+    fragmentWork = fragmentWork.then(() => processFragment(request));
   }
 });
 
@@ -49,7 +51,7 @@ async function processFragment(request: Extract<LiveDvbWorkerRequest, { type: "f
   try {
     if (request.buffer.byteLength > 512 * 1024) return;
     const selectedBeforeScan = scanner.getSelected()?.id;
-    const pesPackets = scanner.scan(new Uint8Array(request.buffer));
+    const pesPackets = scanner.scan(new Uint8Array(request.buffer), request.startSeconds);
     const playableTracks = scanner.getActiveTracks().map(({ id, language }) => ({ id, language, label: `${language} · DVB` }));
     scope.postMessage({ type: "tracks", tracks: playableTracks });
     if (selectedBeforeScan && scanner.getSelected()?.id !== selectedBeforeScan) {
@@ -65,7 +67,7 @@ async function processFragment(request: Extract<LiveDvbWorkerRequest, { type: "f
         parser = new DvbParser();
       }
       for (const pes of pesPackets) {
-        const rebased = rebasePesPts(pes, request.startSeconds);
+        const rebased = rebasePesPts(pes, request.startSeconds, scanner.getFragmentVideoPts());
         parser.feed(rebased);
         if (parser.count > MAX_DECODER_CUES) {
           parser.reset();
@@ -109,13 +111,15 @@ function failWorker(): void {
   scope.postMessage({ type: "error" });
 }
 
-function rebasePesPts(pes: Uint8Array, fragmentStart: number): Uint8Array {
+function rebasePesPts(pes: Uint8Array, fragmentStart: number, videoPts?: number): Uint8Array {
   if (pes.length < 14 || pes[0] !== 0 || pes[1] !== 0 || pes[2] !== 1) return pes;
   const flags = pes[7]! >> 6;
   if (flags !== 2 && flags !== 3) return pes;
   const pts = ((pes[9]! & 14) * 0x20000000) + (pes[10]! << 22) + ((pes[11]! & 254) << 14) + (pes[12]! << 7) + ((pes[13]! & 254) >> 1);
   if (firstPts === undefined) {
-    firstPts = pts;
+    // The first subtitle may occur seconds into a segment. Its PTS must be
+    // measured against the video clock, not treated as the segment's start.
+    firstPts = videoPts ?? pts;
     firstPtsFragmentStart = fragmentStart;
   }
   let delta = pts - firstPts;

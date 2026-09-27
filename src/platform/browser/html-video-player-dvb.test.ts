@@ -109,6 +109,11 @@ describe("HtmlVideoPlayer isolated DVB path", () => {
     const fragment = { type: "main", start: 6 };
     hls.emit("frag-loaded", { payload: segment, frag: fragment });
     hls.emit("frag-decrypted", { payload: new ArrayBuffer(segment.byteLength), frag: fragment });
+    // A new live segment arriving while the first is being scanned must wait,
+    // otherwise every DVB cue in that segment is lost.
+    const nextSegment = new Uint8Array(188);
+    nextSegment[0] = 0x47;
+    hls.emit("frag-loaded", { payload: nextSegment.buffer, frag: { type: "main", start: 10 } });
     expect(posted.filter((message) => message.type === "fragment")).toHaveLength(2);
     workerListeners.get("message")?.(new MessageEvent("message", { data: { type: "ack" } satisfies LiveDvbWorkerResponse }));
     workerListeners.get("message")?.(new MessageEvent("message", { data: { type: "ack" } satisfies LiveDvbWorkerResponse }));
@@ -117,9 +122,23 @@ describe("HtmlVideoPlayer isolated DVB path", () => {
     expect(windows.slice(1).map(({ buffer }) => buffer.byteLength)).toEqual([windowBytes, windowBytes, 1024 * 1024 - windowBytes * 2]);
     expect(windows.slice(1).map(({ buffer }) => new Uint8Array(buffer)[0])).toEqual([0x11, 0x22, 0x33]);
     workerListeners.get("message")?.(new MessageEvent("message", { data: { type: "ack" } satisfies LiveDvbWorkerResponse }));
-    const overCap = new ArrayBuffer(10 * 1024 * 1024 + 188);
+    const queuedWindow = posted.filter((message) => message.type === "fragment").at(-1) as Extract<LiveDvbWorkerRequest, { type: "fragment" }>;
+    expect(queuedWindow.startSeconds).toBe(10);
+    expect(new Uint8Array(queuedWindow.buffer)[0]).toBe(0x47);
+    workerListeners.get("message")?.(new MessageEvent("message", { data: { type: "ack" } satisfies LiveDvbWorkerResponse }));
+    // Premiere's FHD media segments are about 12.8 MB. The old 10 MiB cap
+    // silently discarded most of them, including every subtitle packet.
+    const fhdSegmentBytes = 13 * 1024 * 1024;
+    const beforeFhd = posted.filter((message) => message.type === "fragment").length;
+    hls.emit("frag-loaded", { payload: new ArrayBuffer(fhdSegmentBytes), frag: { type: "main", start: 14 } });
+    const fhdWindows = Math.ceil(fhdSegmentBytes / windowBytes);
+    for (let index = 0; index < fhdWindows; index += 1) {
+      workerListeners.get("message")?.(new MessageEvent("message", { data: { type: "ack" } satisfies LiveDvbWorkerResponse }));
+    }
+    expect(posted.filter((message) => message.type === "fragment")).toHaveLength(beforeFhd + fhdWindows);
+    const overCap = new ArrayBuffer(20 * 1024 * 1024 + 188);
     hls.emit("frag-loaded", { payload: overCap, frag: { type: "main", start: 8 } });
-    expect(posted.filter((message) => message.type === "fragment")).toHaveLength(4);
+    expect(posted.filter((message) => message.type === "fragment")).toHaveLength(beforeFhd + fhdWindows);
     const tracks: LiveDvbWorkerResponse = { type: "tracks", tracks: [{ id: "288:1", language: "fin", label: "fin · DVB" }] };
     workerListeners.get("message")?.(new MessageEvent("message", { data: tracks }));
     expect(player.getEmbeddedSubtitleTracks()).toContainEqual({ id: "dvb:288:1", language: "fin", label: "fin · DVB", selected: false });
