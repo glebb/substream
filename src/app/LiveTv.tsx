@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
+import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { loadPlaylistUrl } from "../platform/browser/playlist-config.ts";
 import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
@@ -7,6 +7,7 @@ import type { LiveBufferWindow, MediaPlayer, PlaybackState } from "../platform/m
 import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avplay-player.ts";
 import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "../platform/tizen/remote.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
+import { DnaGuideClient } from "../platform/dna/client.ts";
 
 type Props = { onMainMenu(): void };
 type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCategory: Record<string, LiveChannel[]> };
@@ -14,17 +15,32 @@ const CACHE_PREFIX = "substream.live.v2.";
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 const BROWSER_PLAYBACK_START_TIMEOUT_MS = 8_000;
 const EPG_CACHE_PREFIX = "substream.epg.v1.";
+const DNA_EPG_CACHE_PREFIX = "substream.dna-epg.v1.";
 const EPG_CACHE_TTL_MS = 12 * 60 * 1000;
 const EPG_CONCURRENCY = 4;
 const EPG_LIMIT = 10;
 
-type CachedGuide = { savedAt: number; programmes: EpgProgramme[] };
+type CachedGuide = { savedAt: number; programmes: EpgProgramme[]; dnaAttemptAt?: number };
+type CachedDnaGuide = { savedAt: number; programmes: EpgProgramme[] };
 
 function safeGuideCache(key: string): CachedGuide | null {
   try {
     const value = JSON.parse(localStorage.getItem(key) ?? "null") as CachedGuide | null;
     return value && typeof value.savedAt === "number" && Array.isArray(value.programmes) ? value : null;
   } catch { return null; }
+}
+
+function safeDnaGuideCache(key: string, now: number): CachedDnaGuide | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? "null") as CachedDnaGuide | null;
+    return value && typeof value.savedAt === "number" && Array.isArray(value.programmes)
+      && now - value.savedAt < EPG_CACHE_TTL_MS ? value : null;
+  } catch { return null; }
+}
+
+function dnaGuideCacheKey(channelId: string, now: number): string {
+  const windowMs = 6 * 60 * 60 * 1000;
+  return `${DNA_EPG_CACHE_PREFIX}${channelId}.${Math.floor(now / windowMs)}`;
 }
 
 function guideIsFresh(guide: CachedGuide, now: number): boolean {
@@ -57,6 +73,7 @@ function categoryLabel(name: string): string {
 export function LiveTv({ onMainMenu }: Props) {
   const playlistUrl = loadPlaylistUrl();
   const client = useMemo(() => XtreamClient.fromPlaylistUrl(playlistUrl), [playlistUrl]);
+  const dnaClient = useMemo(() => new DnaGuideClient(), []);
   const cacheKey = client ? CACHE_PREFIX + client.pairingFingerprint() : "";
   const cached = useMemo(() => cacheKey ? safeCache(cacheKey) : null, [cacheKey]);
   const [cacheSavedAt, setCacheSavedAt] = useState(cached?.savedAt ?? 0);
@@ -67,6 +84,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const [focusIndex, setFocusIndex] = useState(0);
   const [guideByChannel, setGuideByChannel] = useState<Record<string, CachedGuide>>({});
   const [guideFailures, setGuideFailures] = useState<Record<string, boolean>>({});
+  const [logoFailures, setLogoFailures] = useState<Record<string, { providerFailed?: boolean; dnaFailed?: boolean }>>({});
   const [guideNow, setGuideNow] = useState(() => Date.now());
   const [guideRefresh, setGuideRefresh] = useState(0);
   const [categoryFocusIndex, setCategoryFocusIndex] = useState(0);
@@ -155,6 +173,13 @@ export function LiveTv({ onMainMenu }: Props) {
       setStatus(result.channels.length ? `${result.channels.length.toLocaleString()} channels ready` : "No channels were found in this category.");
       saveCache(categories, category.id, result.channels);
       if (result.channels.length) window.requestAnimationFrame(() => rowRefs.current[0]?.focus());
+      void dnaClient.channels().then((dnaCatalog) => {
+        if (request !== requestRef.current) return;
+        const enriched = result.channels.map((channel) => attachDnaFallback(channel, matchDnaChannel(channel, dnaCatalog)));
+        if (request !== requestRef.current) return;
+        setChannels(enriched);
+        saveCache(categories, category.id, enriched);
+      }).catch(() => { /* DNA guide is an optional fallback */ });
     } catch {
       if (request !== requestRef.current) return;
       setStatus(savedChannels.length ? "Saved channels are available, but the provider refresh failed." : "This category could not be loaded. Check the TV network and playlist settings.");
@@ -187,7 +212,15 @@ export function LiveTv({ onMainMenu }: Props) {
       .map((channel, index) => ({ channel, index }))
       .filter(({ channel }) => {
         const guide = initial[channel.id];
-        return !guide || !guideIsFresh(guide, Date.now());
+        const now = Date.now();
+        if (!guide) return true;
+        if (!channel.dnaChannelId) return !guideIsFresh(guide, now);
+        const slots = selectCurrentAndNextProgramme(guide.programmes, now);
+        if (!slots.current || !slots.next) {
+          return !guideIsFresh(guide, now)
+            || !guide.dnaAttemptAt || now - guide.dnaAttemptAt >= EPG_CACHE_TTL_MS;
+        }
+        return !guideIsFresh(guide, now);
       })
       .sort((left, right) => Math.abs(left.index - focusIndex) - Math.abs(right.index - focusIndex));
     let cursor = 0;
@@ -197,9 +230,29 @@ export function LiveTv({ onMainMenu }: Props) {
         if (!item) return;
         const { channel } = item;
         try {
-          const programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT);
+          let programmes: EpgProgramme[] = [];
+          let dnaAttemptAt: number | undefined;
+          try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT); } catch { /* continue to DNA fallback */ }
+          const providerSlots = selectCurrentAndNextProgramme(programmes, Date.now());
+          if (channel.dnaChannelId && (!providerSlots.current || !providerSlots.next)) {
+            dnaAttemptAt = Date.now();
+            try {
+              const now = Date.now();
+              const dnaCacheKey = dnaGuideCacheKey(channel.dnaChannelId, now);
+              const cachedDnaGuide = safeDnaGuideCache(dnaCacheKey, now);
+              let fallback: EpgProgramme[];
+              if (cachedDnaGuide) fallback = cachedDnaGuide.programmes;
+              else {
+                const windowMs = 6 * 60 * 60 * 1000;
+                const start = Math.floor(now / windowMs) * windowMs - windowMs;
+                fallback = await dnaClient.schedule(channel.dnaChannelId, start, start + 24 * 60 * 60 * 1000);
+                try { localStorage.setItem(dnaCacheKey, JSON.stringify({ savedAt: Date.now(), programmes: fallback } satisfies CachedDnaGuide)); } catch { /* guide cache is optional */ }
+              }
+              programmes = fillMissingGuideSlots(programmes, fallback, Date.now());
+            } catch { /* provider guide remains usable when DNA is unavailable */ }
+          }
           if (cancelled) return;
-          const guide = { savedAt: Date.now(), programmes };
+          const guide: CachedGuide = { savedAt: Date.now(), programmes, ...(dnaAttemptAt ? { dnaAttemptAt } : {}) };
           setGuideByChannel((previous) => ({ ...previous, [channel.id]: guide }));
           setGuideFailures((previous) => ({ ...previous, [channel.id]: false }));
           try { localStorage.setItem(cachePrefix + channel.providerStreamId, JSON.stringify(guide)); } catch { /* guide cache is optional */ }
@@ -450,12 +503,30 @@ export function LiveTv({ onMainMenu }: Props) {
     <p className="hint" role="status" aria-live="polite">{status}</p>
     <div className="live-list">
       {channels.map((channel, index) => <button className={`live-row ${index === focusIndex ? "remote-focused" : ""}`} type="button" key={channel.id} ref={(element) => { rowRefs.current[index] = element; }} onFocus={() => setFocusIndex(index)} onClick={() => tune(channel)}>
-        <span className="live-logo">{channel.logo ? <img src={channel.logo} alt="" loading="lazy" /> : channel.name.charAt(0).toLocaleUpperCase()}</span>
+        {(() => {
+          const failures = logoFailures[channel.id] ?? {};
+          const logoUrl = channel.logo && !failures.providerFailed
+            ? channel.logo
+            : !failures.dnaFailed ? channel.dnaLogo : undefined;
+          return <span className="live-logo">{logoUrl
+            ? <img src={logoUrl} alt="" loading="lazy" onError={() => {
+              setLogoFailures((previous) => {
+                const current = previous[channel.id] ?? {};
+                return logoUrl === channel.logo && channel.dnaLogo !== channel.logo
+                  ? { ...previous, [channel.id]: { ...current, providerFailed: true } }
+                  : { ...previous, [channel.id]: { ...current, dnaFailed: true } };
+              });
+            }} />
+            : channel.name.charAt(0).toLocaleUpperCase()}</span>;
+        })()}
         <span className="live-channel-copy"><span className="live-channel-heading"><strong>{channel.name}</strong>{channel.variant && <span className="live-variant">{channel.variant}</span>}</span>
           {(() => {
             const guide = guideByChannel[channel.id];
             const { current, next } = selectCurrentAndNextProgramme(guide?.programmes ?? [], guideNow);
-            if (!current) return <span className="live-guide-unavailable">{guideFailures[channel.id] || guide ? "Programme information unavailable" : "Loading programme information…"}</span>;
+            if (!current) {
+              if (next) return <span className="live-guide"><span className="live-guide-next">Next: {next.title} · {programmeTime(next.startTime)}</span></span>;
+              return <span className="live-guide-unavailable">{guideFailures[channel.id] || guide ? "Programme information unavailable" : "Loading programme information…"}</span>;
+            }
             const remaining = Math.max(0, Math.ceil((current.endTime - guideNow) / 60_000));
             return <span className="live-guide">
               <span className="live-guide-current"><strong>{current.title}</strong><span>{programmeTime(current.startTime)}–{programmeTime(current.endTime)} · {remaining} min left</span></span>

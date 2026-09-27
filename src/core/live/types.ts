@@ -15,6 +15,9 @@ export interface LiveChannel {
   providerCategoryId: string;
   name: string;
   logo: string | null;
+  dnaChannelId?: string;
+  dnaLogo?: string;
+  dnaMatchEvidence?: { kind: "normalized-exact-name" | "curated-alias"; providerName: string; dnaName: string };
   providerOrder: number;
   epgId?: string;
   variant?: string;
