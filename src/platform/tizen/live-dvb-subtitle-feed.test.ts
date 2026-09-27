@@ -37,7 +37,7 @@ describe("Tizen standalone DVB subtitle feed", () => {
     const canvas = { style: {}, setAttribute: vi.fn(), getContext: vi.fn(() => context), remove: vi.fn() };
     const windowStub = {
       addEventListener: vi.fn(), removeEventListener: vi.fn(),
-      setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(),
+      setTimeout: vi.fn(() => 1), clearTimeout: vi.fn(), setInterval: vi.fn(() => 1), clearInterval: vi.fn(),
     };
     vi.stubGlobal("window", windowStub);
     vi.stubGlobal("document", { createElement: vi.fn(() => canvas), body: { appendChild: vi.fn() } });
@@ -51,6 +51,8 @@ describe("Tizen standalone DVB subtitle feed", () => {
     expect(xhrs[0]!.opened).toEqual({ method: "GET", url: "https://example.invalid/live.ts" });
     expect(xhrs[0]!.mime).toBe("text/plain; charset=x-user-defined");
     expect(xhrs[0]!.sent).toBe(true);
+    expect(feed.getDiagnostics()).toMatch(/^dvb p=3\.0 vp=na sp=na map=na d=na r=0 \+0 -0$/);
+    expect(windowStub.setTimeout).toHaveBeenCalledWith(expect.any(Function), 600_000);
 
     const pat = [0, 0, 0xb0, 13, 0, 1, 0xc1, 0, 0, 0, 1, 0xe1, 0, 0, 0, 0, 0];
     const pmt = [0, 2, 0xb0, 28, 0, 1, 0xc1, 0, 0, 0xe1, 0x20, 0xf0, 0,
@@ -94,6 +96,20 @@ describe("Tizen standalone DVB subtitle feed", () => {
     callbacks[0]!();
     expect(feed.getStatus()).toBe("unavailable");
     expect(changed).toHaveBeenCalledWith([]);
+    feed.dispose();
+  });
+
+  it("reports numeric-only diagnostics without stream or caption data", () => {
+    globalThis.XMLHttpRequest = FakeXhr as unknown as typeof XMLHttpRequest;
+    const canvas = { style: {}, setAttribute: vi.fn(), getContext: vi.fn(() => ({ clearRect: vi.fn(), putImageData: vi.fn() })), remove: vi.fn() };
+    vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn(), setTimeout: vi.fn(() => 1), clearTimeout: vi.fn() });
+    vi.stubGlobal("document", { createElement: vi.fn(() => canvas), body: { appendChild: vi.fn() } });
+    const anchor = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }) } as unknown as HTMLElement;
+    const feed = new TizenLiveDvbSubtitleFeed("https://private.invalid/secret.ts", anchor, () => 12.345, vi.fn());
+    const diagnostics = feed.getDiagnostics();
+    expect(diagnostics).toBe("dvb p=12.3 vp=na sp=na map=na d=na r=0 +0 -0");
+    expect(diagnostics).not.toContain("private");
+    expect(diagnostics).not.toContain("secret");
     feed.dispose();
   });
 });

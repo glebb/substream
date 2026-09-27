@@ -7,6 +7,7 @@ export class TizenLiveDvbOverlay {
   private readonly canvas: Canvas2D;
   private readonly context: CanvasRenderingContext2D;
   private lastPaint: { x: number; y: number; width: number; height: number } | undefined;
+  private lastImage: ImageData | undefined;
   private disposed = false;
   private readonly reposition = () => this.position();
 
@@ -44,11 +45,19 @@ export class TizenLiveDvbOverlay {
         this.canvas.width = screenWidth;
         this.canvas.height = screenHeight;
         this.lastPaint = undefined;
+        this.lastImage = undefined;
+      }
+      if (this.lastPaint && this.lastImage && this.lastPaint.x === offsetX && this.lastPaint.y === offsetY
+        && this.lastPaint.width === width && this.lastPaint.height === height
+        && equalPixels(this.lastImage.data, data)) {
+        this.position();
+        return;
       }
       if (this.lastPaint) this.context.clearRect(this.lastPaint.x, this.lastPaint.y, this.lastPaint.width, this.lastPaint.height);
       const pixels = new ImageData(new Uint8ClampedArray(data), width, height);
       this.context.putImageData(pixels, offsetX, offsetY);
       this.lastPaint = { x: offsetX, y: offsetY, width, height };
+      this.lastImage = pixels;
       this.canvas.style.display = "block";
       this.position();
     } catch { this.onError(); }
@@ -59,6 +68,7 @@ export class TizenLiveDvbOverlay {
     try {
       if (this.lastPaint) this.context.clearRect(this.lastPaint.x, this.lastPaint.y, this.lastPaint.width, this.lastPaint.height);
       this.lastPaint = undefined;
+      this.lastImage = undefined;
       this.canvas.style.display = "none";
     } catch { this.onError(); }
   }
@@ -78,4 +88,10 @@ export class TizenLiveDvbOverlay {
       Object.assign(this.canvas.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
     } catch { this.onError(); }
   }
+}
+
+function equalPixels(a: Uint8ClampedArray, b: Uint8ClampedArray): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }

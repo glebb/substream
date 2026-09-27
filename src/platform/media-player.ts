@@ -80,8 +80,12 @@ export interface MediaPlayer {
   setLiveAudioMetadataUrl?(url: string): void;
   /** Supplies a direct transport-stream URL for Tizen's standalone DVB sideband reader. */
   setLiveDvbSubtitleUrl?(url: string): void;
+  /** Starts the higher-risk Tizen direct-TS caption scanner after explicit user opt-in. */
+  setLiveDvbSubtitleEnabled?(enabled: boolean): void;
   /** Reports whether Tizen's standalone DVB subtitle feed is still discovering tracks. */
   getLiveDvbSubtitleStatus?(): string;
+  /** Numeric-only, credential-safe timing and canvas counters for opted-in Tizen diagnostics. */
+  getLiveDvbSubtitleDiagnostics?(): string;
   /** Indicates that a platform is still resolving live audio language defaults. */
   isAudioTrackSelectionPending?(): boolean;
   load(streamUrl: string): void;

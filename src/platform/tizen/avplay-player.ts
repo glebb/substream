@@ -80,7 +80,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private liveDvbSubtitleUrl = "";
   private liveDvbFeed: TizenLiveDvbSubtitleFeed | undefined;
   private liveDvbTracks: TizenDvbTrack[] = [];
-  private liveDvbEnabled = true;
+  private liveDvbEnabled = false;
 
   constructor(
     private readonly container: HTMLElement,
@@ -93,7 +93,6 @@ export class TizenAvPlayPlayer implements MediaPlayer {
 
   setLiveSubtitleMode(enabled: boolean): void {
     this.liveSubtitleMode = enabled;
-    this.liveDvbEnabled = enabled;
     if (enabled) this.setLiveAvPlaySubtitleSilent(true);
   }
 
@@ -103,12 +102,28 @@ export class TizenAvPlayPlayer implements MediaPlayer {
 
   setLiveDvbSubtitleUrl(url: string): void { this.liveDvbSubtitleUrl = url; }
 
+  setLiveDvbSubtitleEnabled(enabled: boolean): void {
+    this.liveDvbEnabled = enabled;
+    if (!enabled) {
+      this.liveDvbFeed?.setEnabled(false);
+      return;
+    }
+    this.setLiveAvPlaySubtitleSilent(true);
+    this.liveDvbFeed?.setEnabled(true);
+    this.startLiveDvbFeed();
+  }
+
   getLiveDvbSubtitleStatus(): string {
     if (!this.liveDvbSubtitleUrl) return "DVB subtitle feed not configured";
+    if (!this.liveDvbEnabled && !this.liveDvbFeed) return "DVB subtitle scan not started";
     const status = this.liveDvbFeed?.getStatus() ?? "pending";
     if (status === "available") return "DVB subtitle tracks found";
     if (status === "unavailable") return "DVB subtitle stream unavailable";
     return "DVB subtitle stream pending";
+  }
+
+  getLiveDvbSubtitleDiagnostics(): string {
+    return this.liveDvbFeed?.getDiagnostics() ?? "dvb p=na vp=na sp=na map=na d=na r=0 +0 -0";
   }
 
   isAudioTrackSelectionPending(): boolean {
@@ -378,9 +393,10 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     const tracks = this.getAudioTracks();
     if (tracks.length === 0) return;
     const preferred = tracks.find((track) => isFinnishLanguage(track.language))
-      ?? tracks.find((track) => isEnglishLanguage(track.language))
-      ?? tracks[0];
-    if (!preferred) return;
+      ?? tracks.find((track) => isEnglishLanguage(track.language));
+    // AVPlay has already selected the stream default. Do not replace it with
+    // the first listed track when neither preferred language is available.
+    if (!preferred) { this.defaultAudioSelectionAttempted = true; return; }
     if (preferred.selected) { this.defaultAudioSelectionAttempted = true; return; }
     this.selectAudioTrack(preferred.id);
   }
@@ -560,7 +576,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   }
 
   private startLiveDvbFeed(): void {
-    if (!this.liveSubtitleMode || !this.liveDvbSubtitleUrl || this.liveDvbFeed) return;
+    if (!this.liveSubtitleMode || !this.liveDvbEnabled || !this.liveDvbSubtitleUrl || this.liveDvbFeed) return;
     try {
       this.liveDvbFeed = new TizenLiveDvbSubtitleFeed(
         this.liveDvbSubtitleUrl,

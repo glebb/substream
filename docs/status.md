@@ -20,7 +20,7 @@ Channel rows show the current programme, progress, remaining minutes, and the ne
 
 Playback uses browser HLS/native video or Tizen AVPlay with provider TS output. It starts fullscreen. Up/Down changes channels without wrapping; Back returns to the list. Browser adapters expose Rewind 30 seconds and Go live when a usable live buffer exists. This is limited to the available buffer, not recording or provider catch-up. Live playback does not create VOD resume records.
 
-Embedded subtitles prefer Finnish, then English. The browser's DVB worker requires actual subtitle packets; Tizen uses AVPlay text tracks. See [embedded live subtitles](live-dvb-subtitles.md) for transport limits and diagnostic guidance.
+Embedded subtitles prefer Finnish, then English. The browser's DVB worker requires actual subtitle packets. Tizen uses AVPlay text tracks when present and a separate direct-TS DVB decoder and canvas overlay for streams where AVPlay exposes no text track. The Tizen DVB path displays captions on the target TV, but timing and repeated-line flicker still need work; see the [Tizen subtitle plan](live-dvb-subtitles-plan.md) and [embedded live subtitles](live-dvb-subtitles.md).
 
 ## VOD playback and configuration
 

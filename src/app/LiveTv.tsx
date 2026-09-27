@@ -98,6 +98,8 @@ export function LiveTv({ onMainMenu }: Props) {
   const playbackStateRef = useRef<PlaybackState>("loading");
   const [liveSubtitleStatus, setLiveSubtitleStatus] = useState("");
   const [liveSubtitlesEnabled, setLiveSubtitlesEnabled] = useState(true);
+  const [embeddedSubtitleTracks, setEmbeddedSubtitleTracks] = useState<import("../platform/media-player.ts").EmbeddedSubtitleTrack[]>([]);
+  const [liveSource, setLiveSource] = useState<"hls" | "ts">("hls");
   const liveSubtitlesEnabledRef = useRef(true);
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
   const [audioStatus, setAudioStatus] = useState("");
@@ -144,12 +146,12 @@ export function LiveTv({ onMainMenu }: Props) {
     }
     if (player instanceof TizenAvPlayPlayer) {
       const status = player.getLiveDvbSubtitleStatus();
-      if (status === "DVB subtitle stream pending") {
-        setLiveSubtitleStatus("Finding Finnish DVB subtitles…");
-        return;
-      }
       if (status === "DVB subtitle stream unavailable") {
         setLiveSubtitleStatus("DVB subtitle stream unavailable");
+        return;
+      }
+      if (status === "DVB subtitle scan not started" || status === "DVB subtitle feed not configured") {
+        setLiveSubtitleStatus(`AVPlay has no subtitle track · DVB scan off · ${player.getLiveAudioMetadataStatus()}`);
         return;
       }
     }
@@ -173,7 +175,8 @@ export function LiveTv({ onMainMenu }: Props) {
       setAudioTracks(tracks);
       return;
     }
-    const preferred = tracks[preferredAudioTrackIndex(tracks)];
+    const streamDefaultIndex = tracks.findIndex((track) => track.selected);
+    const preferred = tracks[preferredAudioTrackIndex(tracks, streamDefaultIndex)];
     if (preferred && !preferred.selected && player.selectAudioTrack?.(preferred.id)) {
       setAudioTracks(tracks.map((track) => ({ ...track, selected: track.id === preferred.id })));
     } else setAudioTracks(tracks);
@@ -398,16 +401,16 @@ export function LiveTv({ onMainMenu }: Props) {
     if (!selected || !client) return;
     setHasStartedPlayback(false);
     audioSelectionManualRef.current = false;
+    setEmbeddedSubtitleTracks([]);
     setAudioTracks([]);
     const player: MediaPlayer | null = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {}) : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
     if (!player) { setPlaybackState("error"); return; }
     playerRef.current = player;
     // Live TV enables embedded subtitle discovery on browser and AVPlay players.
     player.setLiveSubtitleMode?.(true);
-    // AVPlay omits provider audio language metadata; inspect the CORS-enabled
-    // direct TS endpoint while it plays its HLS URL.
-    player.setLiveAudioMetadataUrl?.(client.liveStreamUrl(selected.providerStreamId, "ts"));
-    player.setLiveDvbSubtitleUrl?.(client.liveStreamUrl(selected.providerStreamId, "ts"));
+    // Probe metadata only while HLS is active. Direct TS mode is a transport
+    // test using AVPlay alone, with no parallel TS reader or DVB scanner.
+    if (liveSource === "hls") player.setLiveAudioMetadataUrl?.(client.liveStreamUrl(selected.providerStreamId, "ts"));
     player.setEventHandlers({
       onStateChange: (state) => {
         const wasPlaying = playbackStateRef.current === "playing";
@@ -423,14 +426,14 @@ export function LiveTv({ onMainMenu }: Props) {
         if (state === "playing") reconcileEmbeddedSubtitles(player, player.getEmbeddedSubtitleTracks?.() ?? []);
       },
       onLiveBufferWindowChange: setLiveBufferWindow,
-      onEmbeddedSubtitleTracksChange: (tracks) => reconcileEmbeddedSubtitles(player, tracks),
+      onEmbeddedSubtitleTracksChange: (tracks) => { setEmbeddedSubtitleTracks(tracks); reconcileEmbeddedSubtitles(player, tracks); },
       onAudioTracksChange: (tracks) => reconcileAudioTracks(player, tracks),
     });
-    player.load(client.liveStreamUrl(selected.providerStreamId, "m3u8"));
+    player.load(client.liveStreamUrl(selected.providerStreamId, liveSource === "hls" ? "m3u8" : "ts"));
     return () => {
       player.setEventHandlers(null); player.destroy(); if (playerRef.current === player) playerRef.current = null;
     };
-  }, [client, isTizen, retryCount, selected]);
+  }, [client, isTizen, liveSource, retryCount, selected]);
 
   useEffect(() => {
     if (!selected || isTizenAvPlayAvailable()) return;
@@ -482,6 +485,7 @@ export function LiveTv({ onMainMenu }: Props) {
     setPlaybackState("loading");
     setRetryCount(0);
     setLiveSubtitleStatus(liveSubtitlesEnabledRef.current ? "Finding Finnish subtitles…" : "Subtitles: Off");
+    setEmbeddedSubtitleTracks([]);
     setAudioTracks([]);
     setAudioStatus("");
     showLiveHintBriefly();
@@ -556,6 +560,19 @@ export function LiveTv({ onMainMenu }: Props) {
       setLiveSubtitleStatus("Finding Finnish subtitles…");
       reconcileEmbeddedSubtitles(player, player?.getEmbeddedSubtitleTracks?.() ?? []);
     }
+  };
+  const toggleLiveSource = () => {
+    if (playerFullscreen || !isTizenAvPlayAvailable()) return;
+    setEmbeddedSubtitleTracks([]);
+    setLiveSubtitleStatus("Reloading stream…");
+    setLiveSubtitlesEnabled(true);
+    liveSubtitlesEnabledRef.current = true;
+    setLiveBufferWindow(null);
+    setAudioTracks([]);
+    setAudioStatus("");
+    setPlaybackState("loading");
+    setHasStartedPlayback(false);
+    setLiveSource((source) => source === "hls" ? "ts" : "hls");
   };
 
   useEffect(() => {
@@ -653,8 +670,9 @@ export function LiveTv({ onMainMenu }: Props) {
       <button type="button" onClick={leavePlayer} ref={(element) => { playerControlRefs.current[6] = element; }}>Back to channels</button>
       <button type="button" onClick={selectNextAudioTrack} ref={(element) => { playerControlRefs.current[7] = element; }}>{audioTracks.length ? `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}` : "Audio: unavailable"}</button>
       <button type="button" aria-pressed={liveSubtitlesEnabled} onClick={toggleLiveSubtitles} ref={(element) => { playerControlRefs.current[8] = element; }}>{`Subtitles: ${liveSubtitlesEnabled ? "On" : "Off"}`}</button>
+      {isTizenAvPlayAvailable() && !playerFullscreen && <button type="button" onClick={toggleLiveSource} ref={(element) => { playerControlRefs.current[9] = element; }}>{liveSource === "hls" ? "Try direct TS source" : "Switch back to HLS"}</button>}
       {audioStatus && <span className="live-buffer-status" role="status">{audioStatus}</span>}
-      <span className="playback-status">{playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}</span>
+      <span className="playback-status">{playbackState === "playing" || hasStartedPlayback ? `${liveSource === "hls" ? "HLS" : "Direct TS"} · ${liveSubtitleStatus || "Live"}` : playbackState === "error" ? `${liveSource === "hls" ? "HLS" : "Direct TS"} · Error` : `${liveSource === "hls" ? "HLS" : "Direct TS"} · Connecting`}</span>
       {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}
     </div>
   </main>;

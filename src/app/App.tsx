@@ -242,6 +242,7 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
   const retryPlaylistRef = useRef<HTMLButtonElement | null>(null);
   const changePlaylistRef = useRef<HTMLButtonElement | null>(null);
   const settingsOpenButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mainMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const browseEmptyRecoveryRef = useRef<HTMLButtonElement | null>(null);
   const browseTabTransitionRef = useRef<"menu" | "content" | null>(null);
   const browseReturnFocusIndexRef = useRef(0);
@@ -1185,6 +1186,10 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
             setCatalogStatus("");
             break;
           case "stay":
+            // At the VOD root, Back returns to the app's actual main menu.
+            // The shell button used to sit outside this remote focus handler,
+            // leaving Tizen users with no reachable exit from VOD.
+            if (state === "ready") onMainMenu();
             break;
         }
         return;
@@ -1490,6 +1495,16 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
         return;
       }
       const targetButton = event.target instanceof HTMLButtonElement ? event.target : null;
+      if (targetButton === mainMenuButtonRef.current) {
+        if (key === "ArrowRight" && settingsOpenButtonRef.current) {
+          event.preventDefault();
+          settingsOpenButtonRef.current.focus();
+        } else if (key === "ArrowDown") {
+          event.preventDefault();
+          browseTabRefs.current[sectionOrder.indexOf(browseCollection)]?.focus();
+        }
+        return;
+      }
       if (targetButton?.classList.contains("browse-tab")) {
         const tabs = browseTabRefs.current.filter((tab): tab is HTMLButtonElement => tab !== null);
         const currentTab = Math.max(0, tabs.indexOf(targetButton));
@@ -1530,6 +1545,11 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
         }
       }
       if (targetButton && !targetButton.classList.contains("tile")) {
+        if (targetButton === settingsOpenButtonRef.current && key === "ArrowLeft") {
+          event.preventDefault();
+          mainMenuButtonRef.current?.focus();
+          return;
+        }
         if (key === "ArrowDown" && targetButton === settingsOpenButtonRef.current && activeGroup) {
           event.preventDefault();
           sortSelectRef.current?.focus();
@@ -2428,7 +2448,7 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
   };
   return <main className={"screen" + (isTizen ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen" : "")}>
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · VIDEO-ON-DEMAND</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
-      {state === "ready" && !selectedTitle && !showPlaylistForm && !showSettings && <button className={settingsButtonFocused ? "remote-focused" : ""} type="button" ref={settingsOpenButtonRef} onBlur={() => setSettingsButtonFocused(false)} onFocus={() => setSettingsButtonFocused(true)} onClick={openSettings}>Settings</button>}
+      {state === "ready" && !selectedTitle && !showPlaylistForm && !showSettings && <div className="header-actions"><button type="button" ref={mainMenuButtonRef} onClick={onMainMenu}>Main menu</button><button className={settingsButtonFocused ? "remote-focused" : ""} type="button" ref={settingsOpenButtonRef} onBlur={() => setSettingsButtonFocused(false)} onFocus={() => setSettingsButtonFocused(true)} onClick={openSettings}>Settings</button></div>}
     </header>
     {state !== "ready" && showPlaylistForm && playlistSetupForm}
     {state !== "ready" && !showPlaylistForm && state === "error" && <section className="setup-recovery">
@@ -2781,7 +2801,7 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [homeFocus, route]);
   if (route === "live") return <LiveTv onMainMenu={() => { setHomeFocus(0); setRoute("home"); }} />;
-  if (route === "vod") return <div className="vod-route"><button className="shell-home-button" type="button" onClick={() => { setHomeFocus(1); setRoute("home"); }}>Main menu</button><VodApp onMainMenu={() => { setHomeFocus(1); setRoute("home"); }} /></div>;
+  if (route === "vod") return <div className="vod-route"><VodApp onMainMenu={() => { setHomeFocus(1); setRoute("home"); }} /></div>;
   return <main className="app-home">
     <div className="home-brand" aria-hidden="true"><img src="./branding/substream-icon.png" alt="" /><strong>Substream</strong></div>
     <section className="home-content" aria-label="Choose what to watch">

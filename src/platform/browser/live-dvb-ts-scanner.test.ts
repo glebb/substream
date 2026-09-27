@@ -63,3 +63,27 @@ it("uses the first video PES timestamp as the fragment clock reference", () => {
   scanner.scan(packet(0x130, [0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5, 0x21, 0, 8, 0, 1]), 20);
   expect(scanner.getFragmentVideoPts()).not.toBe(90_000);
 });
+
+it("preserves large unsigned 33-bit video PTS values", () => {
+  const pat = [0, 0, 0xb0, 13, 0, 1, 0xc1, 0, 0, 0, 1, 0xe1, 0, 0, 0, 0, 0];
+  const pmt = [0, 2, 0xb0, 33, 0, 1, 0xc1, 0, 0, 0xe1, 0x30, 0xf0, 0,
+    0x1b, 0xe1, 0x30, 0xf0, 0,
+    6, 0xe1, 0x20, 0xf0, 10, 0x59, 8, 0x66, 0x69, 0x6e, 0x10, 0, 1, 0, 1, 0, 0, 0, 0];
+  const scanner = new LiveDvbTsScanner();
+  const tables = new Uint8Array(188 * 2);
+  tables.set(packet(0, pat));
+  tables.set(packet(0x100, pmt), 188);
+  scanner.scan(tables, 12);
+
+  const pts = 0x1_2345_6789;
+  const ptsBytes = [
+    0x21 | (Math.floor(pts / 0x20000000) & 0x0e),
+    Math.floor(pts / 0x400000) % 256,
+    (Math.floor(pts / 0x4000) % 256 & 0xfe) | 1,
+    Math.floor(pts / 128) % 256,
+    (pts % 128) * 2 | 1,
+  ];
+  scanner.scan(packet(0x130, [0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5, ...ptsBytes]), 12);
+
+  expect(scanner.getFragmentVideoPts()).toBe(pts);
+});

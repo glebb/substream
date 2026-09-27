@@ -10,12 +10,18 @@ function languageRank(track: AudioChoice): number {
   return 2;
 }
 
-/** Keep provider order within each preference tier. */
-export function preferredAudioTrackIndex<T extends AudioChoice>(tracks: readonly T[]): number {
+/**
+ * Keep provider order within each preference tier. If neither preferred
+ * language is present, retain the supplied stream-default track.
+ */
+export function preferredAudioTrackIndex<T extends AudioChoice>(tracks: readonly T[], fallbackIndex = 0): number {
   if (tracks.length === 0) return -1;
-  let bestIndex = 0;
-  let bestRank = languageRank(tracks[0]!);
-  for (let index = 1; index < tracks.length; index += 1) {
+  const safeFallbackIndex = Number.isInteger(fallbackIndex) && fallbackIndex >= 0 && fallbackIndex < tracks.length
+    ? fallbackIndex
+    : 0;
+  let bestIndex = safeFallbackIndex;
+  let bestRank = 2;
+  for (let index = 0; index < tracks.length; index += 1) {
     const rank = languageRank(tracks[index]!);
     if (rank < bestRank) {
       bestRank = rank;

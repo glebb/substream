@@ -14,6 +14,7 @@ export class LiveDvbTsScanner {
   private videoPid: number | undefined;
   private fragmentStartSeconds: number | undefined;
   private fragmentVideoPts: number | undefined;
+  private fragmentSubtitlePts: number | undefined;
   private pes: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   private activePids = new Set<number>();
 
@@ -22,11 +23,13 @@ export class LiveDvbTsScanner {
   getSelected(): ScannedDvbTrack | undefined { return this.selected; }
   getActiveTracks(): ScannedDvbTrack[] { return this.getTracks().filter((track) => this.activePids.has(track.pid)); }
   getFragmentVideoPts(): number | undefined { return this.fragmentVideoPts; }
+  getFragmentSubtitlePts(): number | undefined { return this.fragmentSubtitlePts; }
 
   scan(input: Uint8Array, startSeconds?: number): Uint8Array[] {
     if (startSeconds !== this.fragmentStartSeconds) {
       this.fragmentStartSeconds = startSeconds;
       this.fragmentVideoPts = undefined;
+      this.fragmentSubtitlePts = undefined;
     }
     const bytes = input.subarray(0, LIVE_DVB_MAX_FRAGMENT_BYTES);
     const output: Uint8Array[] = [];
@@ -117,7 +120,11 @@ export class LiveDvbTsScanner {
       const complete = this.pes.subarray(0, length + 6);
       if (output.length < 16) {
         const filtered = filterSelectedPage(complete, this.selected!);
-        if (filtered) output.push(filtered);
+        if (filtered) {
+          const pts = pesPts(complete);
+          if (pts !== undefined) this.fragmentSubtitlePts = pts;
+          output.push(filtered);
+        }
       }
       this.pes = this.pes.slice(length + 6);
     }
@@ -127,8 +134,10 @@ export class LiveDvbTsScanner {
 function pesPts(payload: Uint8Array): number | undefined {
   if (payload.length < 14 || payload[0] !== 0 || payload[1] !== 0 || payload[2] !== 1
     || (payload[7]! & 0x80) === 0 || payload[8]! < 5) return undefined;
-  return ((payload[9]! & 14) * 0x20000000) + (payload[10]! << 22)
-    + ((payload[11]! & 254) << 14) + (payload[12]! << 7) + ((payload[13]! & 254) >> 1);
+  // PTS is an unsigned 33-bit value. Bitwise shifts coerce operands to signed
+  // 32-bit integers, so use arithmetic for fields that can set the sign bit.
+  return ((payload[9]! & 14) * 0x20000000) + (payload[10]! * 0x400000)
+    + ((payload[11]! & 254) * 0x4000) + (payload[12]! * 0x80) + ((payload[13]! & 254) / 2);
 }
 
 function filterSelectedPage(pes: Uint8Array, selected: ScannedDvbTrack): Uint8Array | undefined {

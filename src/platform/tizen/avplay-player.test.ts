@@ -14,6 +14,23 @@ afterEach(() => {
 });
 
 describe("TizenAvPlayPlayer", () => {
+  it("leaves direct-TS DVB discovery stopped after prepare until explicit opt-in", () => {
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), setSilentSubtitle: vi.fn(),
+      getTotalTrackInfo: vi.fn(() => [{ type: "AUDIO", index: 0 }, { type: "VIDEO", index: 1 }]),
+      getCurrentStreamInfo: vi.fn(() => []),
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.setLiveSubtitleMode(true);
+    player.setLiveDvbSubtitleUrl("https://example.invalid/live.ts");
+    player.load("https://example.invalid/live.m3u8");
+    expect(player.getLiveDvbSubtitleStatus()).toBe("DVB subtitle scan not started");
+    player.destroy();
+  });
+
   it("opens, positions, starts, and attaches a temporary SAMI subtitle", async () => {
     const open = vi.fn();
     const prepareAsync = vi.fn((success: () => void) => success());
@@ -145,7 +162,7 @@ describe("TizenAvPlayPlayer", () => {
     player.destroy();
   });
 
-  it("defaults AVPlay audio to Finnish, then English, then the first track", () => {
+  it("defaults AVPlay audio to Finnish, then English", () => {
     const setSelectTrack = vi.fn();
     const getTotalTrackInfo = vi.fn(() => [
       { type: "AUDIO", index: 0, extra_info: '{"language":"swe"}' },
@@ -162,6 +179,28 @@ describe("TizenAvPlayPlayer", () => {
     const player = new TizenAvPlayPlayer(container, vi.fn());
     player.load("https://example.invalid/stream.mkv");
     expect(setSelectTrack).toHaveBeenCalledWith("AUDIO", 5);
+    player.destroy();
+  });
+
+  it("keeps the live stream's AVPlay default when Finnish and English are unavailable", () => {
+    const setSelectTrack = vi.fn();
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+      getTotalTrackInfo: vi.fn(() => [
+        { type: "AUDIO", index: 0, extra_info: '{"language":"swe"}' },
+        { type: "AUDIO", index: 5, extra_info: '{"language":"dan"}' },
+      ]),
+      getCurrentStreamInfo: vi.fn(() => [{ type: "AUDIO", index: 5, extra_info: "{}" }]), setSelectTrack,
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const player = new TizenAvPlayPlayer(container, vi.fn());
+    player.setLiveSubtitleMode(true);
+    player.load("https://example.invalid/live.m3u8");
+
+    expect(setSelectTrack).not.toHaveBeenCalled();
+    expect(player.getAudioTracks().find((track) => track.selected)?.id).toBe("5");
     player.destroy();
   });
 

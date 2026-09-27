@@ -2,9 +2,11 @@ import { DvbSubtitleDecoder } from "../../core/subtitles/dvb-decoder.ts";
 import { LiveDvbTsScanner, type ScannedDvbTrack } from "../browser/live-dvb-ts-scanner.ts";
 import { TizenLiveDvbOverlay } from "./live-dvb-overlay.ts";
 
-const MAX_RESPONSE_CHARS = 4 * 1024 * 1024;
+// Chromium 47 retains responseText for the lifetime of an XHR. Keep that
+// lifetime bounded, but avoid the ~minute reconnect that interrupted AVPlay.
+const MAX_RESPONSE_CHARS = 64 * 1024 * 1024;
 const MAX_BATCH_BYTES = 192 * 1024;
-const MAX_CONNECTION_MS = 60_000;
+const MAX_CONNECTION_MS = 10 * 60_000;
 const TRACK_DISCOVERY_TIMEOUT_MS = 20_000;
 const TS_PACKET_BYTES = 188;
 const MAX_PES_BYTES = 128 * 1024;
@@ -37,6 +39,14 @@ export class TizenLiveDvbSubtitleFeed {
   private discoveryTimer: number | undefined;
   private consecutiveFailures = 0;
   private status: "pending" | "available" | "unavailable" = "pending";
+  private reconnectCount = 0;
+  private presentCount = 0;
+  private clearCount = 0;
+  private videoPtsSeconds: number | undefined;
+  private subtitlePtsSeconds: number | undefined;
+  private mappedSubtitleSeconds: number | undefined;
+  private pesFingerprints = new Set<string>();
+  private pesFingerprintOrder: string[] = [];
 
   constructor(
     private readonly url: string,
@@ -59,6 +69,11 @@ export class TizenLiveDvbSubtitleFeed {
   }
   setTime(_seconds: number): void { this.render(); }
   getStatus(): "pending" | "available" | "unavailable" { return this.status; }
+  getDiagnostics(): string {
+    const playhead = Math.max(0, Number(this.getPlayheadSeconds()) || 0);
+    const delay = this.mappedSubtitleSeconds === undefined ? "na" : (playhead - this.mappedSubtitleSeconds).toFixed(2);
+    return `dvb p=${playhead.toFixed(1)} vp=${fmt(this.videoPtsSeconds)} sp=${fmt(this.subtitlePtsSeconds)} map=${fmt(this.mappedSubtitleSeconds)} d=${delay} r=${this.reconnectCount} +${this.presentCount} -${this.clearCount}`;
+  }
   getTracks(): TizenDvbTrack[] {
     return this.tracks.map((track) => ({ id: `dvb:${track.id}`, language: track.language, label: `${languageLabel(track.language)} · DVB`, selected: this.selected?.id === track.id }));
   }
@@ -84,6 +99,8 @@ export class TizenLiveDvbSubtitleFeed {
     this.decoder = new DvbSubtitleDecoder({ compositionPageId: track.compositionPageId, ancillaryPageId: track.ancillaryPageId });
     this.anchorPlayheadSeconds = undefined;
     this.anchorVideoPts = undefined;
+    this.pesFingerprints.clear();
+    this.pesFingerprintOrder = [];
     this.overlay?.clear();
     this.emitTracks();
     return true;
@@ -91,7 +108,7 @@ export class TizenLiveDvbSubtitleFeed {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) this.overlay?.clear();
+    if (!enabled) { this.overlay?.clear(); this.clearCount++; }
     else this.render();
   }
 
@@ -195,12 +212,25 @@ export class TizenLiveDvbSubtitleFeed {
     }
     if (this.selected && this.scanner.getSelected()?.id !== this.selected.id) this.scanner.select(this.selected.id);
     const videoPts = this.scanner.getFragmentVideoPts();
+    const subtitlePts = this.scanner.getFragmentSubtitlePts();
+    if (videoPts !== undefined) this.videoPtsSeconds = videoPts / 90_000;
+    if (subtitlePts !== undefined) {
+      this.subtitlePtsSeconds = subtitlePts / 90_000;
+      if (this.anchorPlayheadSeconds !== undefined && this.anchorVideoPts !== undefined) {
+        this.mappedSubtitleSeconds = this.anchorPlayheadSeconds + ptsDelta(subtitlePts, this.anchorVideoPts) / 90_000;
+      }
+    }
     if (this.anchorPlayheadSeconds === undefined && videoPts !== undefined) {
       this.anchorPlayheadSeconds = playhead;
       this.anchorVideoPts = videoPts;
     }
     if (this.decoder && this.selected && this.anchorPlayheadSeconds !== undefined && this.anchorVideoPts !== undefined) {
       for (const pes of pesPackets.slice(0, 16)) {
+        const fingerprint = fingerprintPes(pes);
+        if (this.pesFingerprints.has(fingerprint)) continue;
+        this.pesFingerprints.add(fingerprint);
+        this.pesFingerprintOrder.push(fingerprint);
+        if (this.pesFingerprintOrder.length > 32) this.pesFingerprints.delete(this.pesFingerprintOrder.shift()!);
         const rebased = rebasePesPts(pes, this.anchorPlayheadSeconds, this.anchorVideoPts);
         if (rebased.byteLength <= MAX_PES_BYTES) this.decoder.feed(rebased);
       }
@@ -214,8 +244,8 @@ export class TizenLiveDvbSubtitleFeed {
     if (now - this.lastRenderAt < 150) return;
     this.lastRenderAt = now;
     const frame = this.decoder.renderFrameDataAtTimestamp(Math.max(0, Number(this.getPlayheadSeconds()) || 0));
-    if (frame) this.overlay?.present(frame);
-    else this.overlay?.clear();
+    if (frame) { this.overlay?.present(frame); this.presentCount++; }
+    else { this.overlay?.clear(); this.clearCount++; }
   }
 
   private emitTracks(): void { this.onTracks(this.getTracks()); }
@@ -234,6 +264,7 @@ export class TizenLiveDvbSubtitleFeed {
     xhr.onprogress = xhr.onerror = xhr.onload = xhr.onabort = null;
     try { xhr.abort(); } catch { /* A completed XHR may reject abort(). */ }
     this.byteCarry = new Uint8Array(0);
+    this.reconnectCount++;
     this.scanner = new LiveDvbTsScanner();
     if (this.selected) this.scanner.select(this.selected.id);
     this.anchorPlayheadSeconds = undefined;
@@ -261,6 +292,21 @@ export class TizenLiveDvbSubtitleFeed {
       }
     }
   }
+}
+
+function fmt(value: number | undefined): string { return value === undefined ? "na" : value.toFixed(2); }
+function ptsDelta(pts: number, anchor: number): number {
+  let delta = pts - anchor;
+  const wrap = 0x200000000;
+  if (delta > wrap / 2) delta -= wrap;
+  if (delta < -wrap / 2) delta += wrap;
+  return delta;
+}
+function fingerprintPes(bytes: Uint8Array): string {
+  // Bounded numeric checksum only; never retain or expose PES/caption content.
+  let hash = 2166136261;
+  for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619);
+  return `${bytes.length}:${hash >>> 0}`;
 }
 
 function findTsSync(bytes: Uint8Array): number {
