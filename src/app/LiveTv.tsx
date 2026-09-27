@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { preferredAudioTrackIndex } from "../core/media/audio.ts";
@@ -91,7 +91,6 @@ export function LiveTv({ onMainMenu }: Props) {
   const [categoryFocusIndex, setCategoryFocusIndex] = useState(0);
   const [selected, setSelected] = useState<LiveChannel | null>(null);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
-  const [playerControlIndex, setPlayerControlIndex] = useState(0);
   const [playbackState, setPlaybackState] = useState<PlaybackState>("loading");
   const [hasStartedPlayback, setHasStartedPlayback] = useState(false);
   const [liveBufferWindow, setLiveBufferWindow] = useState<LiveBufferWindow | null>(null);
@@ -113,6 +112,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const categoryRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const mainMenuRef = useRef<HTMLButtonElement | null>(null);
   const categoriesButtonRef = useRef<HTMLButtonElement | null>(null);
+  const emptyRefreshRef = useRef<HTMLButtonElement | null>(null);
   const playerControlRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const requestedFullscreenExitRef = useRef(false);
   const requestRef = useRef(0);
@@ -196,6 +196,11 @@ export function LiveTv({ onMainMenu }: Props) {
       setCategoryFocusIndex((index) => Math.min(index, Math.max(0, finnishCategories.length - 1)));
       setStatus(finnishCategories.length ? `${finnishCategories.length.toLocaleString()} Finnish categories ready` : "No Finnish categories were found at the provider.");
       saveCache(finnishCategories);
+      window.requestAnimationFrame(() => {
+        if (document.activeElement === mainMenuRef.current || document.activeElement === document.body) {
+          (finnishCategories.length ? categoryRefs.current[0] : emptyRefreshRef.current)?.focus();
+        }
+      });
     } catch {
       if (request !== requestRef.current) return;
       setStatus(categories.length ? "Saved categories are available, but the provider refresh failed." : "Finnish categories could not be loaded. Check the TV network and playlist settings.");
@@ -240,7 +245,22 @@ export function LiveTv({ onMainMenu }: Props) {
     window.requestAnimationFrame(() => categoryRefs.current[categoryFocusIndex]?.focus());
   };
 
+  useEffect(() => {
+    if (selected || selectedCategory) return;
+    window.requestAnimationFrame(() => {
+      if (document.activeElement !== document.body) return;
+      (categories.length ? categoryRefs.current[categoryFocusIndex] : mainMenuRef.current)?.focus();
+    });
+  }, []);
   useEffect(() => { void refreshCategories(); return () => { requestRef.current += 1; }; }, [cacheKey]);
+
+  useLayoutEffect(() => {
+    if (!selectedCategory || !channels.length) return;
+    const activeElement = document.activeElement;
+    if (activeElement === document.body || !(activeElement instanceof HTMLElement) || !activeElement.isConnected) {
+      rowRefs.current[focusIndex]?.focus();
+    }
+  }, [channels.length, focusIndex, selectedCategory?.id]);
 
   useEffect(() => {
     if (!selectedCategory || !channels.length || !client) return;
@@ -428,7 +448,6 @@ export function LiveTv({ onMainMenu }: Props) {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     setPlaybackState("loading");
     setRetryCount(0);
-    setPlayerControlIndex(0);
     setLiveSubtitleStatus(liveSubtitlesEnabledRef.current ? "Finding Finnish subtitles…" : "Subtitles: Off");
     setAudioTracks([]);
     setAudioStatus("");
@@ -464,7 +483,6 @@ export function LiveTv({ onMainMenu }: Props) {
   };
   const showControls = () => {
     exitFullscreen();
-    setPlayerControlIndex(7);
     window.requestAnimationFrame(() => playerControlRefs.current[7]?.focus());
   };
   const leavePlayer = () => {
@@ -512,19 +530,19 @@ export function LiveTv({ onMainMenu }: Props) {
       const key = normalizedRemoteKey(event);
       if (isBackKey(event)) { event.preventDefault(); selected ? leavePlayer() : selectedCategory ? leaveCategory() : onMainMenu(); return; }
       if (selected) {
-        if (key === "ArrowUp") { event.preventDefault(); changeChannel(-1); }
-        else if (key === "ArrowDown") { event.preventDefault(); changeChannel(1); }
+        if (playerFullscreen && key === "ArrowUp") { event.preventDefault(); changeChannel(-1); }
+        else if (playerFullscreen && key === "ArrowDown") { event.preventDefault(); changeChannel(1); }
         else if (playerFullscreen && (key === "Enter" || key === "ArrowLeft" || key === "ArrowRight")) {
           event.preventDefault();
           showControls();
         }
-        else if (!playerFullscreen && (key === "ArrowLeft" || key === "ArrowRight")) {
+        else if (!playerFullscreen && (key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown")) {
           event.preventDefault();
           const controls = playerControlRefs.current.filter((control): control is HTMLButtonElement => !!control && !control.disabled);
           const activeIndex = controls.indexOf(document.activeElement as HTMLButtonElement);
-          const currentIndex = activeIndex >= 0 ? activeIndex : playerControlIndex;
-          const next = Math.max(0, Math.min(controls.length - 1, currentIndex + (key === "ArrowLeft" ? -1 : 1)));
-          setPlayerControlIndex(next); controls[next]?.focus();
+          const direction = key === "ArrowLeft" || key === "ArrowUp" ? -1 : 1;
+          const next = activeIndex < 0 ? 0 : Math.max(0, Math.min(controls.length - 1, activeIndex + direction));
+          controls[next]?.focus();
         }
         return;
       }
@@ -534,14 +552,28 @@ export function LiveTv({ onMainMenu }: Props) {
       const activeElement = document.activeElement;
       const headerButtons = selectedCategory ? [categoriesButtonRef.current, mainMenuRef.current] : [mainMenuRef.current];
       const activeHeaderIndex = headerButtons.indexOf(activeElement as HTMLButtonElement);
+      const isEmptyRefreshFocused = activeElement === emptyRefreshRef.current;
       if (activeHeaderIndex >= 0) {
-        if (key === "ArrowDown" && itemCount > 0) {
-          event.preventDefault(); refs.current[currentIndex]?.focus();
-        } else if (selectedCategory && (key === "ArrowLeft" || key === "ArrowRight")) {
+        if (key === "ArrowDown") {
+          event.preventDefault();
+          if (itemCount > 0) refs.current[currentIndex]?.focus();
+          else if (emptyRefreshRef.current) emptyRefreshRef.current.focus();
+          else if (selectedCategory) headerButtons[activeHeaderIndex === 0 ? 1 : 0]?.focus();
+          else mainMenuRef.current?.focus();
+        } else if (key === "ArrowLeft" || key === "ArrowRight") {
           event.preventDefault();
           const next = Math.max(0, Math.min(headerButtons.length - 1, activeHeaderIndex + (key === "ArrowLeft" ? -1 : 1)));
           headerButtons[next]?.focus();
         }
+        return;
+      }
+      if (isEmptyRefreshFocused) {
+        if (key === "ArrowUp") { event.preventDefault(); (selectedCategory ? categoriesButtonRef.current : mainMenuRef.current)?.focus(); }
+        return;
+      }
+      if (!itemCount && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) {
+        event.preventDefault();
+        (emptyRefreshRef.current ?? (selectedCategory ? categoriesButtonRef.current : mainMenuRef.current))?.focus();
         return;
       }
       if (key === "ArrowUp" || key === "ArrowDown") {
@@ -554,13 +586,13 @@ export function LiveTv({ onMainMenu }: Props) {
         selectedCategory ? setFocusIndex(next) : setCategoryFocusIndex(next); refs.current[next]?.focus(); refs.current[next]?.scrollIntoView({ block: "nearest" });
       } else if (key === "ArrowLeft" || key === "ArrowRight") {
         event.preventDefault();
-        const next = Math.max(0, Math.min(itemCount - 1, currentIndex + (key === "ArrowLeft" ? -10 : 10)));
-        selectedCategory ? setFocusIndex(next) : setCategoryFocusIndex(next); refs.current[next]?.focus(); refs.current[next]?.scrollIntoView({ block: "nearest" });
+        if (selectedCategory) (key === "ArrowLeft" ? categoriesButtonRef.current : mainMenuRef.current)?.focus();
+        else mainMenuRef.current?.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [categories.length, categoryFocusIndex, channels, focusIndex, onMainMenu, playerControlIndex, playerFullscreen, selected, selectedCategory]);
+  }, [categories.length, categoryFocusIndex, channels, focusIndex, onMainMenu, playerFullscreen, selected, selectedCategory]);
 
   if (selected) {
     const selectedIndex = channels.findIndex((channel) => channel.id === selected.id);
@@ -584,7 +616,7 @@ export function LiveTv({ onMainMenu }: Props) {
       {hasLiveBuffer && <button type="button" disabled={bufferBehindSeconds < 1} onClick={() => playerRef.current?.seekLiveBuffer?.(liveBufferWindow!.currentSeconds - 30)} ref={(element) => { playerControlRefs.current[4] = element; }}>Rewind 30 seconds</button>}
       {hasLiveBuffer && <button type="button" disabled={atLiveEdge} onClick={() => playerRef.current?.goLive?.()} ref={(element) => { playerControlRefs.current[5] = element; }}>Go live</button>}
       <button type="button" onClick={leavePlayer} ref={(element) => { playerControlRefs.current[6] = element; }}>Back to channels</button>
-      <button type="button" onClick={selectNextAudioTrack} onFocus={() => setPlayerControlIndex(7)} ref={(element) => { playerControlRefs.current[7] = element; }}>{audioTracks.length ? `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}` : "Audio: unavailable"}</button>
+      <button type="button" onClick={selectNextAudioTrack} ref={(element) => { playerControlRefs.current[7] = element; }}>{audioTracks.length ? `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}` : "Audio: unavailable"}</button>
       <button type="button" aria-pressed={liveSubtitlesEnabled} onClick={toggleLiveSubtitles} ref={(element) => { playerControlRefs.current[8] = element; }}>{`Subtitles: ${liveSubtitlesEnabled ? "On" : "Off"}`}</button>
       {audioStatus && <span className="live-buffer-status" role="status">{audioStatus}</span>}
       <span className="playback-status">{playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}</span>
@@ -600,7 +632,7 @@ export function LiveTv({ onMainMenu }: Props) {
       {categories.map((category, index) => <button className={`live-row live-category-row ${index === categoryFocusIndex ? "remote-focused" : ""}`} type="button" key={category.id} ref={(element) => { categoryRefs.current[index] = element; }} onFocus={() => setCategoryFocusIndex(index)} onClick={() => void openCategory(category)}>
         <span className="live-category-mark" aria-hidden="true">●</span><strong>{categoryLabel(category.name)}</strong><span className="live-category-arrow" aria-hidden="true">›</span>
       </button>)}
-      {!categories.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No Finnish categories</h2><p>The provider did not return any matching Finland categories.</p><button type="button" onClick={() => void refreshCategories()}>Refresh</button></div>}
+      {!categories.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No Finnish categories</h2><p>The provider did not return any matching Finland categories.</p><button type="button" ref={emptyRefreshRef} onClick={() => void refreshCategories()}>Refresh</button></div>}
     </div>
   </main>;
 
@@ -642,7 +674,7 @@ export function LiveTv({ onMainMenu }: Props) {
           })()}
         </span>
       </button>)}
-      {!channels.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No channels</h2><p>Refresh this category to try again.</p><button type="button" onClick={() => void openCategory(selectedCategory)}>Refresh</button></div>}
+      {!channels.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No channels</h2><p>Refresh this category to try again.</p><button type="button" ref={emptyRefreshRef} onClick={() => void openCategory(selectedCategory)}>Refresh</button></div>}
     </div>
   </main>;
 }
