@@ -261,6 +261,8 @@ describe("HtmlVideoPlayer", () => {
     ];
     (video as unknown as { audioTracks: typeof tracks }).audioTracks = tracks;
     const player = new HtmlVideoPlayer(video);
+    const audioTracksChanged = vi.fn();
+    player.setEventHandlers({ onStateChange: vi.fn(), onAudioTracksChange: audioTracksChanged });
 
     expect(player.getAudioTracks()).toEqual([
       { id: "0", label: "English", language: "en", selected: true },
@@ -268,6 +270,10 @@ describe("HtmlVideoPlayer", () => {
     ]);
     expect(player.selectAudioTrack("1")).toBe(true);
     expect(tracks.map((track) => track.enabled)).toEqual([false, true]);
+    expect(audioTracksChanged).toHaveBeenLastCalledWith([
+      { id: "0", label: "English", language: "en", selected: false },
+      { id: "1", label: "Finnish", language: "fi", selected: true },
+    ]);
     expect(player.selectAudioTrack("not-a-track")).toBe(false);
     player.destroy();
   });

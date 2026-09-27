@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
+import { preferredAudioTrackIndex } from "../core/media/audio.ts";
 import { loadPlaylistUrl } from "../platform/browser/playlist-config.ts";
 import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
-import type { LiveBufferWindow, MediaPlayer, PlaybackState } from "../platform/media-player.ts";
+import type { AudioTrack, LiveBufferWindow, MediaPlayer, PlaybackState } from "../platform/media-player.ts";
 import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avplay-player.ts";
 import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "../platform/tizen/remote.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
@@ -96,9 +97,17 @@ export function LiveTv({ onMainMenu }: Props) {
   const [liveBufferWindow, setLiveBufferWindow] = useState<LiveBufferWindow | null>(null);
   const playbackStateRef = useRef<PlaybackState>("loading");
   const [liveSubtitleStatus, setLiveSubtitleStatus] = useState("");
+  const [liveSubtitlesEnabled, setLiveSubtitlesEnabled] = useState(true);
+  const liveSubtitlesEnabledRef = useRef(true);
+  const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
+  const [audioStatus, setAudioStatus] = useState("");
+  const [showLiveHint, setShowLiveHint] = useState(false);
+  const liveHintTimerRef = useRef<number | null>(null);
+  const audioSelectionManualRef = useRef(false);
   const [retryCount, setRetryCount] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const objectRef = useRef<HTMLObjectElement | null>(null);
+  const playerStageRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<MediaPlayer | null>(null);
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const categoryRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -111,6 +120,11 @@ export function LiveTv({ onMainMenu }: Props) {
 
   function reconcileEmbeddedSubtitles(player: MediaPlayer | null, tracks: import("../platform/media-player.ts").EmbeddedSubtitleTrack[]): void {
     if (!player || playbackStateRef.current !== "playing") return;
+    if (!liveSubtitlesEnabledRef.current) {
+      player.selectEmbeddedSubtitleTrack?.("off");
+      setLiveSubtitleStatus("Subtitles: Off");
+      return;
+    }
     let remaining = [...tracks];
     while (remaining.length) {
       const preferred = preferredEmbeddedSubtitleTrack(remaining);
@@ -125,7 +139,39 @@ export function LiveTv({ onMainMenu }: Props) {
     player.selectEmbeddedSubtitleTrack?.("off");
     setLiveSubtitleStatus("Subtitles unavailable");
   }
+  function reconcileAudioTracks(player: MediaPlayer | null, tracks: AudioTrack[]): void {
+    if (!player) return;
+    if (!tracks.length) {
+      if (!audioSelectionManualRef.current) setAudioTracks([]);
+      return;
+    }
+    if (audioSelectionManualRef.current) {
+      setAudioTracks(tracks);
+      return;
+    }
+    const preferred = tracks[preferredAudioTrackIndex(tracks)];
+    if (preferred && !preferred.selected && player.selectAudioTrack?.(preferred.id)) {
+      setAudioTracks(tracks.map((track) => ({ ...track, selected: track.id === preferred.id })));
+    } else setAudioTracks(tracks);
+  }
   const isTizen = isTizenRuntime() || __SUBSTREAM_TV_UI_PREVIEW__;
+
+  const hideLiveHint = () => {
+    if (liveHintTimerRef.current !== null) window.clearTimeout(liveHintTimerRef.current);
+    liveHintTimerRef.current = null;
+    setShowLiveHint(false);
+  };
+  const showLiveHintBriefly = () => {
+    if (liveHintTimerRef.current !== null) window.clearTimeout(liveHintTimerRef.current);
+    setShowLiveHint(true);
+    liveHintTimerRef.current = window.setTimeout(() => {
+      liveHintTimerRef.current = null;
+      setShowLiveHint(false);
+    }, 5_000);
+  };
+  useEffect(() => () => {
+    if (liveHintTimerRef.current !== null) window.clearTimeout(liveHintTimerRef.current);
+  }, []);
 
   const saveCache = (nextCategories: LiveCategory[], categoryId?: string, nextChannels?: LiveChannel[]) => {
     if (!cacheKey) return;
@@ -302,6 +348,8 @@ export function LiveTv({ onMainMenu }: Props) {
   useEffect(() => {
     if (!selected || !client) return;
     setHasStartedPlayback(false);
+    audioSelectionManualRef.current = false;
+    setAudioTracks([]);
     const player = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {}) : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
     if (!player) { setPlaybackState("error"); return; }
     playerRef.current = player;
@@ -309,9 +357,13 @@ export function LiveTv({ onMainMenu }: Props) {
     player.setLiveSubtitleMode?.(true);
     player.setEventHandlers({
       onStateChange: (state) => {
+        const wasPlaying = playbackStateRef.current === "playing";
         playbackStateRef.current = state;
         setPlaybackState(state);
-        if (state === "playing") setHasStartedPlayback(true);
+        if (state === "playing") {
+          setHasStartedPlayback(true);
+          if (!wasPlaying) reconcileAudioTracks(player, player.getAudioTracks?.() ?? []);
+        }
         // DVB descriptors may be found while the video is still connecting.
         // Reconcile again once playback starts so early track discovery is not
         // left unselected.
@@ -319,6 +371,7 @@ export function LiveTv({ onMainMenu }: Props) {
       },
       onLiveBufferWindowChange: setLiveBufferWindow,
       onEmbeddedSubtitleTracksChange: (tracks) => reconcileEmbeddedSubtitles(player, tracks),
+      onAudioTracksChange: (tracks) => reconcileAudioTracks(player, tracks),
     });
     player.load(client.liveStreamUrl(selected.providerStreamId, isTizenAvPlayAvailable() ? "ts" : "m3u8"));
     return () => {
@@ -372,14 +425,19 @@ export function LiveTv({ onMainMenu }: Props) {
   }, [channels, isTizen, selected]);
 
   const tune = (channel: LiveChannel) => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     setPlaybackState("loading");
     setRetryCount(0);
     setPlayerControlIndex(0);
-    setLiveSubtitleStatus("Finding Finnish subtitles…");
+    setLiveSubtitleStatus(liveSubtitlesEnabledRef.current ? "Finding Finnish subtitles…" : "Subtitles: Off");
+    setAudioTracks([]);
+    setAudioStatus("");
+    showLiveHintBriefly();
     setLiveBufferWindow(null);
     setPlayerFullscreen(true);
     if (!isTizen && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
     setSelected(channel);
+    window.requestAnimationFrame(() => playerStageRef.current?.focus());
   };
   const changeChannel = (delta: number) => {
     if (!selected) return;
@@ -389,6 +447,7 @@ export function LiveTv({ onMainMenu }: Props) {
   };
   const exitFullscreen = () => {
     setPlayerFullscreen(false);
+    hideLiveHint();
     if (!isTizen && document.fullscreenElement) {
       requestedFullscreenExitRef.current = true;
       void document.exitFullscreen().catch(() => { requestedFullscreenExitRef.current = false; });
@@ -398,8 +457,15 @@ export function LiveTv({ onMainMenu }: Props) {
     if (playerFullscreen) exitFullscreen();
     else {
       setPlayerFullscreen(true);
+      showLiveHintBriefly();
       if (!isTizen && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
+      window.requestAnimationFrame(() => playerStageRef.current?.focus());
     }
+  };
+  const showControls = () => {
+    exitFullscreen();
+    setPlayerControlIndex(7);
+    window.requestAnimationFrame(() => playerControlRefs.current[7]?.focus());
   };
   const leavePlayer = () => {
     const index = Math.max(0, channels.findIndex((channel) => channel.id === selected?.id));
@@ -407,6 +473,38 @@ export function LiveTv({ onMainMenu }: Props) {
     setSelected(null); setFocusIndex(index);
     setLiveBufferWindow(null);
     window.requestAnimationFrame(() => rowRefs.current[index]?.focus());
+  };
+  const selectNextAudioTrack = () => {
+    const player = playerRef.current;
+    const tracks = player?.getAudioTracks?.() ?? [];
+    if (!tracks.length) {
+      setAudioStatus(playbackState === "loading" || playbackState === "buffering" ? "Audio tracks are loading…" : "Audio tracks are unavailable on this device.");
+      return;
+    }
+    const selectedIndex = tracks.findIndex((track) => track.selected);
+    const next = tracks[(selectedIndex + 1) % tracks.length];
+    const wasManual = audioSelectionManualRef.current;
+    audioSelectionManualRef.current = true;
+    if (!next || !player?.selectAudioTrack?.(next.id)) {
+      audioSelectionManualRef.current = wasManual;
+      setAudioStatus("Audio track could not be changed.");
+      return;
+    }
+    setAudioTracks(tracks.map((track) => ({ ...track, selected: track.id === next.id })));
+    setAudioStatus(`Audio: ${next.label}`);
+  };
+  const toggleLiveSubtitles = () => {
+    const enabled = !liveSubtitlesEnabledRef.current;
+    liveSubtitlesEnabledRef.current = enabled;
+    setLiveSubtitlesEnabled(enabled);
+    const player = playerRef.current;
+    if (!enabled) {
+      player?.selectEmbeddedSubtitleTrack?.("off");
+      setLiveSubtitleStatus("Subtitles: Off");
+    } else {
+      setLiveSubtitleStatus("Finding Finnish subtitles…");
+      reconcileEmbeddedSubtitles(player, player?.getEmbeddedSubtitleTracks?.() ?? []);
+    }
   };
 
   useEffect(() => {
@@ -416,6 +514,10 @@ export function LiveTv({ onMainMenu }: Props) {
       if (selected) {
         if (key === "ArrowUp") { event.preventDefault(); changeChannel(-1); }
         else if (key === "ArrowDown") { event.preventDefault(); changeChannel(1); }
+        else if (playerFullscreen && (key === "Enter" || key === "ArrowLeft" || key === "ArrowRight")) {
+          event.preventDefault();
+          showControls();
+        }
         else if (!playerFullscreen && (key === "ArrowLeft" || key === "ArrowRight")) {
           event.preventDefault();
           const controls = playerControlRefs.current.filter((control): control is HTMLButtonElement => !!control && !control.disabled);
@@ -468,10 +570,11 @@ export function LiveTv({ onMainMenu }: Props) {
     const atLiveEdge = behindLiveSeconds < 3;
     return <main className={`screen player-screen live-player-screen ${playerFullscreen ? "is-fullscreen" : ""}`}>
     <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span></header>
-    <div className="player-stage">
+    <div className="player-stage" ref={playerStageRef} tabIndex={-1} onClick={() => { if (playerFullscreen) showControls(); }}>
       {isTizenAvPlayAvailable() ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
       {playbackState === "loading" || (playbackState === "buffering" && !hasStartedPlayback) ? <div className="buffering-overlay">Connecting…</div> : null}
       {playbackState === "error" && <div className="playback-error-overlay"><strong>Channel unavailable</strong><span>The stream could not be played on this device.</span></div>}
+      {playerFullscreen && showLiveHint && playbackState !== "error" && <span className="live-controls-hint">Press OK or Enter for controls</span>}
     </div>
     <div className="player-controls live-controls">
       <button type="button" disabled={selectedIndex <= 0} onClick={() => changeChannel(-1)} ref={(element) => { playerControlRefs.current[0] = element; }}>Previous channel</button>
@@ -481,6 +584,9 @@ export function LiveTv({ onMainMenu }: Props) {
       {hasLiveBuffer && <button type="button" disabled={bufferBehindSeconds < 1} onClick={() => playerRef.current?.seekLiveBuffer?.(liveBufferWindow!.currentSeconds - 30)} ref={(element) => { playerControlRefs.current[4] = element; }}>Rewind 30 seconds</button>}
       {hasLiveBuffer && <button type="button" disabled={atLiveEdge} onClick={() => playerRef.current?.goLive?.()} ref={(element) => { playerControlRefs.current[5] = element; }}>Go live</button>}
       <button type="button" onClick={leavePlayer} ref={(element) => { playerControlRefs.current[6] = element; }}>Back to channels</button>
+      <button type="button" onClick={selectNextAudioTrack} onFocus={() => setPlayerControlIndex(7)} ref={(element) => { playerControlRefs.current[7] = element; }}>{audioTracks.length ? `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}` : "Audio: unavailable"}</button>
+      <button type="button" aria-pressed={liveSubtitlesEnabled} onClick={toggleLiveSubtitles} ref={(element) => { playerControlRefs.current[8] = element; }}>{`Subtitles: ${liveSubtitlesEnabled ? "On" : "Off"}`}</button>
+      {audioStatus && <span className="live-buffer-status" role="status">{audioStatus}</span>}
       <span className="playback-status">{playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}</span>
       {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}
     </div>

@@ -66,6 +66,8 @@ export interface MediaPlayerEventHandlers {
   onStateChange(state: PlaybackState): void;
   onProgress?(progress: PlaybackProgress): void;
   onLiveBufferWindowChange?(window: LiveBufferWindow | null): void;
+  /** Fires when selectable embedded audio renditions become available or change. */
+  onAudioTracksChange?(tracks: AudioTrack[]): void;
   /** Fires when selectable embedded live subtitle renditions become available or change. */
   onEmbeddedSubtitleTracksChange?(tracks: EmbeddedSubtitleTrack[]): void;
 }

@@ -42,6 +42,7 @@ body { margin: 0; overflow-x: hidden; }
 .live-variant, .live-badge { background: #d8203a; border-radius: 999px; color: white; font-size: .75rem; font-weight: 800; padding: .35rem .6rem; }
 .live-badge { font-size: 1rem; }
 .live-controls { margin-top: 1rem; }
+.live-controls-hint { background: rgba(0, 0, 0, .7); border-radius: 999px; bottom: 1.5rem; color: #fff; font-size: .9rem; left: 50%; padding: .5rem .9rem; pointer-events: none; position: fixed; transform: translateX(-50%); white-space: nowrap; z-index: 5; }
 .live-buffer-status { color: #b8c4d7; font-size: .85rem; font-variant-numeric: tabular-nums; }
 @media (max-width: 700px) { .live-list { max-height: 70vh; } .live-row { gap: .65rem; padding: .6rem .7rem; } .live-logo { flex: 0 0 3.4rem; width: 3.4rem; } }
 @media (max-width: 700px) { .home-cards { align-items: center; flex-direction: column; } .home-card { min-height: 4.5rem; width: min(19rem, 90vw); } }

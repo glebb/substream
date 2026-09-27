@@ -4,6 +4,7 @@ import { shiftWebVttCues } from "../../core/subtitles/webvtt-timing.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
 import { createLiveDvbWorkerClient, LIVE_DVB_MAX_FRAGMENT_BYTES, type LiveDvbWorkerClient, type LiveDvbWorkerResponse, type LiveDvbWorkerTrack, type WorkerPort } from "./live-dvb-worker-protocol.ts";
 import { LiveDvbOverlay } from "./live-dvb-overlay.ts";
+import { LiveAudioTsProcessor, processLiveAudioFragment } from "./live-audio-ts.ts";
 
 const PLAYBACK_START_TIMEOUT_MS = 8_000;
 const BUFFERING_GRACE_MS = 750;
@@ -68,8 +69,36 @@ function browserSupportsAudioCodec(video: HTMLVideoElement, codec: string): bool
   try { return typeof video.canPlayType === "function" && !!video.canPlayType(codec); } catch { return false; }
 }
 
+function createAudioFragmentLoader(
+  Hls: typeof import("hls.js").default,
+  processor: LiveAudioTsProcessor,
+  onTracksChanged: () => void,
+): import("hls.js").FragmentLoaderConstructor {
+  const BaseLoader = Hls.DefaultConfig.loader;
+  class AudioFragmentLoader extends BaseLoader {
+    override load(context: import("hls.js").LoaderContext, config: import("hls.js").LoaderConfiguration, callbacks: import("hls.js").LoaderCallbacks<import("hls.js").LoaderContext>): void {
+      const success = callbacks.onSuccess;
+      super.load(context, config, {
+        ...callbacks,
+        onSuccess: (response, stats, loadedContext, networkDetails) => {
+          if (response.data instanceof ArrayBuffer) {
+            response.data = processLiveAudioFragment(response.data, processor);
+            onTracksChanged();
+          }
+          success(response, stats, loadedContext, networkDetails);
+        },
+      });
+    }
+  }
+  return AudioFragmentLoader as unknown as import("hls.js").FragmentLoaderConstructor;
+}
+
 export class HtmlVideoPlayer implements MediaPlayer {
   private hls: HlsSubtitleController | undefined;
+  private liveAudioTs = new LiveAudioTsProcessor();
+  private preferredAudioTrackId: string | undefined;
+  private sourceUrl: string | undefined;
+  private lastAudioTracksSignature: string | undefined;
   private liveSubtitleMode = false;
   private liveDvbSubtitleTracks: LiveDvbWorkerTrack[] = [];
   private selectedDvbSubtitleId: string | undefined;
@@ -116,6 +145,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
       ["loadedmetadata", () => this.applyPendingSeek()],
       ["loadedmetadata", () => this.refreshEmbeddedSubtitleTracks()],
       ["playing", () => this.refreshEmbeddedSubtitleTracks()],
+      ["loadedmetadata", () => this.emitAudioTracksChanged()],
+      ["playing", () => this.emitAudioTracksChanged()],
       ["timeupdate", () => {
         // A timeupdate is conclusive evidence that media is advancing, even
         // when Chromium briefly reports an older readyState during an HLS
@@ -132,6 +163,10 @@ export class HtmlVideoPlayer implements MediaPlayer {
     const textTracks = this.video.textTracks;
     textTracks?.addEventListener?.("addtrack", this.onNativeSubtitleTracksChanged);
     textTracks?.addEventListener?.("removetrack", this.onNativeSubtitleTracksChanged);
+    const audioTracks = audioTrackList(this.video);
+    audioTracks?.addEventListener?.("addtrack", this.onAudioTracksChanged);
+    audioTracks?.addEventListener?.("removetrack", this.onAudioTracksChanged);
+    audioTracks?.addEventListener?.("change", this.onAudioTracksChanged);
   }
 
   setEventHandlers(handlers: MediaPlayerEventHandlers | null): void {
@@ -149,6 +184,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   load(streamUrl: string): void {
+    this.sourceUrl = streamUrl;
     const generation = ++this.loadGeneration;
     this.stopCompatibilityPlayback();
     this.compatibilitySourceUrl = undefined;
@@ -159,6 +195,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.selectedNativeSubtitleTrack = undefined;
     this.hls?.destroy();
     this.hls = undefined;
+    this.liveAudioTs = new LiveAudioTsProcessor();
+    this.lastAudioTracksSignature = undefined;
+    if (this.preferredAudioTrackId) this.liveAudioTs.requestSelection(this.preferredAudioTrackId);
     this.clearPlaybackStartTimer();
     this.emit("loading");
     const supportsEac3 = browserSupportsAudioCodec(this.video, 'audio/mp4; codecs="ec-3"');
@@ -210,11 +249,17 @@ export class HtmlVideoPlayer implements MediaPlayer {
           maxBufferLength: 60,
           maxMaxBufferLength: 120,
           backBufferLength: 30,
+          ...(Hls.DefaultConfig?.loader ? { fLoader: createAudioFragmentLoader(Hls, this.liveAudioTs, () => this.emitAudioTracksChanged()) } : {}),
         });
         this.hls = hls;
         if (this.liveSubtitleMode) {
           const events = Hls.Events as unknown as Record<string, string>;
           this.initializeDvbSubtitlePath(hls, events);
+        }
+        const events = Hls.Events as unknown as Record<string, string>;
+        const audioController = hls as unknown as HlsSubtitleController;
+        for (const event of [events.AUDIO_TRACKS_UPDATED, events.AUDIO_TRACK_SWITCHED]) {
+          if (typeof event === "string") audioController.on?.(event, () => this.emitAudioTracksChanged());
         }
         hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) this.emit("error"); });
         hls.loadSource(streamUrl);
@@ -284,6 +329,19 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   getAudioTracks(): AudioTrack[] {
+    const hlsTracks = this.hls?.audioTracks;
+    const hlsResult = hlsTracks?.map((track, index) => {
+      const language = cleanTrackText(track.lang);
+      const name = cleanTrackText(track.name);
+      return { id: `hls:${index}`, label: name || language || `Audio ${index + 1}`, ...(language ? { language } : {}), selected: index === (this.hls?.audioTrack ?? -1) };
+    });
+    if (hlsResult && hlsResult.length > 1) return hlsResult;
+    const tsTracks = this.liveAudioTs.getTracks();
+    if (tsTracks.length) {
+      const selectedId = this.liveAudioTs.getSelectedId();
+      return tsTracks.map((track) => ({ id: track.id, label: track.language || track.codec, ...(track.language ? { language: track.language } : {}), codec: track.codec, selected: track.id === selectedId }));
+    }
+    if (hlsResult?.length) return hlsResult;
     // audioTracks is deliberately non-standard. Chromium currently does not expose
     // it for ordinary <video> playback, but some browser engines do.
     const tracks = audioTrackList(this.video);
@@ -300,6 +358,27 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   selectAudioTrack(id: string): boolean {
+    if (id.startsWith("hls:")) {
+      const index = Number(id.slice(4));
+      const tracks = this.hls?.audioTracks;
+      if (!tracks || !Number.isInteger(index) || index < 0 || index >= tracks.length || !this.hls) return false;
+      try {
+        this.hls.audioTrack = index;
+        this.emitAudioTracksChanged();
+        return this.hls.audioTrack === index;
+      } catch { return false; }
+    }
+    if (id.startsWith("ts:")) {
+      const selected = this.liveAudioTs.select(id);
+      if (selected) {
+        this.preferredAudioTrackId = id;
+        this.emitAudioTracksChanged();
+        // Previously buffered TS segments already contain the old audio PID.
+        // Restart live HLS so the chosen PID is demuxed on the first fragment.
+        if (this.hls && this.sourceUrl) this.load(this.sourceUrl);
+      }
+      return selected;
+    }
     const tracks = audioTrackList(this.video);
     const index = Number(id);
     if (!tracks || !Number.isInteger(index) || index < 0 || index >= tracks.length) return false;
@@ -308,7 +387,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
         const track = tracks[candidate];
         if (track) track.enabled = candidate === index;
       }
-      return tracks[index]?.enabled === true;
+      const selected = tracks[index]?.enabled === true;
+      if (selected) this.emitAudioTracksChanged();
+      return selected;
     } catch {
       return false;
     }
@@ -443,6 +524,10 @@ export class HtmlVideoPlayer implements MediaPlayer {
     const textTracks = this.video.textTracks;
     textTracks?.removeEventListener?.("addtrack", this.onNativeSubtitleTracksChanged);
     textTracks?.removeEventListener?.("removetrack", this.onNativeSubtitleTracksChanged);
+    const audioTracks = audioTrackList(this.video);
+    audioTracks?.removeEventListener?.("addtrack", this.onAudioTracksChanged);
+    audioTracks?.removeEventListener?.("removetrack", this.onAudioTracksChanged);
+    audioTracks?.removeEventListener?.("change", this.onAudioTracksChanged);
     this.selectedNativeSubtitleTrack = undefined;
     this.video.pause();
     this.video.removeAttribute("src");
@@ -607,6 +692,16 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private emitLiveBufferWindow(): void {
     this.eventHandlers?.onLiveBufferWindowChange?.(this.getLiveBufferWindow());
   }
+
+  private emitAudioTracksChanged(): void {
+    const tracks = this.getAudioTracks();
+    const signature = JSON.stringify(tracks);
+    if (signature === this.lastAudioTracksSignature) return;
+    this.lastAudioTracksSignature = signature;
+    this.eventHandlers?.onAudioTracksChange?.(tracks);
+  }
+
+  private readonly onAudioTracksChanged: EventListener = () => this.emitAudioTracksChanged();
 
   private readonly onNativeSubtitleTracksChanged: EventListener = () => {
     if (!this.liveSubtitleMode) return;
@@ -871,6 +966,8 @@ interface BrowserAudioTrack {
 interface BrowserAudioTrackList {
   length: number;
   [index: number]: BrowserAudioTrack | undefined;
+  addEventListener?(type: string, listener: EventListener): void;
+  removeEventListener?(type: string, listener: EventListener): void;
 }
 
 function audioTrackList(video: HTMLVideoElement): BrowserAudioTrackList | undefined {
@@ -890,6 +987,8 @@ interface HlsSubtitleController {
   subtitleTracks?: Array<{ lang?: string; name?: string }>;
   subtitleTrack?: number;
   subtitleDisplay?: boolean;
+  audioTracks?: Array<{ lang?: string; name?: string }>;
+  audioTrack?: number;
 }
 
 function isSubtitleKind(kind: string): boolean {

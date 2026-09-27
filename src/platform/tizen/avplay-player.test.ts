@@ -108,6 +108,9 @@ describe("TizenAvPlayPlayer", () => {
     } };
     const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
     const player = new TizenAvPlayPlayer(container, vi.fn());
+    const audioChanges = vi.fn();
+    player.setLiveSubtitleMode(true);
+    player.setEventHandlers({ onStateChange: vi.fn(), onAudioTracksChange: audioChanges });
     player.load("https://example.invalid/stream.mkv");
 
     expect(player.getAudioTracks()).toEqual([
@@ -116,6 +119,7 @@ describe("TizenAvPlayPlayer", () => {
     ]);
     expect(player.selectAudioTrack("3")).toBe(true);
     expect(setSelectTrack).toHaveBeenCalledWith("AUDIO", 3);
+    expect(audioChanges).toHaveBeenCalledWith(player.getAudioTracks());
     expect(player.selectAudioTrack("bad")).toBe(false);
     player.destroy();
   });
