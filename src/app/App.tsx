@@ -1,4 +1,4 @@
-import { FormEvent, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type FormEvent } from "react";
 import { importM3uChunks, normalizeTitle, type VodCatalogItem } from "../core/catalog/index.ts";
 import { DEFAULT_MAX_WHOLE_RESPONSE_BYTES, responseTextChunks, validateWholeResponseFallback, WholeResponseFallbackError } from "../platform/browser/fetch-chunks.ts";
 import { clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl } from "../platform/browser/playlist-config.ts";
@@ -33,7 +33,7 @@ import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type Sa
 import { companionServerUrl, CompanionConnectionError, getCompanionConnection, saveCompanionServerUrl, sendCompanionPlayback, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
 import { LiveTv } from "./LiveTv.tsx";
 
-type ScreenState = "loading" | "setup" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
+type ScreenState = "loading" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 16;
 const OPEN_SUBTITLES_BASE_URL = import.meta.env.DEV ? "/opensubtitles-api/api/v1" : undefined;
 const PLAYBACK_UNAVAILABLE_MESSAGE = "The provider or network did not return playable media for this title. Try another title or retry later.";
@@ -101,7 +101,7 @@ function artworkLookupKey(title: Pick<BrowseArtworkTarget, "title" | "searchTitl
   return `${title.contentType === "series" ? "tv" : "movie"}:${query.toLocaleLowerCase()}:${title.year ?? ""}`;
 }
 
-function VodApp({ onMainMenu }: { onMainMenu(): void }) {
+function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylistSetup(): void }) {
   const subtitleTimingAvailable = true;
   // The Chromium 47 preview exercises the TV layout and remote flow without
   // claiming that Tizen media APIs are present in the browser container.
@@ -112,9 +112,6 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
   const [playlistUrl, setPlaylistUrl] = useState(loadPlaylistUrl);
   const latestPlaylistUrlRef = useRef(playlistUrl);
   latestPlaylistUrlRef.current = playlistUrl;
-  const [showPlaylistForm, setShowPlaylistForm] = useState(() => !loadPlaylistUrl());
-  const [playlistDraft, setPlaylistDraft] = useState(loadPlaylistUrl);
-  const [editingPlaylistUrl, setEditingPlaylistUrl] = useState(false);
   const [groups, setGroups] = useState<VodGroup[]>([]);
   const [activeGroup, setActiveGroup] = useState<VodGroup | null>(null);
   const [titles, setTitles] = useState<VodCatalogItem[]>([]);
@@ -236,11 +233,7 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const browseTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const playlistUrlRef = useRef<HTMLInputElement | null>(null);
-  const playlistControlRef = useRef<HTMLElement | null>(null);
-  const importButtonRef = useRef<HTMLButtonElement | null>(null);
   const retryPlaylistRef = useRef<HTMLButtonElement | null>(null);
-  const changePlaylistRef = useRef<HTMLButtonElement | null>(null);
   const settingsOpenButtonRef = useRef<HTMLButtonElement | null>(null);
   const mainMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const browseEmptyRecoveryRef = useRef<HTMLButtonElement | null>(null);
@@ -443,7 +436,8 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
         setCatalogStatus("The local VOD catalogue is empty. Import a playlist to fill it again.");
         setState("ready");
       } else {
-        setState(playlistUrl.trim() ? "auto-import" : "setup");
+        if (playlistUrl.trim()) setState("auto-import");
+        else onPlaylistSetup();
       }
     } catch (cause) {
       setError(cause instanceof IndexedDbCatalogOpenError
@@ -494,17 +488,8 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
     if (state !== "auto-import" || startupImportStartedRef.current) return;
     startupImportStartedRef.current = true;
     if (playlistUrl.trim()) void importPlaylistUrl(playlistUrl);
-    else {
-      setShowPlaylistForm(true);
-      setState("setup");
-    }
-  }, [state]);
-
-  useEffect(() => {
-    if (showPlaylistForm && state !== "loading" && state !== "importing") {
-      (isTizen ? playlistControlRef.current : playlistUrlRef.current)?.focus();
-    }
-  }, [isTizen, showPlaylistForm, state]);
+    else onPlaylistSetup();
+  }, [onPlaylistSetup, playlistUrl, state]);
 
   const openGroup = async (group: VodGroup, targetPage: number, targetSort = sort, focusAtEnd = false) => {
     if (group.providerCategoryId && group.providerContentType) {
@@ -1030,7 +1015,7 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
         return;
       }
       if (isRedKey(event) && state === "ready" && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice && !settingsConfirmation
-        && !showPlaylistForm && !activeGroup && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
+        && !activeGroup && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
         if (toggleFocusedFavourite()) {
           event.preventDefault();
           // The focused group remains the same; only its indicator/status
@@ -1039,12 +1024,6 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
         return;
       }
       if (isBackKey(event)) {
-        if (editingPlaylistUrl && showPlaylistForm) {
-          event.preventDefault();
-          setEditingPlaylistUrl(false);
-          window.requestAnimationFrame(() => playlistControlRef.current?.focus());
-          return;
-        }
         if (showSettings && (showSettingsApiKeyEditor || editingCompanionServer || editingSubtitleLanguage || editingTmdbToken || editingTmdbApiKey)) {
           event.preventDefault();
           const target = event.target;
@@ -1129,12 +1108,12 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
           closeDetails();
           return;
         }
-        const errorFormOpen = state === "error" && showPlaylistForm;
+        const errorFormOpen = false;
         const action = resolveAppBackAction({
           settingsConfirmationOpen: Boolean(settingsConfirmation),
           resumeChoiceOpen: Boolean(resumeChoice),
           settingsOpen: showSettings,
-          playlistFormOpen: state === "ready" && showPlaylistForm,
+          playlistFormOpen: false,
           errorFormOpen,
           selectedTitle: Boolean(selectedTitle),
           playerFullscreen,
@@ -1156,8 +1135,6 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
             window.requestAnimationFrame(() => settingsOpenButtonRef.current?.focus());
             break;
           case "close-playlist-form":
-            setShowPlaylistForm(false);
-            setPlaylistDraft("");
             break;
           case "exit-fullscreen":
             exitPlayerFullscreen();
@@ -1195,19 +1172,9 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
         return;
       }
       if (state !== "ready") {
-        if (editingPlaylistUrl && event.target === playlistUrlRef.current
-          && (key === "ArrowUp" || key === "ArrowDown")) {
-          event.preventDefault();
-          setEditingPlaylistUrl(false);
-          window.requestAnimationFrame(() => playlistControlRef.current?.focus());
-          return;
-        }
-        const controls = (showPlaylistForm
-          ? [playlistControlRef.current, importButtonRef.current]
-          : [retryPlaylistRef.current, changePlaylistRef.current])
-          .filter((control): control is HTMLElement => control !== null);
+        const controls = [retryPlaylistRef.current].filter((control): control is HTMLButtonElement => control !== null);
         if (controls.length === 0) return;
-        const currentIndex = Math.max(0, controls.indexOf(document.activeElement as HTMLElement));
+        const currentIndex = Math.max(0, controls.indexOf(document.activeElement as HTMLButtonElement));
         if (key === "ArrowDown" || key === "ArrowRight") {
           event.preventDefault();
           controls[Math.min(controls.length - 1, currentIndex + 1)]?.focus();
@@ -1560,7 +1527,7 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
           browseTabRefs.current[sectionOrder.indexOf(browseCollection)]?.focus();
           return;
         }
-        const browseControls = [settingsOpenButtonRef.current, sortSelectRef.current, backToGroupsRef.current, previousPageRef.current, nextPageRef.current, changePlaylistRef.current]
+        const browseControls = [settingsOpenButtonRef.current, sortSelectRef.current, backToGroupsRef.current, previousPageRef.current, nextPageRef.current]
           .filter((control): control is HTMLSelectElement | HTMLButtonElement => control !== null && !(control instanceof HTMLButtonElement && control.disabled));
         const index = browseControls.indexOf(targetButton);
         if (key === "Enter") return;
@@ -1673,7 +1640,7 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingCompanionServer, editingDetailsEpisode, editingPlaylistUrl, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, page, pendingHistoryRemoval, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlayerTools, showPlaylistForm, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
+  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingCompanionServer, editingDetailsEpisode, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, page, pendingHistoryRemoval, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlayerTools, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
 
   useEffect(() => {
     const onKeyUp = (event: KeyboardEvent) => {
@@ -2200,10 +2167,8 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
   };
 
   const changePlaylist = () => {
-    setError("");
-    setPlaylistDraft("");
     setShowSettings(false);
-    setShowPlaylistForm(true);
+    onPlaylistSetup();
   };
 
   const performSettingsConfirmation = async () => {
@@ -2248,15 +2213,13 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
         clearFavouriteGroups();
         clearCatalogClearedMarker();
         setPlaylistUrl("");
-        setPlaylistDraft("");
         setOpenSubtitlesApiKey("");
         setContinueHistory([]);
         setFavouriteGroupIds([]);
         setCatalogStatus("");
         setSettingsStatus("");
         setShowSettings(false);
-        setShowPlaylistForm(true);
-        setState("setup");
+        onPlaylistSetup();
       }
     } catch {
       setSettingsStatus(action === "clear-catalog"
@@ -2274,7 +2237,6 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
     setState("importing");
     try {
       setPlaylistUrl(url);
-      setPlaylistDraft(url);
       savePlaylistUrl(url);
       clearCatalogClearedMarker();
       const provider = XtreamClient.fromPlaylistUrl(url);
@@ -2298,7 +2260,6 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
               store.close();
             }
             updateImportStage(categories.length.toLocaleString() + " provider categories ready");
-            setShowPlaylistForm(false);
             setState("ready");
             return;
           }
@@ -2330,7 +2291,6 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
         });
         setGroups(await store.groups());
         setProgress(result.importedItems.toLocaleString() + " VOD items imported");
-        setShowPlaylistForm(false);
         setState("ready");
       } finally {
         store.close();
@@ -2345,11 +2305,6 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
       setState("error");
     }
   }
-
-  const importPlaylist = (event: FormEvent) => {
-    event.preventDefault();
-    if (playlistDraft.trim()) void importPlaylistUrl(playlistDraft);
-  };
 
   const hasSubtitleKey = Boolean(openSubtitlesApiKey.trim());
   const registerSettingsControl = (key: SettingsControlKey, element: HTMLElement | null) => {
@@ -2412,31 +2367,12 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
   </main>;
   if (state === "importing" || state === "auto-import") return <main className="screen"><h1>Importing library</h1><p role="status" aria-live="polite">{progress}</p></main>;
 
-  const playlistSetupForm = <form onSubmit={importPlaylist}>
-    <RemoteEditable
-      label="M3U playlist URL"
-      value="Stored privately"
-      editing={editingPlaylistUrl}
-      remoteMode={isTizen}
-      controlRef={(element) => { playlistControlRef.current = element; }}
-      onBeginEdit={() => { setEditingPlaylistUrl(true); window.requestAnimationFrame(() => playlistUrlRef.current?.focus()); }}
-      renderEditor={(controlRef) => <label htmlFor="playlist-url">M3U playlist URL<input id="playlist-url" type="password" value={playlistDraft} onChange={(event) => setPlaylistDraft(event.target.value)} autoComplete="off" ref={(element) => { playlistUrlRef.current = element; controlRef(element); }} /></label>}
-    />
-    <p className="hint">Stored only in this app’s private local data. Do not use a VITE environment variable for this URL.</p>
-    <div className="settings-actions">
-      <button type="submit" ref={importButtonRef}>Import VOD library</button>
-      {(state === "ready" || playlistDraft.trim()) && <button type="button" onClick={() => { setShowPlaylistForm(false); setPlaylistDraft(""); }}>Cancel</button>}
-    </div>
-    {error && <p className="error" role="alert">{error}</p>}
-  </form>;
-
-  const isTvTitleBrowse = state === "ready" && isTizen && Boolean(activeGroup) && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice && !showPlaylistForm;
+  const isTvTitleBrowse = state === "ready" && isTizen && Boolean(activeGroup) && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice;
   const openCompanionTitle = (title: VodCatalogItem) => {
     // A paired companion is a global input source. Its selection must win over
     // whatever transient TV screen is open, including the player.
     setSettingsConfirmation(null);
     setShowSettings(false);
-    setShowPlaylistForm(false);
     setResumeChoice(null);
     setSelectedTitle(null);
     setPlayerFullscreen(false);
@@ -2448,14 +2384,13 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
   };
   return <main className={"screen" + (isTizen ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen" : "")}>
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · VIDEO-ON-DEMAND</p><h1>{state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
-      {state === "ready" && !selectedTitle && !showPlaylistForm && !showSettings && <div className="header-actions"><button type="button" ref={mainMenuButtonRef} onClick={onMainMenu}>Main menu</button><button className={settingsButtonFocused ? "remote-focused" : ""} type="button" ref={settingsOpenButtonRef} onBlur={() => setSettingsButtonFocused(false)} onFocus={() => setSettingsButtonFocused(true)} onClick={openSettings}>Settings</button></div>}
+      {state === "ready" && !selectedTitle && !showSettings && <div className="header-actions"><button type="button" ref={mainMenuButtonRef} onClick={onMainMenu}>Main menu</button><button className={settingsButtonFocused ? "remote-focused" : ""} type="button" ref={settingsOpenButtonRef} onBlur={() => setSettingsButtonFocused(false)} onFocus={() => setSettingsButtonFocused(true)} onClick={openSettings}>Settings</button></div>}
     </header>
-    {state !== "ready" && showPlaylistForm && playlistSetupForm}
-    {state !== "ready" && !showPlaylistForm && state === "error" && <section className="setup-recovery">
+    {state !== "ready" && state === "error" && <section className="setup-recovery">
       <p className="error" role="alert">{error || "The saved playlist could not be imported."}</p>
       <div className="settings-actions">
         {playlistUrl.trim() && <button type="button" ref={retryPlaylistRef} onClick={() => void importPlaylistUrl(playlistUrl)}>Retry saved playlist</button>}
-        <button type="button" ref={changePlaylistRef} onClick={() => { setError(""); setPlaylistDraft(""); setShowPlaylistForm(true); }}>Change playlist</button>
+        <button type="button" onClick={onPlaylistSetup}>Change playlist</button>
       </div>
     </section>}
     {state === "ready" && <section>
@@ -2602,7 +2537,7 @@ function VodApp({ onMainMenu }: { onMainMenu(): void }) {
           <button ref={historyCancelRef} type="button" onClick={() => { setPendingHistoryRemoval(null); window.requestAnimationFrame(() => tileRefs.current[focusIndex]?.focus()); }}>Cancel</button>
           <button ref={historyConfirmRef} className="danger-button" type="button" onClick={confirmHistoryRemoval}>Remove</button>
         </div>
-      </section></div> : showPlaylistForm ? playlistSetupForm : selectedTitle ? <section className={"player-screen " + (playerFullscreen ? "is-fullscreen" : "") + (playerFullscreen && showFullscreenControls ? " has-visible-controls" : "") + (showPlayerTools ? " show-tools" : "")} onFocusCapture={(event) => {
+      </section></div> : selectedTitle ? <section className={"player-screen " + (playerFullscreen ? "is-fullscreen" : "") + (playerFullscreen && showFullscreenControls ? " has-visible-controls" : "") + (showPlayerTools ? " show-tools" : "")} onFocusCapture={(event) => {
         const target = event.target as HTMLElement;
         const controls = playerControls();
         const index = target === playerStageRef.current || playerStageRef.current?.contains(target)
@@ -2784,10 +2719,49 @@ type AppRoute = "home" | "live" | "vod";
 export function App() {
   const [route, setRoute] = useState<AppRoute>("home");
   const [homeFocus, setHomeFocus] = useState<0 | 1>(0);
+  const [playlistSetupOpen, setPlaylistSetupOpen] = useState(() => !loadPlaylistUrl());
+  const [playlistDraft, setPlaylistDraft] = useState(loadPlaylistUrl);
+  const [playlistError, setPlaylistError] = useState("");
   const cardRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const playlistInputRef = useRef<HTMLInputElement | null>(null);
+  const playlistSaveRef = useRef<HTMLButtonElement | null>(null);
+  const openPlaylistSetup = () => {
+    setPlaylistDraft(loadPlaylistUrl());
+    setPlaylistError("");
+    setPlaylistSetupOpen(true);
+    setRoute("home");
+  };
+  const saveHomePlaylist = (event: FormEvent) => {
+    event.preventDefault();
+    const url = playlistDraft.trim();
+    if (!url) {
+      setPlaylistError("Enter your M3U playlist URL to continue.");
+      playlistInputRef.current?.focus();
+      return;
+    }
+    savePlaylistUrl(url);
+    setPlaylistDraft(url);
+    setPlaylistError("");
+    setPlaylistSetupOpen(false);
+  };
   useEffect(() => {
     if (route !== "home") return;
     const onKeyDown = (event: KeyboardEvent) => {
+      if (playlistSetupOpen) {
+        if (isBackKey(event)) event.preventDefault();
+        const key = normalizedRemoteKey(event);
+        if (key === "ArrowDown" && document.activeElement === playlistInputRef.current) {
+          event.preventDefault();
+          playlistSaveRef.current?.focus();
+        } else if (key === "ArrowUp" && document.activeElement === playlistSaveRef.current) {
+          event.preventDefault();
+          playlistInputRef.current?.focus();
+        } else if (key === "Enter" && document.activeElement === playlistSaveRef.current) {
+          event.preventDefault();
+          playlistSaveRef.current?.click();
+        }
+        return;
+      }
       const key = normalizedRemoteKey(event);
       if (key === "ArrowLeft" || key === "ArrowUp" || key === "ArrowRight" || key === "ArrowDown") {
         event.preventDefault();
@@ -2797,18 +2771,25 @@ export function App() {
       if (isBackKey(event)) event.preventDefault();
     };
     window.addEventListener("keydown", onKeyDown);
-    window.requestAnimationFrame(() => cardRefs.current[homeFocus]?.focus());
+    window.requestAnimationFrame(() => (playlistSetupOpen ? playlistInputRef.current : cardRefs.current[homeFocus])?.focus());
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [homeFocus, route]);
+  }, [homeFocus, playlistSetupOpen, route]);
   if (route === "live") return <LiveTv onMainMenu={() => { setHomeFocus(0); setRoute("home"); }} />;
-  if (route === "vod") return <div className="vod-route"><VodApp onMainMenu={() => { setHomeFocus(1); setRoute("home"); }} /></div>;
+  if (route === "vod") return <div className="vod-route"><VodApp onMainMenu={() => { setHomeFocus(1); setRoute("home"); }} onPlaylistSetup={openPlaylistSetup} /></div>;
   return <main className="app-home">
     <div className="home-brand" aria-hidden="true"><img src="./branding/substream-icon.png" alt="" /><strong>Substream</strong></div>
-    <section className="home-content" aria-label="Choose what to watch">
-      <div className="home-cards">
+    <section className="home-content" aria-label={playlistSetupOpen ? "Set up your playlist" : "Choose what to watch"}>
+      {playlistSetupOpen ? <form className="home-playlist-setup" onSubmit={saveHomePlaylist}>
+        <h1>Connect your IPTV playlist</h1>
+        <p>Enter your M3U playlist URL to use Live TV and Video-On-Demand.</p>
+        <label htmlFor="home-playlist-url">M3U playlist URL</label>
+        <input id="home-playlist-url" type="password" value={playlistDraft} onChange={(event) => setPlaylistDraft(event.target.value)} autoComplete="off" ref={playlistInputRef} />
+        <button type="submit" ref={playlistSaveRef}>Save playlist</button>
+        {playlistError && <p className="error" role="alert">{playlistError}</p>}
+      </form> : <div className="home-cards">
         <button className={`home-card ${homeFocus === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[0] = element; }} onFocus={() => setHomeFocus(0)} onClick={() => setRoute("live")}><strong>Live TV</strong></button>
         <button className={`home-card ${homeFocus === 1 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[1] = element; }} onFocus={() => setHomeFocus(1)} onClick={() => setRoute("vod")}><strong>Video-On-Demand</strong></button>
-      </div>
+      </div>}
     </section>
   </main>;
 }
