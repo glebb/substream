@@ -13,6 +13,17 @@ type Request = (url: string) => Promise<Response>;
  */
 export const NORDIC_SKYSHOWTIME_EPG_URL = "https://epgshare01.online/epgshare01/epg_ripper_SE1.xml.gz";
 
+/**
+ * Tizen must fetch the public feed directly so guide availability does not
+ * depend on the optional web-to-TV companion. Browsers can use that relay as a
+ * CORS bridge when it is explicitly configured.
+ */
+export function nordicGuideSourceUrl(options: { isTizen: boolean; relayUrl?: string; development: boolean }): string {
+  if (options.isTizen) return NORDIC_SKYSHOWTIME_EPG_URL;
+  if (options.relayUrl) return `${options.relayUrl}/api/nordic-epg`;
+  return options.development ? "/api/nordic-epg" : NORDIC_SKYSHOWTIME_EPG_URL;
+}
+
 const SKYSHOWTIME_XMLTV_IDS: Record<string, string> = {
   "skyshowtime1.se": "[SKYS1SV].SkyShowtime.1.se",
   "skyshowtime2.se": "[SKYS2SV].SkyShowtime.2.se",

@@ -63,9 +63,9 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       proxy: {
-        // EPGShare's public XMLTV endpoint does not permit browser CORS.
-        // Development uses this narrow, credential-free proxy; packaged TV
-        // builds use the configured LAN companion relay instead.
+        // Browser development needs a CORS bridge for the public XMLTV feed.
+        // Packaged Tizen requests the public guide directly and never uses the
+        // companion relay for guide data.
         "/api/nordic-epg": {
           changeOrigin: true,
           rewrite: () => "/epgshare01/epg_ripper_SE1.xml.gz",

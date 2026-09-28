@@ -124,6 +124,7 @@ function json(response, status, value) {
   response.end(body);
 }
 
+/** Browser-only CORS bridge for a public guide; TV clients fetch it directly. */
 async function nordicEpg(response) {
   try {
     const upstream = await fetch(NORDIC_EPG_URL, { signal: AbortSignal.timeout(30_000) });

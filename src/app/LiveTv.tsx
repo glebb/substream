@@ -9,7 +9,7 @@ import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avp
 import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "../platform/tizen/remote.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { DnaGuideClient } from "../platform/dna/client.ts";
-import { NordicSkyShowtimeEpgClient, skyShowtimeNordicXmltvId } from "../platform/nordic/skyshowtime-epg.ts";
+import { NordicSkyShowtimeEpgClient, nordicGuideSourceUrl, skyShowtimeNordicXmltvId } from "../platform/nordic/skyshowtime-epg.ts";
 import { companionServerUrl } from "../platform/companion/client.ts";
 import { focusTitleListItem } from "./title-list-focus.ts";
 
@@ -79,10 +79,11 @@ export function LiveTv({ onMainMenu }: Props) {
   const client = useMemo(() => XtreamClient.fromPlaylistUrl(playlistUrl), [playlistUrl]);
   const dnaClient = useMemo(() => new DnaGuideClient(), []);
   const nordicEpgClient = useMemo(() => {
-    const relay = companionServerUrl();
-    // The development server proxies this public feed because it omits CORS.
-    // Packaged clients must use the configured LAN relay instead.
-    const sourceUrl = relay ? `${relay}/api/nordic-epg` : import.meta.env.DEV ? "/api/nordic-epg" : undefined;
+    const sourceUrl = nordicGuideSourceUrl({
+      isTizen: isTizenRuntime(),
+      relayUrl: companionServerUrl(),
+      development: import.meta.env.DEV,
+    });
     return new NordicSkyShowtimeEpgClient(undefined, sourceUrl);
   }, []);
   const cacheKey = client ? CACHE_PREFIX + client.pairingFingerprint() : "";
@@ -322,9 +323,8 @@ export function LiveTv({ onMainMenu }: Props) {
         const now = Date.now();
         if (!guide) return true;
         const slots = selectCurrentAndNextProgramme(guide.programmes, now);
-        // Never preserve an empty/partial cached guide for a channel with the
-        // Nordic fallback: it may have been saved before the relay became
-        // available, and would otherwise suppress the recovery for 12 minutes.
+        // A partial cached guide for a Nordic channel may have been stored
+        // while its direct/proxied public-feed request was unavailable.
         if (skyShowtimeNordicXmltvId(channel) && (!slots.current || !slots.next)) return true;
         if (!channel.dnaChannelId) return !guideIsFresh(guide, now);
         if (!slots.current || !slots.next) {
@@ -345,9 +345,6 @@ export function LiveTv({ onMainMenu }: Props) {
           let dnaAttemptAt: number | undefined;
           const nordicXmltvId = skyShowtimeNordicXmltvId(channel);
           if (nordicXmltvId) {
-            // This guide is more reliable than the provider's often-empty
-            // short-EPG response, and fetching it first avoids a stalled
-            // provider request leaving the visible row blank.
             try { programmes = await nordicEpgClient.schedule(nordicXmltvId, channel.providerStreamId); }
             catch { try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT); } catch { /* guide remains unavailable */ } }
           } else {

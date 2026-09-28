@@ -59,10 +59,8 @@ describe("LAN relay playback route", () => {
     expect(eventResponse.json().events[0]).toMatchObject({ action: "play", selection: { kind: "movie", id: "11" } });
     expect(eventResponse.body).not.toMatch(/password|streamUrl|fixture/);
   });
-});
 
-describe("Nordic EPG relay route", () => {
-  it("relays a bounded public guide without provider credentials", async () => {
+  it("exposes the public guide only as a credential-free CORS bridge", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       headers: { get: (name) => name === "content-length" ? "3" : null },

@@ -18,11 +18,9 @@ Home opens independently of VOD catalogue initialization. Live TV fetches matchi
 
 Channel rows show the current programme, progress, remaining minutes, and the next programme for the focused row when the provider supplies short EPG data. Requests fetch up to ten programmes per channel with four concurrent requests; cached guides expire after twelve minutes or the current programme ends. Missing guide data does not prevent tuning.
 
-Finnish SkyShowtime 1 and 2 use the public EPGShare Swedish (`SE1`) XMLTV feed as their preferred guide, falling back to the provider only when that source is unavailable. The mapping is explicit: provider IDs `skyshowtime1.se` and `skyshowtime2.se` map to `[SKYS1SV].SkyShowtime.1.se` and `[SKYS2SV].SkyShowtime.2.se`. The feed's XMLTV timestamps include an explicit UTC offset and are converted to epoch time; the UI then renders in the TV/device locale. This avoids incorrectly assuming that Swedish and Finnish local clocks are identical (Finland is normally one hour ahead).
+Finnish SkyShowtime 1 and 2 prefer the public EPGShare Swedish (`SE1`) XMLTV feed, falling back to provider short EPG when it is unavailable. Packaged Tizen fetches that public feed directly; a browser can use the configured trusted-LAN companion service only as a CORS bridge. This browser-only bridge carries public guide data, not provider credentials. When a channel has a verified DNA mapping and guide data is incomplete, the app can also fill missing slots from the DNA guide. Guide failures never prevent browsing or tuning.
 
-EPGShare does not grant browser CORS access. Local Vite development proxies the public feed automatically. For packaged TV/browser use, configure the existing trusted-LAN companion server address: its public `/api/nordic-epg` route caches and relays only the compressed public guide, never playlist credentials. The route bounds response size and returns a sanitized failure.
-
-The `SE1` feed is appropriate only for the Nordic linear feed and does not establish EPG coverage for other countries. Country-specific SkyShowtime feeds must use a separately verified regional XMLTV source and an explicit provider-ID mapping; do not match by display name alone or reuse a Nordic schedule for another market.
+The trusted-LAN companion service is not required by the TV. It is an optional VOD-control transport: a web app can send a safe provider selection to a paired TV, and the TV derives the final stream URL from its own locally stored credentials. A relay outage cannot affect TV startup, browsing, subtitles, or playback; a failed direct Nordic-guide request falls back to the provider guide.
 
 Playback uses browser HLS/native video or Tizen AVPlay with provider TS output. It starts fullscreen. Up/Down changes channels without wrapping; Back returns to the list. Browser adapters expose Rewind 30 seconds and Go live when a usable live buffer exists. This is limited to the available buffer, not recording or provider catch-up. Live playback does not create VOD resume records.
 
@@ -44,7 +42,7 @@ Settings holds playlist and API configuration. If local storage is denied, confi
 | `src/core/live`, `src/core/subtitles` | Live selection/EPG and subtitle rules |
 | `src/platform/xtream`, `tmdb`, `opensubtitles` | External service adapters |
 | `src/platform/browser`, `web`, `tizen` | Playback, device storage, network and remote integration |
-| `src/platform/companion` | Search cache and LAN client |
+| `src/platform/companion` | Optional web-to-TV VOD command client and safe search-cache utilities |
 | `src/app/App.tsx`, `LiveTv.tsx` | VOD/application shell and live UI |
 | `src/app/remote-navigation.ts`, `remote-editable.tsx` | Focus decisions and deliberate TV text editing |
 | `scripts/`, `vite.config.ts`, `tizen/` | Development services, build targets, packaging and deployment |

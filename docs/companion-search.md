@@ -2,7 +2,7 @@
 
 Search is part of the normal Substream web app. It works without a TV or LAN relay. Search an imported M3U catalogue stored in the browser, or use an Xtream-compatible `get.php` playlist to refresh and search the provider's full movie and series catalogue. Choosing a result opens the regular title details view.
 
-The normal app provides Search; there is no separate companion page. The optional LAN service handles TV playback commands and the development-only MKV audio fallback. It is intended for a trusted home LAN, not as an internet-facing service or production backend.
+The normal app provides Search; there is no separate companion page. The optional LAN service handles on-demand TV playback commands, a browser-only CORS bridge for the public Nordic guide, and the development-only browser MKV audio fallback. It is not used by TV startup, VOD/live browsing, subtitles, or normal TV playback. Packaged Tizen fetches the Nordic guide directly and falls back to provider guide data if it fails. It is intended for a trusted home LAN, not as an internet-facing service or production backend.
 
 ## Search
 
@@ -44,13 +44,13 @@ TV playback requires a reachable relay, an active TV session, and a matching Xtr
 
 | Location | Data held |
 | --- | --- |
-| TV app | Playlist URL/provider credentials and final stream URLs |
+| TV app | Playlist URL/provider credentials and final stream URLs; normal TV features remain local to the TV app |
 | LAN relay memory | TV's active Xtream credentials and provider records, plus pending playback commands |
 | Web browser IndexedDB | Safe Xtream title metadata, content type, provider IDs, source fingerprint, extension/category metadata, and refresh timestamp; imported M3U catalogue data is held by the app's local catalogue store |
 | Browser provider connection | The playlist configured in that browser, used to refresh Xtream Search and resolve **Play here** |
 | Catalogue/search responses | Catalogue metadata and playback identifiers; no credentials or stream URLs |
 
-When the TV registers, it sends its playlist URL and credentials to the relay, which keeps them in memory for the active session. The relay intentionally has no authentication gate and uses plain HTTP for local development. Keep it on a trusted LAN and do not expose it to the internet. A public service needs HTTPS/WSS, authentication and rate limiting, and secure server-side credential storage. Never print or commit `.env`, playlist URLs, OpenSubtitles credentials, tokens, or signed media URLs. Tests use synthetic catalogue fixtures only.
+When the TV registers, it sends its playlist URL and credentials to the relay, which keeps them in memory for the active session. This registration is only needed for the opt-in **Play on TV** feature; an unreachable or unconfigured relay does not affect normal TV use. The relay intentionally has no authentication gate and uses plain HTTP for local development. Keep it on a trusted LAN and do not expose it to the internet. A public service needs HTTPS/WSS, authentication and rate limiting, and secure server-side credential storage. Never print or commit `.env`, playlist URLs, OpenSubtitles credentials, tokens, or signed media URLs. Tests use synthetic catalogue fixtures only.
 
 ## Troubleshooting
 
