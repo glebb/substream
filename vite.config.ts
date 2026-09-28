@@ -9,20 +9,29 @@ export default defineConfig(({ mode }) => {
   const tmdbApiKey = env.TMDB_API_KEY;
   const companionServerUrl = env.COMPANION_SERVER_URL;
   const isPersonalBuild = process.env.PERSONAL_BUILD === "1";
+  // A public build is a static browser-only artifact. It deliberately ignores
+  // all .env defaults, including the LAN-only companion URL. This keeps
+  // provider credentials and companion routing out of deployment artifacts.
+  const isPublicBuild = process.env.PUBLIC_BUILD === "1";
   const useLocalProviderProxy = process.env.CHROMIUM47_PREVIEW === "1";
   const tizenCompatibilityTarget = process.env.TIZEN_COMPAT_TARGET;
   if (tizenCompatibilityTarget !== undefined && tizenCompatibilityTarget !== "tizen6") {
     throw new Error("TIZEN_COMPAT_TARGET must be tizen6 when it is set");
   }
+  if (isPublicBuild && isPersonalBuild) {
+    throw new Error("PUBLIC_BUILD and PERSONAL_BUILD cannot be used together");
+  }
   if (isPersonalBuild && (!env.IPTV_M3U_URL || !apiKey || (!tmdbApiReadAccessToken && !tmdbApiKey))) {
     throw new Error("Personal builds require IPTV_M3U_URL, OPENSUBTITLES_API_KEY, and TMDB_API_READ_ACCESS_TOKEN or TMDB_API_KEY in .env");
   }
-  const packageDefaults = {
-    ...(companionServerUrl ? { companionServerUrl } : {}),
-    ...(isPersonalBuild
-      ? { playlistUrl: env.IPTV_M3U_URL, openSubtitlesApiKey: apiKey, tmdbApiReadAccessToken, tmdbApiKey }
-      : {}),
-  };
+  const packageDefaults = isPublicBuild
+    ? {}
+    : {
+      ...(companionServerUrl ? { companionServerUrl } : {}),
+      ...(isPersonalBuild
+        ? { playlistUrl: env.IPTV_M3U_URL, openSubtitlesApiKey: apiKey, tmdbApiReadAccessToken, tmdbApiKey }
+        : {}),
+    };
   return {
     base: "./",
     // The optional DVB decoder uses a module worker so its WASM decoder and

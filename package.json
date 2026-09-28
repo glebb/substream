@@ -8,6 +8,7 @@
     "companion:dev": "node scripts/companion-server.mjs",
     "dev:personal": "node scripts/dev-personal.mjs",
     "build": "vite build",
+    "build:public": "PUBLIC_BUILD=1 vite build",
     "build:personal": "PERSONAL_BUILD=1 vite build",
     "build:tizen": "vite build --outDir tizen/dist",
     "build:tizen:personal": "PERSONAL_BUILD=1 vite build --outDir tizen/dist",

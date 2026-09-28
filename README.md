@@ -29,6 +29,18 @@ This starts Vite with personal defaults and the LAN relay; Ctrl+C stops both. Pe
 
 Standard builds do not embed those credentials. The optional `COMPANION_SERVER_URL` address is embedded even in standard builds. Development proxies do not make client-supplied credentials secret; a distributed service needs a server-side design to protect them.
 
+## Public static deployment
+
+Use the public build for an internet-facing browser deployment:
+
+```sh
+npm run build:public
+```
+
+It always emits a static `dist/` directory, never starts the companion service, and ignores every `.env` package default. In particular, it does not embed `COMPANION_SERVER_URL`, playlist URLs, or OpenSubtitles/TMDb credentials. Deploy only `dist/`, never `scripts/companion-server.mjs` or any `/api/*` service.
+
+The web server must reject `/api/` rather than routing it through the single-page-app fallback. Browser-entered credentials remain in that browser's local storage and are not a secure vault. Provider requests are made directly from the browser, so the provider will still receive its own request URLs and credentials.
+
 ## Common commands
 
 | Command | Purpose |
