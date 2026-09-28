@@ -16,22 +16,22 @@ export function xtreamConnectionFromPlaylist(playlistUrl) {
   return { apiUrl, username, password, sourceFingerprint: stableId(apiUrl.origin + apiUrl.pathname + "\0" + username) };
 }
 
-export async function fetchXtreamAction(connection, action, parameters = {}, request = fetch) {
+export async function fetchXtreamAction(connection, action, parameters = {}, request = fetch, { timeoutMs = 30_000, signal } = {}) {
   const url = new URL(connection.apiUrl.toString());
   url.searchParams.set("username", connection.username);
   url.searchParams.set("password", connection.password);
   url.searchParams.set("action", action);
   for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
-  const response = await request(url);
+  const response = await request(url, { signal: signal ?? AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error("Provider request failed");
   const body = await response.json();
   return Array.isArray(body) ? body : body && typeof body === "object" ? body : [];
 }
 
 /** Resolve one series episode by its provider ID; only safe metadata leaves this service. */
-export async function resolveXtreamEpisode(connection, seriesId, episodeId, request = fetch) {
+export async function resolveXtreamEpisode(connection, seriesId, episodeId, request = fetch, options = {}) {
   if (!/^\d{1,20}$/.test(String(seriesId)) || !/^\d{1,20}$/.test(String(episodeId))) return null;
-  const response = await fetchXtreamAction(connection, "get_series_info", { series_id: String(seriesId) }, request);
+  const response = await fetchXtreamAction(connection, "get_series_info", { series_id: String(seriesId) }, request, options);
   const episodes = response?.episodes;
   if (!episodes || typeof episodes !== "object") return null;
   for (const season of Object.values(episodes)) {
@@ -50,10 +50,14 @@ export async function resolveXtreamEpisode(connection, seriesId, episodeId, requ
   return null;
 }
 
-export async function loadXtreamCatalogue(connection, request = fetch) {
+export async function loadXtreamCatalogue(connection, request = fetch, options = {}) {
+  const categoryConcurrency = 4;
+  const maxRecords = 50_000;
+  const deadline = options.signal ?? AbortSignal.timeout(options.timeoutMs ?? 30_000);
+  const requestOptions = { ...options, signal: deadline };
   const [movieCategories, seriesCategories] = await Promise.all([
-    fetchXtreamAction(connection, "get_vod_categories", {}, request),
-    fetchXtreamAction(connection, "get_series_categories", {}, request),
+    fetchXtreamAction(connection, "get_vod_categories", {}, request, requestOptions),
+    fetchXtreamAction(connection, "get_series_categories", {}, request, requestOptions),
   ]);
   const categories = [
     ...categoryRecords(movieCategories, "movie"),
@@ -63,28 +67,38 @@ export async function loadXtreamCatalogue(connection, request = fetch) {
   // Category requests are used because providers differ in their handling of
   // an omitted category_id. Deduplicate IDs across overlapping categories.
   const seen = new Set();
-  for (const category of categories) {
-    const action = category.contentType === "movie" ? "get_vod_streams" : "get_series";
-    const values = await fetchXtreamAction(connection, action, { category_id: category.id }, request);
-    for (const record of values) {
-      const id = String(record?.stream_id ?? record?.series_id ?? "");
-      const name = typeof record?.name === "string" ? record.name.trim() : "";
-      if (!/^\d{1,20}$/.test(id) || !name) continue;
-      const key = category.contentType + ":" + id;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const normalized = normalizeTitle(name);
-      records.push({
-        id,
-        kind: category.contentType,
-        title: normalized.title,
-        searchTitle: normalized.searchTitle,
-        year: normalized.year ?? numberOrNull(record.year),
-        extension: category.contentType === "movie" && /^[a-z0-9]{1,10}$/i.test(String(record.container_extension ?? ""))
-          ? String(record.container_extension).toLowerCase() : "mp4",
-        category: category.name,
-        sourceFingerprint: connection.sourceFingerprint,
-      });
+  for (let offset = 0; offset < categories.length && records.length < maxRecords; offset += categoryConcurrency) {
+    const batch = categories.slice(offset, offset + categoryConcurrency);
+    const settled = await Promise.allSettled(batch.map((category) => {
+      const action = category.contentType === "movie" ? "get_vod_streams" : "get_series";
+      return fetchXtreamAction(connection, action, { category_id: category.id }, request, requestOptions);
+    }));
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+    for (let batchIndex = 0; batchIndex < batch.length && records.length < maxRecords; batchIndex += 1) {
+      const category = batch[batchIndex];
+      const values = settled[batchIndex].value;
+      for (const record of values) {
+        const id = String(record?.stream_id ?? record?.series_id ?? "");
+        const name = typeof record?.name === "string" ? record.name.trim() : "";
+        if (!/^\d{1,20}$/.test(id) || !name) continue;
+        const key = category.contentType + ":" + id;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const normalized = normalizeTitle(name);
+        records.push({
+          id,
+          kind: category.contentType,
+          title: normalized.title,
+          searchTitle: normalized.searchTitle,
+          year: normalized.year ?? numberOrNull(record.year),
+          extension: category.contentType === "movie" && /^[a-z0-9]{1,10}$/i.test(String(record.container_extension ?? ""))
+            ? String(record.container_extension).toLowerCase() : "mp4",
+          category: category.name,
+          sourceFingerprint: connection.sourceFingerprint,
+        });
+        if (records.length >= maxRecords) break;
+      }
     }
   }
   return records;

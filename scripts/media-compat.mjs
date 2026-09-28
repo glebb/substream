@@ -8,6 +8,8 @@ import { randomBytes } from "node:crypto";
 
 const ffprobeDefault = process.env.FFPROBE_PATH || "ffprobe";
 const ffmpegDefault = process.env.FFMPEG_PATH || "ffmpeg";
+const MAX_MEDIA_JOB_DURATION_MS = 2 * 60 * 60 * 1000;
+const MAX_MEDIA_OUTPUT_BYTES = 2 * 1024 * 1024 * 1024;
 
 /** Keep unsupported containers/codecs out of the browser; video is always stream-copied. */
 export function mediaPlan(probe, { supportsEac3 = false, supportsAc3 = false } = {}) {
@@ -46,7 +48,7 @@ export function hlsOutputArguments(segmentPattern, playlist, plan, startSeconds 
   // A longer first fragment on resume gives the AAC encoder's first packets
   // time to join the copied video before hls.js inspects the initial TS track set.
   const segmentSeconds = String(segmentSecondsOverride ?? (startSeconds > 0 ? 2 : 1));
-  args.push("-f", "hls", "-hls_time", segmentSeconds, "-hls_playlist_type", "event", "-hls_flags", "split_by_time+temp_file", "-hls_segment_filename", segmentPattern, playlist);
+  args.push("-fs", String(MAX_MEDIA_OUTPUT_BYTES), "-f", "hls", "-hls_time", segmentSeconds, "-hls_playlist_type", "event", "-hls_flags", "split_by_time+temp_file", "-hls_segment_filename", segmentPattern, playlist);
   return args;
 }
 
@@ -152,6 +154,13 @@ export async function prepareMedia(sourceUrl, options = {}) {
   let directory;
   let process;
   let processClosed = false;
+  let durationTimer;
+  let durationExpired = false;
+  let cleanupPromise;
+  let jobCleanup;
+  const requestedDurationMs = Number(options.maxDurationMs);
+  const maxDurationMs = Number.isFinite(requestedDurationMs) && requestedDurationMs > 0
+    ? Math.min(requestedDurationMs, MAX_MEDIA_JOB_DURATION_MS) : MAX_MEDIA_JOB_DURATION_MS;
   try {
     const probe = options.probeResult || await runJson(options.ffprobePath || ffprobeDefault, ["-v", "error", "-show_streams", "-show_format", "-of", "json", proxy.url], options);
     const plan = mediaPlan(probe, { supportsEac3: options.supportsEac3, supportsAc3: options.supportsAc3 });
@@ -177,9 +186,18 @@ export async function prepareMedia(sourceUrl, options = {}) {
       args.push(...hlsOutputArguments(segment, playlist, plan, startSeconds, segmentSeconds));
       process = (options.spawnProcess || spawn)(options.ffmpegPath || ffmpegDefault, args, { stdio: "ignore" });
       process.once("close", () => { processClosed = true; });
+      if (!durationTimer) {
+        durationTimer = setTimeout(() => {
+          durationExpired = true;
+          if (jobCleanup) void jobCleanup().catch(() => undefined);
+          else if (process) void stopProcess(process, () => processClosed);
+        }, maxDurationMs);
+        durationTimer.unref?.();
+      }
       const readyDeadline = Date.now() + 15_000;
       let filesReady = false;
       while (Date.now() < readyDeadline) {
+        if (durationExpired) throw new Error("Media conversion took too long.");
         try {
           await stat(playlist);
           await stat(join(directory, "segment00000.ts"));
@@ -192,6 +210,7 @@ export async function prepareMedia(sourceUrl, options = {}) {
       }
       if (!filesReady) throw new Error("Media conversion did not start.");
       if (await segmentHasPlayableTracks(join(directory, "segment00000.ts"), options)) {
+        if (durationExpired) throw new Error("Media conversion took too long.");
         firstSegmentReady = true;
         break;
       }
@@ -201,22 +220,25 @@ export async function prepareMedia(sourceUrl, options = {}) {
       await emptyDirectory(directory);
     }
     if (!firstSegmentReady) throw new Error("Media conversion could not prepare an audio-compatible segment.");
-    let cleanupPromise;
+    if (durationExpired) throw new Error("Media conversion took too long.");
+    jobCleanup = () => {
+      cleanupPromise ??= (async () => {
+        clearTimeout(durationTimer);
+        const processStopped = stopProcess(process, () => processClosed);
+        let proxyCloseError;
+        try { await proxy.close(); } catch (error) { proxyCloseError = error; }
+        await processStopped;
+        await rm(directory, { recursive: true, force: true });
+        if (proxyCloseError) throw proxyCloseError;
+      })();
+      return cleanupPromise;
+    };
     return {
       directory, playlist, plan, process, startSeconds,
-      cleanup: () => {
-        cleanupPromise ??= (async () => {
-          const processStopped = stopProcess(process, () => processClosed);
-          let proxyCloseError;
-          try { await proxy.close(); } catch (error) { proxyCloseError = error; }
-          await processStopped;
-          await rm(directory, { recursive: true, force: true });
-          if (proxyCloseError) throw proxyCloseError;
-        })();
-        return cleanupPromise;
-      },
+      cleanup: jobCleanup,
     };
   } catch (error) {
+    clearTimeout(durationTimer);
     const processStopped = process ? stopProcess(process, () => processClosed) : Promise.resolve();
     try { await proxy.close(); } catch { /* Preserve the original sanitized media error. */ }
     await processStopped;

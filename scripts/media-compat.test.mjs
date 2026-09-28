@@ -92,6 +92,7 @@ describe("browser media compatibility planning", () => {
       expect(args.slice(args.indexOf("-ac"), args.indexOf("-ac") + 2)).toEqual(["-ac", "2"]);
       expect(args).not.toContain("-af");
       expect(args[args.indexOf("-hls_time") + 1]).toBe("1");
+      expect(args[args.indexOf("-fs") + 1]).toBe(String(2 * 1024 * 1024 * 1024));
       await runCommand(ffmpegPath, args);
 
       const manifest = await readFile(playlist, "utf8");
@@ -246,6 +247,41 @@ describe("browser media compatibility planning", () => {
     await expect(access(result.directory)).rejects.toThrow();
     expect(child.kill).toHaveBeenCalledOnce();
     expect(closeProxy).toHaveBeenCalledOnce();
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it("stops and removes a media job when its bounded duration expires", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "substream-duration-test-"));
+    const closeProxy = vi.fn(async () => undefined);
+    const child = new EventEmitter();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => {
+      setTimeout(() => { child.signalCode = "SIGTERM"; child.emit("close", null, "SIGTERM"); }, 0);
+      return true;
+    });
+    const result = await prepareMedia("https://media.example.invalid/video.mkv", {
+      maxDurationMs: 25,
+      supportsH264: true,
+      probeResult: syntheticProbe("eac3"),
+      sourceProxyFactory: async () => ({ url: "http://127.0.0.1:9999/opaque", close: closeProxy }),
+      segmentHasPlayableTracks: async () => true,
+      tempRoot,
+      spawnProcess: (_binary, args) => {
+        const playlist = args.at(-1);
+        const segmentPattern = args[args.indexOf("-hls_segment_filename") + 1];
+        mkdirSync(dirname(playlist), { recursive: true });
+        writeFileSync(playlist, "#EXTM3U\n#EXTINF:4,\nsegment00000.ts\n");
+        writeFileSync(segmentPattern.replace("%05d", "00000"), "synthetic segment");
+        return child;
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await expect(access(result.directory)).rejects.toThrow();
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(closeProxy).toHaveBeenCalledOnce();
+    await result.cleanup();
     await rm(tempRoot, { recursive: true, force: true });
   });
 

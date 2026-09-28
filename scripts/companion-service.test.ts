@@ -53,4 +53,35 @@ describe("LAN companion provider service", () => {
     currentSeries = "7";
     expect(JSON.stringify(await resolveXtreamEpisode(connection, "7", "101", request))).not.toContain("password");
   });
+
+  it("aborts hanging catalogue and episode provider calls on their deadlines", async () => {
+    const connection = xtreamConnectionFromPlaylist("https://iptv.example/get.php?username=u&password=p")!;
+    const hangingRequest = (_url: URL, { signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+    await expect(loadXtreamCatalogue(connection, hangingRequest, { timeoutMs: 10 })).rejects.toThrow();
+    await expect(resolveXtreamEpisode(connection, "7", "101", hangingRequest, { timeoutMs: 10 })).rejects.toThrow();
+  });
+
+  it("caps concurrent category fetches and the accumulated catalogue size", async () => {
+    const connection = xtreamConnectionFromPlaylist("https://iptv.example/get.php?username=u&password=p")!;
+    let activeCategoryFetches = 0;
+    let maximumCategoryFetches = 0;
+    const request = async (url: URL) => {
+      const action = url.searchParams.get("action")!;
+      if (action === "get_vod_categories") return { ok: true, json: async () => Array.from({ length: 8 }, (_, index) => ({ category_id: index, category_name: `Films ${index}` })) };
+      if (action === "get_series_categories") return { ok: true, json: async () => [] };
+      activeCategoryFetches += 1;
+      maximumCategoryFetches = Math.max(maximumCategoryFetches, activeCategoryFetches);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      activeCategoryFetches -= 1;
+      const categoryId = Number(url.searchParams.get("category_id"));
+      // Repeated IDs exercise the ceiling without retaining 50,000 fixtures.
+      return { ok: true, json: async () => Array.from({ length: 7_000 }, (_, index) => ({ stream_id: categoryId * 7_000 + index + 1, name: `Film ${categoryId}-${index}` })) };
+    };
+
+    const records = await loadXtreamCatalogue(connection, request);
+    expect(maximumCategoryFetches).toBeLessThanOrEqual(4);
+    expect(records).toHaveLength(50_000);
+  });
 });

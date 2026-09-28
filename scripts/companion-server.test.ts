@@ -1,10 +1,12 @@
 // @ts-nocheck
 import { describe, expect, it, vi } from "vitest";
+import { loadXtreamCatalogue } from "./companion-service.mjs";
 
 vi.mock("./companion-service.mjs", async (importOriginal) => {
   const original = await importOriginal();
   return {
     ...original,
+    loadXtreamCatalogue: vi.fn(async () => []),
     resolveXtreamEpisode: vi.fn(async (connection, seriesId, episodeId) => seriesId === "7" && episodeId === "101"
       ? { id: episodeId, kind: "episode", title: "Synthetic Show S01E01", year: null, extension: "mkv", sourceFingerprint: connection.sourceFingerprint }
       : null),
@@ -34,7 +36,61 @@ async function callRoute(method, path, body, origin, authorization) {
   return { ...result, json: () => JSON.parse(result.body) };
 }
 
+async function callRouteWithRequest(input, path) {
+  const result = { status: 0, headers: {}, body: "" };
+  const response = {
+    writeHead(status, headers) { result.status = status; result.headers = headers; },
+    end(value = "") { result.body = String(value); },
+  };
+  await route(input, response, new URL(`http://relay.test${path}`));
+  return { ...result, json: () => JSON.parse(result.body) };
+}
+
+async function pairedBrowser() {
+  const connected = await callRoute("POST", "/api/connect", {
+    playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture",
+  }, undefined, previousTvCredential ? `Bearer ${previousTvCredential}` : undefined);
+  const session = connected.json();
+  previousTvCredential = session.tvCredential;
+  const redeemed = await callRoute("POST", "/api/pair/redeem", { code: session.pairingCode }, "http://localhost:5173");
+  return `Bearer ${redeemed.json().browserCredential}`;
+}
+
 describe("LAN relay playback route", () => {
+  it("rejects declared and streamed oversized request bodies before parsing them", async () => {
+    let declaredBodyRead = false;
+    let declaredDestroyed = false;
+    const declared = {
+      method: "POST",
+      headers: { host: "relay.test", "content-length": String(128 * 1024 + 1) },
+      socket: { remoteAddress: "127.0.0.1" },
+      destroy() { declaredDestroyed = true; },
+      async *[Symbol.asyncIterator]() { declaredBodyRead = true; yield "{}"; },
+    };
+    const declaredResult = await callRouteWithRequest(declared, "/api/pair/select");
+    expect(declaredResult.status).toBe(400);
+    expect(declaredDestroyed).toBe(true);
+    expect(declaredBodyRead).toBe(false);
+
+    let streamedDestroyed = false;
+    let chunksRead = 0;
+    const streamed = {
+      method: "POST",
+      headers: { host: "relay.test" },
+      socket: { remoteAddress: "127.0.0.1" },
+      destroy() { streamedDestroyed = true; },
+      async *[Symbol.asyncIterator]() {
+        chunksRead += 1; yield Buffer.alloc(128 * 1024, 0x20);
+        chunksRead += 1; yield Buffer.from(" ");
+        chunksRead += 1; yield Buffer.from("ignored");
+      },
+    };
+    const streamedResult = await callRouteWithRequest(streamed, "/api/pair/select");
+    expect(streamedResult.status).toBe(400);
+    expect(streamedDestroyed).toBe(true);
+    expect(chunksRead).toBe(2);
+  });
+
   it("accepts a movie, rejects a fingerprint mismatch, and rejects an episode outside its series", async () => {
     const connected = await callRoute("POST", "/api/connect", {
       playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture",
@@ -104,6 +160,53 @@ describe("LAN relay playback route", () => {
     expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${first.tvCredential}`)).status).toBe(404);
     expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${currentRedeem.json().browserCredential}`)).status).toBe(404);
     expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${second.tvCredential}`)).status).toBe(200);
+  });
+
+  it("single-flights initial and refresh catalogue loads per paired session", async () => {
+    let resolveLoad;
+    let calls = 0;
+    loadXtreamCatalogue.mockReset().mockImplementation(() => {
+      calls += 1;
+      return new Promise((resolve) => { resolveLoad = resolve; });
+    });
+    const authorization = await pairedBrowser();
+    const initial = [
+      callRoute("GET", "/api/catalogue", undefined, undefined, authorization),
+      callRoute("GET", "/api/catalogue?refresh=1", undefined, undefined, authorization),
+      callRoute("GET", "/api/search?q=example", undefined, undefined, authorization),
+    ];
+    await vi.waitFor(() => expect(calls).toBe(1));
+    resolveLoad([{ id: "1", kind: "movie", title: "Example", searchTitle: "example", year: null, extension: "mp4", category: "Films", sourceFingerprint: "vod_fixture" }]);
+    const firstResults = await Promise.all(initial);
+    expect(firstResults.map((result) => result.status)).toEqual([200, 200, 200]);
+    expect(calls).toBe(1);
+
+    let resolveRefresh;
+    loadXtreamCatalogue.mockImplementation(() => {
+      calls += 1;
+      return new Promise((resolve) => { resolveRefresh = resolve; });
+    });
+    const refreshing = callRoute("GET", "/api/catalogue?refresh=1", undefined, undefined, authorization);
+    await vi.waitFor(() => expect(calls).toBe(2));
+    const joinedRefresh = callRoute("GET", "/api/catalogue", undefined, undefined, authorization);
+    resolveRefresh([]);
+    expect((await Promise.all([refreshing, joinedRefresh])).map((result) => result.status)).toEqual([200, 200]);
+    expect(calls).toBe(2);
+  });
+
+  it("clears failed catalogue loads so the next caller can retry", async () => {
+    let calls = 0;
+    loadXtreamCatalogue.mockReset().mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("https://provider.invalid/?username=secret&password=secret");
+      return [];
+    });
+    const authorization = await pairedBrowser();
+    const failed = await callRoute("GET", "/api/catalogue", undefined, undefined, authorization);
+    expect(failed.status).toBe(502);
+    expect(failed.body).not.toMatch(/provider\.invalid|secret/);
+    expect((await callRoute("GET", "/api/catalogue", undefined, undefined, authorization)).status).toBe(200);
+    expect(calls).toBe(2);
   });
 
   it("exposes the public guide only as a credential-free CORS bridge", async () => {

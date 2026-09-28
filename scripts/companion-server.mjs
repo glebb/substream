@@ -22,8 +22,11 @@ const SESSION_TTL_MS = 30 * 60 * 1000;
 const PAIRING_TTL_MS = 5 * 60 * 1000;
 const pairingAttempts = new Map();
 const mediaJobs = new Map();
+const MAX_ACTIVE_MEDIA_JOBS = 2;
+let activeMediaJobs = 0;
 const NORDIC_EPG_URL = "https://epgshare01.online/epgshare01/epg_ripper_SE1.xml.gz";
 const NORDIC_EPG_MAX_BYTES = 8 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES = 128 * 1024;
 
 function mediaDebug(event, fields = {}) {
   if (process.env.MEDIA_COMPAT_DEBUG !== "1") return;
@@ -73,20 +76,39 @@ async function mediaRoute(request, response, url) {
   if (!loopbackPeer(request)) return json(response, 403, { error: "Media compatibility request was rejected." });
   if (request.method === "POST" && url.pathname === "/api/media/prepare") {
     if (!sameOriginRequest(request)) return json(response, 403, { error: "Media compatibility request was rejected." });
+    if (activeMediaJobs >= MAX_ACTIVE_MEDIA_JOBS) return json(response, 503, { error: "Media conversion is busy. Try again shortly." });
+    activeMediaJobs += 1;
+    let slotTransferred = false;
     try {
       const input = await body(request);
       if (typeof input.streamUrl !== "string" || input.streamUrl.length > 8192) return json(response, 400, { error: "Media compatibility request was invalid." });
       const job = await prepareMedia(input.streamUrl, { supportsEac3: input.supportsEac3 === true, supportsAc3: input.supportsAc3 === true, supportsH264: input.supportsH264 === true, startSeconds: input.startSeconds });
       if (job.direct) return json(response, 200, { direct: true, audioConverted: false });
       const id = randomToken(18).toString("hex");
+      let slotReleased = false;
+      const releaseSlot = () => {
+        if (slotReleased) return;
+        slotReleased = true;
+        activeMediaJobs = Math.max(0, activeMediaJobs - 1);
+      };
       const record = { ...job, id, createdAt: Date.now(), lastPlaylist: await readPlaylistWithRetry(job.playlist) };
+      const jobCleanup = record.cleanup;
+      record.cleanup = async () => {
+        try { await jobCleanup(); } finally { releaseSlot(); }
+      };
       mediaJobs.set(id, record);
-      record.process.once("close", () => { record.finishedAt = Date.now(); });
+      record.process.once("close", () => { record.finishedAt = Date.now(); releaseSlot(); });
+      if ((record.process.exitCode !== null && record.process.exitCode !== undefined)
+        || (record.process.signalCode !== null && record.process.signalCode !== undefined)) {
+        record.finishedAt = Date.now();
+        releaseSlot();
+      }
+      slotTransferred = true;
       const durationSeconds = Number.isFinite(job.plan.duration) && job.plan.duration > 0 ? job.plan.duration : null;
       return json(response, 200, { url: `/api/media/${id}/index.m3u8`, audioConverted: job.plan.convertAudio, durationSeconds, startSeconds: job.startSeconds || 0 });
     } catch {
       return json(response, 422, { error: "Media could not be prepared for browser playback." });
-    }
+    } finally { if (!slotTransferred) activeMediaJobs = Math.max(0, activeMediaJobs - 1); }
   }
   const remove = url.pathname.match(/^\/api\/media\/([a-f0-9]{36})$/);
   if (request.method === "DELETE" && remove) {
@@ -158,10 +180,26 @@ async function nordicEpg(response) {
 }
 
 async function body(request) {
-  let text = "";
-  for await (const chunk of request) text += chunk;
-  if (text.length > 128 * 1024) throw new Error("Request too large");
-  return JSON.parse(text || "{}");
+  const declaredLength = request.headers?.["content-length"];
+  if (declaredLength !== undefined) {
+    const length = typeof declaredLength === "string" && /^\d+$/.test(declaredLength) ? Number(declaredLength) : NaN;
+    if (!Number.isSafeInteger(length) || length > MAX_REQUEST_BODY_BYTES) {
+      request.destroy?.();
+      throw new Error("Request body rejected");
+    }
+  }
+  const chunks = [];
+  let byteLength = 0;
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    byteLength += bytes.byteLength;
+    if (byteLength > MAX_REQUEST_BODY_BYTES) {
+      request.destroy?.();
+      throw new Error("Request body rejected");
+    }
+    chunks.push(bytes);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
 function sessionFor(value) {
@@ -211,8 +249,19 @@ function validateSelection(value) {
 }
 
 async function catalogueFor(session, refresh = false) {
-  if (refresh || !session.records) session.records = await loadXtreamCatalogue(session.connection);
-  return session.records;
+  if (session.catalogueLoad) return session.catalogueLoad;
+  if (!refresh && session.records) return session.records;
+  const load = loadXtreamCatalogue(session.connection);
+  session.catalogueLoad = load;
+  try {
+    const records = await load;
+    session.records = records;
+    return records;
+  } finally {
+    // Keep a failed refresh retryable and do not clear a newer load if one was
+    // started after this promise settled.
+    if (session.catalogueLoad === load) delete session.catalogueLoad;
+  }
 }
 
 /** The browser cache must never receive provider credentials or stream URLs. */

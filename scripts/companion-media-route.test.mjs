@@ -33,6 +33,61 @@ describe("companion media compatibility route", () => {
     expect(value).toMatchObject({ audioConverted: true, durationSeconds: 3323, startSeconds: 87 });
     expect(value.url).toMatch(/^\/api\/media\/[a-f0-9]{36}\/index\.m3u8$/);
     expect(prepareMedia).toHaveBeenCalledWith(sourceUrl, { supportsEac3: false, supportsAc3: false, supportsH264: false, startSeconds: 87 });
+    const removed = responseStub();
+    await route(request("DELETE", {}), removed, new URL(`http://localhost:8787/api/media/${value.url.split("/")[3]}`));
+    expect(removed.status).toBe(204);
+  });
+
+  it("rejects saturated FFmpeg starts and releases capacity after process failure or cleanup", async () => {
+    const makeProcess = () => {
+      const listeners = [];
+      return {
+        exitCode: null,
+        signalCode: null,
+        once: (_event, listener) => listeners.push(listener),
+        close(code = 1) { this.exitCode = code; for (const listener of listeners) listener(code, null); },
+      };
+    };
+    const firstProcess = makeProcess();
+    const secondProcess = makeProcess();
+    const cleanup = vi.fn(async () => undefined);
+    const job = (process) => ({ directory: "/tmp/synthetic-media", playlist: "/tmp/missing-playlist", plan: { convertAudio: true }, process, cleanup });
+    const pending = [];
+    prepareMedia.mockImplementation((sourceUrl) => new Promise((resolve) => pending.push({ sourceUrl, resolve })));
+
+    const first = responseStub();
+    const second = responseStub();
+    const firstRoute = route(request("POST", { streamUrl: "https://media.example.invalid/one.mkv" }), first, new URL("http://localhost:8787/api/media/prepare"));
+    const secondRoute = route(request("POST", { streamUrl: "https://media.example.invalid/two.mkv" }), second, new URL("http://localhost:8787/api/media/prepare"));
+    await vi.waitFor(() => expect(prepareMedia).toHaveBeenCalledTimes(2));
+
+    const saturated = responseStub();
+    await route(request("POST", { streamUrl: "https://media.example.invalid/three.mkv" }), saturated, new URL("http://localhost:8787/api/media/prepare"));
+    expect(saturated.status).toBe(503);
+    expect(saturated.body).not.toContain("media.example.invalid");
+    expect(prepareMedia).toHaveBeenCalledTimes(2);
+    pending[0].resolve(job(firstProcess));
+    pending[1].resolve(job(secondProcess));
+    await Promise.all([firstRoute, secondRoute]);
+
+    firstProcess.close(1);
+    prepareMedia.mockResolvedValueOnce(job(makeProcess()));
+    const available = responseStub();
+    await route(request("POST", { streamUrl: "https://media.example.invalid/three.mkv" }), available, new URL("http://localhost:8787/api/media/prepare"));
+    expect(available.status).toBe(200);
+    const thirdToken = JSON.parse(available.body).url.split("/")[3];
+    const thirdCleanup = responseStub();
+    await route(request("DELETE", {}), thirdCleanup, new URL(`http://localhost:8787/api/media/${thirdToken}`));
+
+    const secondToken = JSON.parse(second.body).url.split("/")[3];
+    cleanup.mockRejectedValueOnce(new Error("synthetic cleanup failure"));
+    const secondCleanup = responseStub();
+    await route(request("DELETE", {}), secondCleanup, new URL(`http://localhost:8787/api/media/${secondToken}`));
+    expect(secondCleanup.status).toBe(204);
+    const firstToken = JSON.parse(first.body).url.split("/")[3];
+    const firstCleanup = responseStub();
+    await route(request("DELETE", {}), firstCleanup, new URL(`http://localhost:8787/api/media/${firstToken}`));
+    expect(firstCleanup.status).toBe(204);
   });
 
   it("rejects requests that are not same-origin", async () => {
