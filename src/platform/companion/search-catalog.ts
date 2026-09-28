@@ -1,5 +1,5 @@
 import { normalizeTitle, searchTerms, type VodCatalogItem } from "../../core/catalog/index.ts";
-import { XtreamClient, XtreamRequestError, type XtreamCategory } from "../xtream/client.ts";
+import { XtreamClient, XtreamRequestAbortedError, XtreamRequestError, type XtreamCategory } from "../xtream/client.ts";
 
 export type SafeSearchRecord = {
   id: string;
@@ -55,8 +55,8 @@ export function createBrowserSearchClient(options: BrowserSearchOptions) {
       const { signal, onProgress } = options;
       throwIfAborted(signal);
       let categories: XtreamCategory[];
-      try { categories = await provider.categories(); }
-      catch (error) { throw browserProviderError(error); }
+      try { categories = await provider.categories(signal); }
+      catch (error) { throw browserProviderError(error, signal); }
       throwIfAborted(signal);
 
       const uniqueCategories = categories.filter((category, index) => categories.findIndex((item) => item.contentType === category.contentType && item.id === category.id) === index);
@@ -72,7 +72,7 @@ export function createBrowserSearchClient(options: BrowserSearchOptions) {
           const category = uniqueCategories[index];
           if (!category) return;
           try {
-            const items = category.contentType === "movie" ? await provider.movies(category.id) : await provider.series(category.id);
+            const items = category.contentType === "movie" ? await provider.movies(category.id, signal) : await provider.series(category.id, signal);
             for (const item of items) {
               const kind = category.contentType;
               const id = item.id.startsWith(`xtream:${kind}:`) ? item.id.slice(`xtream:${kind}:`.length) : "";
@@ -85,7 +85,7 @@ export function createBrowserSearchClient(options: BrowserSearchOptions) {
               });
               if (safe) { seen.add(key); records.push(safe); }
             }
-          } catch (error) { throw browserProviderError(error); }
+          } catch (error) { throw browserProviderError(error, signal); }
           completed++;
           try { onProgress?.({ completed, total: uniqueCategories.length, category: category.name }); } catch { /* Progress reporting is optional. */ }
         }
@@ -93,7 +93,7 @@ export function createBrowserSearchClient(options: BrowserSearchOptions) {
       try { await Promise.all(Array.from({ length: Math.min(4, uniqueCategories.length) }, worker)); }
       catch (error) {
         if (error instanceof Error && (error.message === "Search catalogue refresh was cancelled." || error.message.startsWith("The Xtream provider could not be reached") || error.message.startsWith("Search catalogue refresh failed"))) throw error;
-        throw browserProviderError(error);
+        throw browserProviderError(error, signal);
       }
       throwIfAborted(signal);
       const refreshedAt = Date.now();
@@ -203,7 +203,8 @@ function safeExtensionFromUrl(value: string): string {
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Search catalogue refresh was cancelled.");
 }
-function browserProviderError(error: unknown): Error {
+function browserProviderError(error: unknown, signal?: AbortSignal): Error {
+  if (signal?.aborted || error instanceof XtreamRequestAbortedError) return new Error("Search catalogue refresh was cancelled.");
   if (error instanceof XtreamRequestError && error.status) return new Error(`Search catalogue refresh failed (HTTP ${error.status}).`);
   // Fetch commonly reports blocked CORS and network failures as TypeError. Never
   // pass provider URLs or raw error messages through to the UI.

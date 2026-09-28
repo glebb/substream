@@ -63,6 +63,38 @@ describe("XtreamClient", () => {
     await expect(client.shortEpg("42")).rejects.toMatchObject({ message: "Provider request failed" });
     await expect(client.shortEpg("42")).rejects.not.toThrow("secret");
   });
+
+  it("times out a provider request that never settles with a sanitized error", async () => {
+    const request = vi.fn((_url: string, _init?: { signal?: AbortSignal }) => new Promise<never>(() => {}));
+    const client = XtreamClient.fromPlaylistUrl(
+      "https://iptv.example/get.php?username=user&password=secret",
+      request,
+      { timeoutMs: 5 },
+    );
+    if (!client) throw new Error("Expected Xtream client");
+
+    await expect(client.liveCategories()).rejects.toMatchObject({ message: "Provider request failed" });
+    expect(request.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    await expect(client.liveCategories()).rejects.not.toThrow("secret");
+  });
+
+  it("propagates caller cancellation to the request and preserves a safe abort error", async () => {
+    const request = vi.fn((_url: string, _init?: { signal?: AbortSignal }) => new Promise<never>(() => {}));
+    const client = XtreamClient.fromPlaylistUrl(
+      "https://iptv.example/get.php?username=user&password=secret",
+      request,
+      { timeoutMs: 5_000 },
+    );
+    if (!client) throw new Error("Expected Xtream client");
+    const controller = new AbortController();
+    const pending = client.liveCategories(controller.signal);
+    controller.abort(new Error("https://iptv.example/?password=secret"));
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError", message: "Provider request was cancelled" });
+    expect(request.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    await expect(pending).rejects.not.toThrow("secret");
+  });
+
   it("detects a get.php playlist and lazily maps a movie category", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => [{ stream_id: 7, name: "FI:Example Movie - 2024", container_extension: "mkv" }] });
     const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=pass&type=m3u_plus", request);
@@ -71,8 +103,8 @@ describe("XtreamClient", () => {
     const movies = await client.movies("12");
 
     expect(movies).toMatchObject([{ title: "Example Movie", year: 2024, streamUrl: "https://iptv.example/movie/user/pass/7.mkv" }]);
-    expect(request).toHaveBeenCalledWith(expect.stringContaining("player_api.php?"));
-    expect(request).toHaveBeenCalledWith(expect.stringContaining("action=get_vod_streams"));
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("player_api.php?"), expect.anything());
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("action=get_vod_streams"), expect.anything());
     expect(client.pairingFingerprint()).not.toContain("user");
   });
 

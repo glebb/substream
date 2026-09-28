@@ -1,15 +1,7 @@
 // @ts-nocheck
 import { describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
-vi.mock("./companion-service.mjs", async (importOriginal) => {
-  const original = await importOriginal();
-  return {
-    ...original,
-    resolveXtreamEpisode: vi.fn(async (connection, seriesId, episodeId) => seriesId === "7" && episodeId === "101"
-      ? { id: episodeId, kind: "episode", title: "Synthetic Show S01E01", year: null, extension: "mkv", sourceFingerprint: connection.sourceFingerprint }
-      : null),
-  };
-});
+const SOURCE_FINGERPRINT = "vod_syn";
 
 const { route } = await import("./companion-server.mjs");
 let previousTvCredential = "";
@@ -66,11 +58,11 @@ async function callRouteWithRequest(input, path) {
 
 async function pairedBrowser() {
   const connected = await callRoute("POST", "/api/connect", {
-    playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture",
+    protocolVersion: 2, sourceFingerprint: SOURCE_FINGERPRINT,
   }, undefined, previousTvCredential ? `Bearer ${previousTvCredential}` : undefined);
   const session = connected.json();
   previousTvCredential = session.tvCredential;
-  const redeemed = await callRoute("POST", "/api/pair/redeem", { code: session.pairingCode }, "http://localhost:5173");
+  const redeemed = await callRoute("POST", "/api/pair/redeem", { protocolVersion: 2, code: session.pairingCode }, "http://localhost:5173");
   return `Bearer ${redeemed.json().browserCredential}`;
 }
 
@@ -81,12 +73,61 @@ describe("LAN relay playback route", () => {
     const pending = pendingEvents({ tvCredential: previousTvCredential });
     await vi.waitFor(() => expect(pending.input.listenerCount("aborted")).toBe(1));
     const selection = { kind: "movie", id: "31", title: "Synthetic", year: null, extension: "mp4", sourceFingerprint: current.json().sourceFingerprint };
-    expect((await callRoute("POST", "/api/pair/play", { protocolVersion: 1, selection }, undefined, authorization)).status).toBe(200);
+    expect((await callRoute("POST", "/api/pair/play", { protocolVersion: 2, selection }, undefined, authorization)).status).toBe(200);
     const result = await pending.completed;
     expect(result.status).toBe(200);
     expect(result.json().events).toMatchObject([{ sequence: 1, action: "play", selection: { id: "31" } }]);
     expect(pending.input.listenerCount("aborted")).toBe(0);
     expect(pending.response.listenerCount("close")).toBe(0);
+  });
+
+  it("retains delivered events until a valid TV acknowledgement, then reports pruned history", async () => {
+    const browserAuthorization = await pairedBrowser();
+    const tvCredential = previousTvCredential;
+    const tvAuthorization = `Bearer ${tvCredential}`;
+    const active = await callRoute("GET", "/api/active", undefined, undefined, browserAuthorization);
+    const selection = { kind: "movie", id: "51", title: "Synthetic replay", year: null, extension: "mp4", sourceFingerprint: active.json().sourceFingerprint };
+    expect((await callRoute("POST", "/api/pair/play", { protocolVersion: 2, selection }, undefined, browserAuthorization)).status).toBe(200);
+
+    expect((await callRoute("POST", "/api/pair/ack", { protocolVersion: 2, sequence: 1 }, undefined, "Bearer " + "f".repeat(64))).status).toBe(404);
+    expect((await callRoute("POST", "/api/pair/ack", { protocolVersion: 2, sequence: 1 }, undefined, browserAuthorization)).status).toBe(404);
+    expect((await callRoute("POST", "/api/pair/ack", { protocolVersion: 2, sequence: -1 }, undefined, tvAuthorization)).status).toBe(400);
+    expect((await callRoute("POST", "/api/pair/ack", { protocolVersion: 2, sequence: 2 }, undefined, tvAuthorization)).status).toBe(400);
+    // The relay must not let a TV acknowledge a command until an events response delivered it.
+    expect((await callRoute("POST", "/api/pair/ack", { protocolVersion: 2, sequence: 1 }, undefined, tvAuthorization)).status).toBe(400);
+
+    const first = await callRoute("GET", "/api/pair/events?after=0&wait=0", undefined, undefined, tvAuthorization);
+    const replay = await callRoute("GET", "/api/pair/events?after=0&wait=0", undefined, undefined, tvAuthorization);
+    expect(first.json().events).toMatchObject([{ sequence: 1, selection: { id: "51" } }]);
+    expect(replay.json().events).toEqual(first.json().events);
+    const ack = await callRoute("POST", "/api/pair/ack", { protocolVersion: 2, sequence: 1 }, undefined, tvAuthorization);
+    expect(ack.status).toBe(200);
+    expect(ack.json()).toMatchObject({ acknowledged: 1 });
+
+    const pruned = await callRoute("GET", "/api/pair/events?after=1&wait=0", undefined, undefined, tvAuthorization);
+    expect(pruned.json()).toMatchObject({ events: [], retentionGap: null });
+    const staleCursor = await callRoute("GET", "/api/pair/events?after=0&wait=0", undefined, undefined, tvAuthorization);
+    expect(staleCursor.json()).toMatchObject({ events: [], retentionGap: { throughSequence: 1, firstAvailableSequence: 2 } });
+  });
+
+  it("reports queue retention gaps and resumes with retained events", async () => {
+    const browserAuthorization = await pairedBrowser();
+    const tvAuthorization = `Bearer ${previousTvCredential}`;
+    const active = await callRoute("GET", "/api/active", undefined, undefined, browserAuthorization);
+    const selection = { kind: "movie", id: "52", title: "Synthetic overflow", year: null, extension: "mp4", sourceFingerprint: active.json().sourceFingerprint };
+    for (let index = 0; index < 21; index += 1) {
+      expect((await callRoute("POST", "/api/pair/play", { protocolVersion: 2, selection }, undefined, browserAuthorization)).status).toBe(200);
+    }
+    const response = await callRoute("GET", "/api/pair/events?after=0&wait=0", undefined, undefined, tvAuthorization);
+    expect(response.json().retentionGap).toEqual({ throughSequence: 1, firstAvailableSequence: 2 });
+    expect(response.json().events).toHaveLength(20);
+    expect(response.json().events[0].sequence).toBe(2);
+    expect(response.json().events.at(-1).sequence).toBe(21);
+    expect((await callRoute("POST", "/api/pair/ack", { protocolVersion: 2, sequence: 1 }, undefined, tvAuthorization)).status).toBe(200);
+    const resumed = await callRoute("GET", "/api/pair/events?after=1&wait=0", undefined, undefined, tvAuthorization);
+    expect(resumed.json().retentionGap).toBeNull();
+    expect(resumed.json().events[0].sequence).toBe(2);
+    expect(resumed.json().events).toHaveLength(20);
   });
 
   it("times out and removes disconnected waiters", async () => {
@@ -111,7 +152,7 @@ describe("LAN relay playback route", () => {
     const tvCredential = previousTvCredential;
     const pending = pendingEvents({ tvCredential });
     await vi.waitFor(() => expect(pending.input.listenerCount("aborted")).toBe(1));
-    const replacement = await callRoute("POST", "/api/connect", { playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture" }, undefined, `Bearer ${tvCredential}`);
+    const replacement = await callRoute("POST", "/api/connect", { protocolVersion: 2, sourceFingerprint: SOURCE_FINGERPRINT }, undefined, `Bearer ${tvCredential}`);
     previousTvCredential = replacement.json().tvCredential;
     const result = await pending.completed;
     expect(result.status).toBe(404);
@@ -152,49 +193,48 @@ describe("LAN relay playback route", () => {
     expect(chunksRead).toBe(2);
   });
 
-  it("accepts a movie, rejects a fingerprint mismatch, and rejects an episode outside its series", async () => {
+  it("accepts identifier-only movie and episode commands and rejects a fingerprint mismatch", async () => {
     const connected = await callRoute("POST", "/api/connect", {
-      playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture",
+      protocolVersion: 2, sourceFingerprint: SOURCE_FINGERPRINT,
     }, undefined, previousTvCredential ? `Bearer ${previousTvCredential}` : undefined);
     const session = connected.json();
     previousTvCredential = session.tvCredential;
     expect(connected.status).toBe(200);
-    expect(session.sourceFingerprint).toMatch(/^vod_/);
-    expect(JSON.stringify(session)).not.toContain("fixture");
+    expect(session.sourceFingerprint).toBe(SOURCE_FINGERPRINT);
+    expect(connected.body).not.toMatch(/username|password|playlistUrl|iptv\.invalid/);
 
     expect(session.tvCredential).toMatch(/^[a-f0-9]{64}$/);
     expect(session.pairingCode).toMatch(/^\d{8}$/);
-    const redeemed = await callRoute("POST", "/api/pair/redeem", { code: session.pairingCode }, "http://localhost:5173");
+    const redeemed = await callRoute("POST", "/api/pair/redeem", { protocolVersion: 2, code: session.pairingCode }, "http://localhost:5173");
     const browserCredential = redeemed.json().browserCredential;
     expect(browserCredential).toMatch(/^[a-f0-9]{64}$/);
-    expect((await callRoute("POST", "/api/pair/redeem", { code: session.pairingCode }, "http://localhost:5173")).status).toBe(400);
-    const postPlay = (selection, protocolVersion = 1) => callRoute("POST", "/api/pair/play", { protocolVersion, selection }, undefined, `Bearer ${browserCredential}`);
+    expect((await callRoute("POST", "/api/pair/redeem", { protocolVersion: 2, code: session.pairingCode }, "http://localhost:5173")).status).toBe(400);
+    const postPlay = (selection, protocolVersion = 2) => callRoute("POST", "/api/pair/play", { protocolVersion, selection }, undefined, `Bearer ${browserCredential}`);
     const base = { title: "Synthetic Movie", year: 2024, extension: "mp4", sourceFingerprint: session.sourceFingerprint };
     const movie = await postPlay({ ...base, kind: "movie", id: "11", streamUrl: "https://private.invalid/token=fixture", tvCredential: "fixture" });
     expect(movie.status).toBe(200);
-    expect(movie.json()).toEqual({ protocolVersion: 1, accepted: true });
+    expect(movie.json()).toEqual({ protocolVersion: 2, accepted: true });
 
-    expect((await postPlay({ ...base, kind: "movie", id: "13" }, 2)).status).toBe(400);
+    expect((await postPlay({ ...base, kind: "movie", id: "13" }, 3)).status).toBe(400);
 
     const mismatch = await postPlay({ ...base, kind: "movie", id: "12", sourceFingerprint: "vod_mismatch" });
     expect(mismatch.status).toBe(400);
 
-    const foreignEpisode = await postPlay({ ...base, kind: "episode", id: "101", seriesId: "8", title: "Synthetic Show S01E01" });
-    expect(foreignEpisode.status).toBe(400);
-    expect(foreignEpisode.body).not.toContain("synthetic");
-    expect(foreignEpisode.body).not.toContain("fixture");
+    const episode = await postPlay({ ...base, kind: "episode", id: "101", seriesId: "8", title: "Synthetic Show S01E01", season: 1, episode: 1, extension: "mkv" });
+    expect(episode.status).toBe(200);
 
     const deniedEvents = await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${browserCredential}`);
     expect(deniedEvents.status).toBe(404);
     const eventResponse = await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${session.tvCredential}`);
-    expect(eventResponse.json().protocolVersion).toBe(1);
-    expect(eventResponse.json().events).toHaveLength(1);
+    expect(eventResponse.json().protocolVersion).toBe(2);
+    expect(eventResponse.json().events).toHaveLength(2);
     expect(eventResponse.json().events[0]).toMatchObject({ action: "play", selection: { kind: "movie", id: "11" } });
-    expect(eventResponse.body).not.toMatch(/password|streamUrl|fixture|private\.invalid|tvCredential/);
+    expect(eventResponse.body).not.toMatch(/username|password|playlistUrl|streamUrl|private\.invalid|tvCredential/);
+    expect(eventResponse.json().events.at(-1)).toMatchObject({ action: "play", selection: { kind: "episode", id: "101", seriesId: "8", season: 1, episode: 1, extension: "mkv", sourceFingerprint: SOURCE_FINGERPRINT } });
   });
 
   it("keeps TV credentials private, replaces old sessions, and rejects browser credentials for TV polling", async () => {
-    const firstConnection = await callRoute("POST", "/api/connect", { playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture" }, undefined, `Bearer ${previousTvCredential}`);
+    const firstConnection = await callRoute("POST", "/api/connect", { protocolVersion: 2, sourceFingerprint: SOURCE_FINGERPRINT }, undefined, `Bearer ${previousTvCredential}`);
     expect(firstConnection.status).toBe(200);
     const first = firstConnection.json();
     previousTvCredential = first.tvCredential;
@@ -205,21 +245,21 @@ describe("LAN relay playback route", () => {
     expect(unpairedActive.body).not.toContain(first.tvCredential);
     expect(unpairedActive.body).not.toContain(first.pairingCode);
     expect((await callRoute("GET", "/api/active", undefined, undefined, `Bearer ${first.tvCredential}`)).status).toBe(404);
-    const firstPair = await callRoute("POST", "/api/pair/redeem", { code: first.pairingCode }, "http://localhost:5173");
+    const firstPair = await callRoute("POST", "/api/pair/redeem", { protocolVersion: 2, code: first.pairingCode }, "http://localhost:5173");
     const active = await callRoute("GET", "/api/active", undefined, undefined, `Bearer ${firstPair.json().browserCredential}`);
     expect(active.status).toBe(200);
     expect(active.body).not.toContain(first.tvCredential);
     expect(active.body).not.toContain(firstPair.json().browserCredential);
     expect(active.json()).not.toHaveProperty("sessionId");
-    const deniedReplacement = await callRoute("POST", "/api/connect", { playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture" });
+    const deniedReplacement = await callRoute("POST", "/api/connect", { protocolVersion: 2, sourceFingerprint: SOURCE_FINGERPRINT });
     expect(deniedReplacement.status).toBe(404);
     expect(deniedReplacement.body).not.toMatch(/session|credential|fingerprint/i);
     expect((await callRoute("GET", "/api/active", undefined, undefined, `Bearer ${firstPair.json().browserCredential}`)).json()).toMatchObject(active.json());
-    const second = (await callRoute("POST", "/api/connect", { playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture" }, undefined, `Bearer ${first.tvCredential}`)).json();
+    const second = (await callRoute("POST", "/api/connect", { protocolVersion: 2, sourceFingerprint: SOURCE_FINGERPRINT }, undefined, `Bearer ${first.tvCredential}`)).json();
     previousTvCredential = second.tvCredential;
-    const oldRedeem = await callRoute("POST", "/api/pair/redeem", { code: first.pairingCode }, "http://localhost:5173");
+    const oldRedeem = await callRoute("POST", "/api/pair/redeem", { protocolVersion: 2, code: first.pairingCode }, "http://localhost:5173");
     expect(oldRedeem.status).toBe(400);
-    const currentRedeem = await callRoute("POST", "/api/pair/redeem", { code: second.pairingCode }, "http://localhost:5173");
+    const currentRedeem = await callRoute("POST", "/api/pair/redeem", { protocolVersion: 2, code: second.pairingCode }, "http://localhost:5173");
     expect(currentRedeem.status).toBe(200);
     expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${first.tvCredential}`)).status).toBe(404);
     expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${currentRedeem.json().browserCredential}`)).status).toBe(404);
@@ -250,7 +290,7 @@ describe("LAN relay playback route", () => {
 
   it("rejects state-changing requests from origins outside the configured allow-list", async () => {
     const response = await callRoute("POST", "/api/connect", {
-      playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture",
+      protocolVersion: 2, sourceFingerprint: SOURCE_FINGERPRINT,
     }, "https://attacker.invalid");
     expect(response.status).toBe(403);
     expect(response.headers["access-control-allow-origin"]).toBeUndefined();

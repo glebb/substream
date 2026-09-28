@@ -3,7 +3,6 @@ import { randomBytes, randomInt } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fetchXtreamAction, resolveXtreamEpisode, xtreamConnectionFromPlaylist } from "./companion-service.mjs";
 import { readFile as readMediaFile } from "node:fs/promises";
 import { randomBytes as randomToken } from "node:crypto";
 import { prepareMedia } from "./media-compat.mjs";
@@ -20,6 +19,7 @@ const distDir = join(projectDir, "dist");
 const sessions = new Map();
 let activeSessionId = "";
 const MAX_EVENT_WAIT_MS = 25_000;
+const MAX_QUEUED_EVENTS = 20;
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const PAIRING_TTL_MS = 5 * 60 * 1000;
 const pairingAttempts = new Map();
@@ -215,7 +215,7 @@ function sessionFor(value) {
 }
 
 function publicSession(session) {
-  return { expiresAt: session.createdAt + SESSION_TTL_MS, sourceFingerprint: session.connection.sourceFingerprint };
+  return { expiresAt: session.createdAt + SESSION_TTL_MS, sourceFingerprint: session.sourceFingerprint };
 }
 
 function wakeEventWaiters(session) {
@@ -285,11 +285,12 @@ export async function route(request, response, url) {
     try {
       const input = await body(request);
       if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Companion protocol version is unsupported." });
-      const connection = xtreamConnectionFromPlaylist(String(input.playlistUrl || ""));
-      if (!connection) return json(response, 400, { error: "Only Xtream provider URLs can be paired during development." });
+      const sourceFingerprint = String(input.sourceFingerprint || "");
+      if (!/^vod_[a-z0-9]{1,8}$/.test(sourceFingerprint)) return json(response, 400, { error: "A valid Xtream source fingerprint is required." });
       for (const oldSession of sessions.values()) wakeEventWaiters(oldSession);
       const session = {
-        id: randomBytes(18).toString("hex"), createdAt: Date.now(), connection, events: [], nextEvent: 1, eventWaiters: new Set(),
+        id: randomBytes(18).toString("hex"), createdAt: Date.now(), sourceFingerprint, events: [], nextEvent: 1,
+        acknowledgedSequence: 0, highestDeliveredSequence: 0, droppedThroughSequence: 0, reportedGapThroughSequence: 0, eventWaiters: new Set(),
         tvCredential: randomBytes(32).toString("hex"), browserCredential: "",
         pairingCode: String(randomInt(0, 100_000_000)).padStart(8, "0"),
         pairingExpiresAt: Date.now() + PAIRING_TTL_MS, pairingRedeemed: false,
@@ -330,10 +331,13 @@ export async function route(request, response, url) {
       const session = sessionForCredential(request, "browser");
       if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Selection protocol version is unsupported." });
       const selection = parseCompanionSelection(input.selection);
-      if (!session || !selection || selection.sourceFingerprint !== session.connection.sourceFingerprint) return json(response, 400, { error: "Selection is invalid or companion connection expired." });
+      if (!session || !selection || selection.sourceFingerprint !== session.sourceFingerprint) return json(response, 400, { error: "Selection is invalid or companion connection expired." });
       const event = { sequence: session.nextEvent++, selection };
       session.events.push(event);
-      session.events = session.events.slice(-20);
+      if (session.events.length > MAX_QUEUED_EVENTS) {
+        const removed = session.events.splice(0, session.events.length - MAX_QUEUED_EVENTS);
+        session.droppedThroughSequence = Math.max(session.droppedThroughSequence, removed.at(-1).sequence);
+      }
       wakeEventWaiters(session);
       return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, accepted: true });
     } catch { return json(response, 400, { error: "Selection request was invalid." }); }
@@ -344,18 +348,15 @@ export async function route(request, response, url) {
       const session = sessionForCredential(request, "browser");
       if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Playback protocol version is unsupported." });
       const selection = parseCompanionSelection(input.selection);
-      if (!session || !selection || selection.sourceFingerprint !== session.connection.sourceFingerprint
+      if (!session || !selection || selection.sourceFingerprint !== session.sourceFingerprint
         || !/^(movie|episode)$/.test(selection.kind)
         || (selection.kind === "episode" && !selection.seriesId)) return json(response, 400, { error: "Playback command is invalid or the TV connection expired." });
-      if (selection.kind === "episode") {
-        const resolved = await resolveXtreamEpisode(session.connection, selection.seriesId, selection.id);
-        if (!resolved || resolved.sourceFingerprint !== selection.sourceFingerprint) return json(response, 400, { error: "Episode does not match the selected provider series." });
-        selection.title = resolved.title;
-        selection.extension = resolved.extension;
-      }
       const event = { sequence: session.nextEvent++, action: "play", selection };
       session.events.push(event);
-      session.events = session.events.slice(-20);
+      if (session.events.length > MAX_QUEUED_EVENTS) {
+        const removed = session.events.splice(0, session.events.length - MAX_QUEUED_EVENTS);
+        session.droppedThroughSequence = Math.max(session.droppedThroughSequence, removed.at(-1).sequence);
+      }
       wakeEventWaiters(session);
       return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, accepted: true });
     } catch { return json(response, 400, { error: "Playback command was invalid." }); }
@@ -370,12 +371,37 @@ export async function route(request, response, url) {
     const requestedWait = Number(url.searchParams.get("wait") ?? MAX_EVENT_WAIT_MS);
     if (!Number.isFinite(requestedWait) || requestedWait < 0) return json(response, 400, { error: "Events wait duration is invalid." });
     const waitMs = Math.min(MAX_EVENT_WAIT_MS, Math.floor(requestedWait));
-    if (!session.events.some((event) => event.sequence > after) && waitMs > 0) {
+    const alreadyHasGap = after < Math.max(session.acknowledgedSequence, session.droppedThroughSequence);
+    if (!alreadyHasGap && !session.events.some((event) => event.sequence > after) && waitMs > 0) {
       const reason = await waitForCompanionEvent(request, response, session, after, waitMs);
       if (reason === "disconnect" || response.writableEnded) return;
       if (sessionForCredential(request, "tv") !== session) return json(response, 404, { error: "Companion connection expired." });
     }
-    return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, events: session.events.filter((event) => event.sequence > after), paired: session.pairingRedeemed });
+    const firstAvailableSequence = session.events[0]?.sequence ?? session.nextEvent;
+    const gapThroughSequence = Math.max(session.acknowledgedSequence, session.droppedThroughSequence);
+    const retentionGap = after < gapThroughSequence
+      ? { throughSequence: gapThroughSequence, firstAvailableSequence }
+      : null;
+    const events = session.events.filter((event) => event.sequence > Math.max(after, gapThroughSequence));
+    if (retentionGap) session.reportedGapThroughSequence = Math.max(session.reportedGapThroughSequence, gapThroughSequence);
+    if (events.length) session.highestDeliveredSequence = Math.max(session.highestDeliveredSequence, events.at(-1).sequence);
+    return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, events, paired: session.pairingRedeemed, retentionGap });
+  }
+  if (request.method === "POST" && url.pathname === "/api/pair/ack") {
+    const session = sessionForCredential(request, "tv");
+    if (!session) return json(response, 404, { error: "Companion connection expired." });
+    try {
+      const input = await body(request);
+      if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Acknowledgement protocol version is unsupported." });
+      const sequence = input.sequence;
+      const maximumAcknowledgable = Math.max(session.highestDeliveredSequence, session.reportedGapThroughSequence);
+      if (!Number.isSafeInteger(sequence) || sequence < session.acknowledgedSequence || sequence > maximumAcknowledgable) {
+        return json(response, 400, { error: "Acknowledgement sequence is invalid." });
+      }
+      session.acknowledgedSequence = sequence;
+      session.events = session.events.filter((event) => event.sequence > sequence);
+      return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, acknowledged: sequence });
+    } catch { return json(response, 400, { error: "Acknowledgement request was invalid." }); }
   }
   if (url.pathname.startsWith("/api/")) return json(response, 404, { error: "Not found" });
   return serveStatic(url.pathname, response);
@@ -424,7 +450,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     console.error(`Companion service could not listen on port ${port}: ${explanation} (${code}).`);
     process.exitCode = 1;
   });
-  if (lanEnabled) console.warn("WARNING: Companion LAN mode uses plain HTTP. Pairing codes, scoped credentials, and TV playlist credentials are unencrypted in transit; use only on a trusted network.");
+  if (lanEnabled) console.warn("WARNING: Companion LAN mode uses plain HTTP. Pairing codes and scoped credentials are unencrypted in transit; use only on a trusted network.");
   server.listen(port, host, () => {
     const address = server.address();
     const listeningPort = address && typeof address === "object" ? address.port : port;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { XtreamClient } from "../platform/xtream/client.ts";
-import { companionEvents, companionSelectionTitle, companionServerUrl, connectCompanionService, type CompanionConnection } from "../platform/companion/client.ts";
+import { acknowledgeCompanionEvents, companionEvents, companionSelectionTitle, companionServerUrl, connectCompanionService, type CompanionConnection } from "../platform/companion/client.ts";
 import type { VodCatalogItem } from "../core/catalog/index.ts";
 import type { SettingsControlKey } from "./remote-navigation.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
@@ -34,6 +34,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
   const connectInFlight = useRef(false);
   const onPlayRef = useRef(onPlay);
   const onSelectedRef = useRef(onSelected);
+  const sourceFingerprint = XtreamClient.fromPlaylistUrl(playlistUrl)?.pairingFingerprint() ?? "";
   onPlayRef.current = onPlay;
   onSelectedRef.current = onSelected;
 
@@ -66,15 +67,21 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
           const response = await companionEvents(server, connection.tvCredential, sequence.current, { signal: controller.signal });
           failures = 0;
           setPaired(response.paired);
+          if (response.retentionGap) {
+            const { throughSequence, firstAvailableSequence } = response.retentionGap;
+            await acknowledgeCompanionEvents(server, connection.tvCredential, throughSequence);
+            sequence.current = throughSequence;
+          }
+          let processedThrough = sequence.current;
           for (const event of response.events) {
-            sequence.current = Math.max(sequence.current, event.sequence);
             const client = XtreamClient.fromPlaylistUrl(playlistUrl);
             if (!client || event.selection.sourceFingerprint !== client.pairingFingerprint()) {
               setError("The selected title belongs to a different provider connection.");
+              processedThrough = event.sequence;
               continue;
             }
             const candidate = companionSelectionTitle(event.selection);
-            if (!candidate) continue;
+            if (!candidate) { processedThrough = event.sequence; continue; }
             const streamKind = candidate.contentType === "movie" ? "movie" : "series";
             candidate.streamUrl = client.streamUrlFor(streamKind, event.selection.id, event.selection.extension);
             if (event.action === "play") {
@@ -84,6 +91,14 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
               setStatus(`${candidate.title} received from companion.`);
               onSelectedRef.current(candidate);
             }
+            processedThrough = event.sequence;
+          }
+          if (processedThrough > sequence.current) {
+            await acknowledgeCompanionEvents(server, connection.tvCredential, processedThrough);
+            sequence.current = processedThrough;
+          }
+          if (response.retentionGap) {
+            setStatus(`Relay queue gap: commands through sequence ${response.retentionGap.throughSequence} expired; replay resumed at ${response.retentionGap.firstAvailableSequence}.`);
           }
         } catch (cause) {
           if (cancelled || controller.signal.aborted) break;
@@ -118,7 +133,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
     if (!silent) { setError(""); setStatus("Connecting to companion service…"); }
     try {
       const normalized = new URL((silent ? server : draft).trim()).origin;
-      const result = await connectCompanionService(normalized, playlistUrl, connection?.tvCredential);
+      const result = await connectCompanionService(normalized, sourceFingerprint, connection?.tvCredential);
       setServer(normalized); setConnection(result); sequence.current = 0; setPaired(false);
       setStatus("Pair this TV in the web app using the code below.");
     } catch (cause) { if (!silent) { setStatus(""); setError(cause instanceof Error ? cause.message : "Companion service connection failed."); } }
@@ -126,7 +141,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
   };
 
   useEffect(() => {
-    if (connection || !server.trim() || !playlistUrl.trim()) return;
+    if (connection || !server.trim() || !sourceFingerprint) return;
     let cancelled = false;
     let attempt = 0;
     let timer: number | undefined;
@@ -146,7 +161,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
     };
   // Startup and recovery are best-effort; Settings retains explicit Connect for draft addresses.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection, playlistUrl, server]);
+  }, [connection, sourceFingerprint, server]);
 
   return <section className="settings-section companion-panel">
     <h3>TV connection</h3>
@@ -161,7 +176,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
       onBeginEdit={() => onEditingServerChange(true)}
       renderEditor={(controlRef) => <label htmlFor="companion-url">LAN service address<input className={focusClass("companion-url")} data-settings-focus="companion-url" id="companion-url" type="url" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="http://192.168.1.50:8787" autoComplete="off" ref={(element) => { controlRef(element); registerControl?.("companion-url", element); }} /></label>}
     />
-    <button className={focusClass("companion-start")} data-settings-focus="companion-start" type="button" ref={(element) => registerControl?.("companion-start", element)} onClick={() => void connect()} disabled={!playlistUrl.trim() || !draft.trim()}>{connection ? "Reconnect TV connection" : "Connect TV"}</button>
+    <button className={focusClass("companion-start")} data-settings-focus="companion-start" type="button" ref={(element) => registerControl?.("companion-start", element)} onClick={() => void connect()} disabled={!sourceFingerprint || !draft.trim()}>{connection ? "Reconnect TV connection" : "Connect TV"}</button>
     {connection && <p className="companion-code" role="status"><span className="hint">Connected to {server}.{paired ? " Browser paired successfully." : " Enter this one-time code in the web app before it expires:"}</span>{!paired && <><br /><strong aria-label={`Pairing code ${connection.pairingCode}`}>{connection.pairingCode}</strong></>}</p>}
     {status && <p className="hint" role="status" aria-live="polite">{status}</p>}
     {error && <p className="error" role="alert">{error}</p>}

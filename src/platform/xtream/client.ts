@@ -3,7 +3,9 @@ import { xtreamConnectionMetadata } from "../../core/provider/xtream.ts";
 import { providerRequestUrl } from "../provider-request.ts";
 import type { EpgProgramme, LiveCategory, ProviderLiveStream } from "../../core/live/index.ts";
 
-type Request = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+type Request = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+export type XtreamClientOptions = { timeoutMs?: number };
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
 export type XtreamCategory = {
   id: string;
@@ -42,13 +44,28 @@ export class XtreamRequestError extends Error {
   }
 }
 
+/** A fixed-message cancellation error, so a provider URL cannot escape via signal.reason. */
+export class XtreamRequestAbortedError extends Error {
+  constructor() {
+    super("Provider request was cancelled");
+    this.name = "AbortError";
+  }
+}
+
 export class XtreamClient {
   private constructor(
     private readonly connection: XtreamConnection,
     private readonly request: Request,
+    private readonly timeoutMs: number,
   ) {}
 
-  static fromPlaylistUrl(playlistUrl: string, request: Request = (url) => fetch(providerRequestUrl(url))): XtreamClient | null {
+  static fromPlaylistUrl(
+    playlistUrl: string,
+    request: Request = (url, init) => fetch(providerRequestUrl(url), init),
+    options: XtreamClientOptions = {},
+  ): XtreamClient | null {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("Invalid provider request timeout");
     let playlist: URL;
     try {
       playlist = new URL(playlistUrl);
@@ -61,13 +78,13 @@ export class XtreamClient {
     const metadata = xtreamConnectionMetadata({ origin: playlist.origin, pathname: playlist.pathname, username, password });
     if (!metadata) return null;
     return new XtreamClient({ apiUrl: new URL(metadata.apiUrl), streamBaseUrl: metadata.streamBaseUrl, username, password,
-      sourceFingerprint: metadata.sourceFingerprint, pairingFingerprint: metadata.pairingFingerprint }, request);
+      sourceFingerprint: metadata.sourceFingerprint, pairingFingerprint: metadata.pairingFingerprint }, request, timeoutMs);
   }
 
-  async categories(): Promise<XtreamCategory[]> {
+  async categories(signal?: AbortSignal): Promise<XtreamCategory[]> {
     const [movies, series] = await Promise.all([
-      this.get<XtreamCategoryResponse[]>("get_vod_categories"),
-      this.get<XtreamCategoryResponse[]>("get_series_categories"),
+      this.get<XtreamCategoryResponse[]>("get_vod_categories", {}, signal),
+      this.get<XtreamCategoryResponse[]>("get_series_categories", {}, signal),
     ]);
     return [
       ...this.categoriesFor(movies, "movie"),
@@ -75,8 +92,8 @@ export class XtreamClient {
     ];
   }
 
-  async liveCategories(): Promise<LiveCategory[]> {
-    const records = await this.get<XtreamCategoryResponse[]>("get_live_categories");
+  async liveCategories(signal?: AbortSignal): Promise<LiveCategory[]> {
+    const records = await this.get<XtreamCategoryResponse[]>("get_live_categories", {}, signal);
     return (Array.isArray(records) ? records : []).flatMap((record) => {
       const id = String(record.category_id ?? "");
       const name = record.category_name?.trim();
@@ -84,8 +101,8 @@ export class XtreamClient {
     });
   }
 
-  async liveStreams(categoryId?: string): Promise<ProviderLiveStream[]> {
-    const records = await this.get<XtreamLiveResponse[]>("get_live_streams", categoryId ? { category_id: categoryId } : {});
+  async liveStreams(categoryId?: string, signal?: AbortSignal): Promise<ProviderLiveStream[]> {
+    const records = await this.get<XtreamLiveResponse[]>("get_live_streams", categoryId ? { category_id: categoryId } : {}, signal);
     return (Array.isArray(records) ? records : []).flatMap((record, index) => {
       const streamId = String(record.stream_id ?? "");
       const resolvedCategoryId = String(record.category_id ?? categoryId ?? "");
@@ -100,10 +117,10 @@ export class XtreamClient {
   }
 
   /** Returns the short guide for one channel, keyed by the provider stream ID. */
-  async shortEpg(streamId: string, limit = 10): Promise<EpgProgramme[]> {
+  async shortEpg(streamId: string, limit = 10, signal?: AbortSignal): Promise<EpgProgramme[]> {
     if (!/^\d{1,20}$/.test(streamId)) throw new Error("Invalid provider stream identifier");
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid EPG programme limit");
-    const payload = await this.get<unknown>("get_short_epg", { stream_id: streamId, limit: String(limit) });
+    const payload = await this.get<unknown>("get_short_epg", { stream_id: streamId, limit: String(limit) }, signal);
     const records = Array.isArray(payload)
       ? payload
       : payload && typeof payload === "object" && Array.isArray((payload as XtreamShortEpgPayload).epg_listings)
@@ -127,8 +144,8 @@ export class XtreamClient {
     });
   }
 
-  async movies(categoryId: string): Promise<VodCatalogItem[]> {
-    const records = await this.get<XtreamVodResponse[]>("get_vod_streams", { category_id: categoryId });
+  async movies(categoryId: string, signal?: AbortSignal): Promise<VodCatalogItem[]> {
+    const records = await this.get<XtreamVodResponse[]>("get_vod_streams", { category_id: categoryId }, signal);
     return records.flatMap((record) => {
       const id = String(record.stream_id ?? "");
       const name = record.name?.trim();
@@ -149,8 +166,8 @@ export class XtreamClient {
     });
   }
 
-  async series(categoryId: string): Promise<VodCatalogItem[]> {
-    const records = await this.get<XtreamSeriesResponse[]>("get_series", { category_id: categoryId });
+  async series(categoryId: string, signal?: AbortSignal): Promise<VodCatalogItem[]> {
+    const records = await this.get<XtreamSeriesResponse[]>("get_series", { category_id: categoryId }, signal);
     return records.flatMap((record) => {
       const id = numberOrNull(record.series_id);
       const name = record.name?.trim();
@@ -172,8 +189,8 @@ export class XtreamClient {
     });
   }
 
-  async episodes(seriesId: number, seriesName: string): Promise<VodCatalogItem[]> {
-    const payload = await this.get<XtreamSeriesInfoResponse>("get_series_info", { series_id: String(seriesId) });
+  async episodes(seriesId: number, seriesName: string, signal?: AbortSignal): Promise<VodCatalogItem[]> {
+    const payload = await this.get<XtreamSeriesInfoResponse>("get_series_info", { series_id: String(seriesId) }, signal);
     const episodes = Object.keys(payload.episodes ?? {}).sort((left, right) => Number(left) - Number(right))
       .flatMap((season) => payload.episodes?.[season] ?? []);
     return episodes.flatMap((record) => {
@@ -219,21 +236,52 @@ export class XtreamClient {
     return this.connection.pairingFingerprint;
   }
 
-  private async get<T>(action: string, parameters: Record<string, string> = {}): Promise<T> {
+  private async get<T>(action: string, parameters: Record<string, string> = {}, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) throw new XtreamRequestAbortedError();
     const url = new URL(this.connection.apiUrl.toString());
     url.searchParams.set("username", this.connection.username);
     url.searchParams.set("password", this.connection.password);
     url.searchParams.set("action", action);
     for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let removeAbortListener = () => {};
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      if (!signal || signal.aborted) return;
+      const onAbort = () => {
+        controller.abort();
+        reject(new XtreamRequestAbortedError());
+      };
+      if (signal.aborted) onAbort();
+      else {
+        signal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+      }
+    });
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort();
+        reject(new XtreamRequestError());
+      }, this.timeoutMs);
+    });
     try {
-      const response = await this.request(url.toString());
-      if (!response.ok) throw new XtreamRequestError(response.status);
-      return await response.json() as T;
+      if (signal?.aborted) throw new XtreamRequestAbortedError();
+      const operation = async (): Promise<T> => {
+        const response = await this.request(url.toString(), { signal: controller.signal });
+        if (!response.ok) throw new XtreamRequestError(response.status);
+        return await response.json() as T;
+      };
+      return await Promise.race([operation(), cancelled, timedOut]);
     } catch (error) {
       if (error instanceof XtreamRequestError) throw error;
+      if (signal?.aborted) throw new XtreamRequestAbortedError();
+      if (error instanceof XtreamRequestAbortedError) throw error;
       // Request implementations often include the full credential-bearing URL in
       // their errors. Never let that URL escape the provider adapter.
       throw new XtreamRequestError();
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+      removeAbortListener();
     }
   }
 

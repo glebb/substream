@@ -3,7 +3,7 @@
  * Selection/event objects contain provider identifiers and display metadata
  * only. Credentials belong in authorization headers; stream URLs stay local.
  */
-export const COMPANION_PROTOCOL_VERSION = 1;
+export const COMPANION_PROTOCOL_VERSION = 2;
 
 const ID_PATTERN = /^\d{1,20}$/;
 const EXTENSION_PATTERN = /^[a-z0-9]{1,10}$/i;
@@ -11,8 +11,7 @@ const KINDS = new Set(["movie", "series", "episode"]);
 const ACTIONS = new Set(["play", "select"]);
 
 export function supportsCompanionProtocolVersion(value) {
-  // Missing version is accepted only as the pre-versioned v1 wire format.
-  return value === undefined || value === COMPANION_PROTOCOL_VERSION;
+  return value === COMPANION_PROTOCOL_VERSION;
 }
 
 /** Return a new allow-listed selection, or null when required fields are invalid. */
@@ -58,5 +57,13 @@ export function parseCompanionEventsPayload(value) {
     || !Array.isArray(value.events) || typeof value.paired !== "boolean") return null;
   const events = value.events.map(parseCompanionEvent);
   if (events.some((event) => event === null)) return null;
-  return { protocolVersion: COMPANION_PROTOCOL_VERSION, events, paired: value.paired };
+  let retentionGap = null;
+  if (value.retentionGap !== undefined && value.retentionGap !== null) {
+    const gap = value.retentionGap;
+    if (typeof gap !== "object" || Array.isArray(gap)
+      || !Number.isSafeInteger(gap.throughSequence) || gap.throughSequence < 1
+      || !Number.isSafeInteger(gap.firstAvailableSequence) || gap.firstAvailableSequence <= gap.throughSequence) return null;
+    retentionGap = { throughSequence: gap.throughSequence, firstAvailableSequence: gap.firstAvailableSequence };
+  }
+  return { protocolVersion: COMPANION_PROTOCOL_VERSION, events, paired: value.paired, retentionGap };
 }

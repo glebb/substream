@@ -4,7 +4,7 @@ import { packageDefaults } from "../package-defaults.ts";
 
 export type CompanionSelection = CompanionSelectionWire;
 export type CompanionEvent = CompanionEventWire;
-export type CompanionEventsResult = { protocolVersion: 1; events: CompanionEvent[]; paired: boolean };
+export type CompanionEventsResult = { protocolVersion: 2; events: CompanionEvent[]; paired: boolean; retentionGap: { throughSequence: number; firstAvailableSequence: number } | null };
 export type CompanionConnection = { tvCredential: string; pairingCode: string; pairingExpiresAt: number; expiresAt: number; sourceFingerprint: string };
 export type ActiveCompanionConnection = { expiresAt: number; sourceFingerprint: string };
 export type BrowserCompanionConnection = ActiveCompanionConnection & { browserCredential: string };
@@ -45,19 +45,20 @@ export function saveCompanionServerUrl(value: string): string {
   return origin;
 }
 
-export async function connectCompanionService(server: string, playlistUrl: string, tvCredential?: string): Promise<CompanionConnection> {
+export async function connectCompanionService(server: string, sourceFingerprint: string, tvCredential?: string): Promise<CompanionConnection> {
+  if (!/^vod_[a-z0-9]{1,8}$/.test(sourceFingerprint)) throw new Error("A valid Xtream source is required to connect this TV.");
   let response: Response;
   let value: Partial<CompanionConnection> & { protocolVersion?: unknown };
   try {
     response = await fetch(server + "/api/connect", {
     method: "POST",
     headers: { "content-type": "application/json", ...(tvCredential ? { authorization: `Bearer ${tvCredential}` } : {}) },
-    body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, playlistUrl }),
+    body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, sourceFingerprint }),
     });
     value = await response.json() as typeof value;
   } catch { throw new Error("Companion service response was unavailable or invalid."); }
   if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{64}$/i.test(value.tvCredential || "") || !/^\d{8}$/.test(value.pairingCode || "")
-    || !Number.isFinite(value.pairingExpiresAt) || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint) throw new Error("TV connection could not be established.");
+    || !Number.isFinite(value.pairingExpiresAt) || !Number.isFinite(value.expiresAt) || value.sourceFingerprint !== sourceFingerprint) throw new Error("TV connection could not be established.");
   return value as CompanionConnection;
 }
 
@@ -113,6 +114,22 @@ export async function companionEvents(server: string, tvCredential: string, afte
   const parsed = parseCompanionEventsPayload(value);
   if (!parsed) throw new Error("Companion service response was unavailable or invalid.");
   return parsed;
+}
+
+/** Acknowledge a locally processed event sequence for this TV session. */
+export async function acknowledgeCompanionEvents(server: string, tvCredential: string, sequence: number): Promise<void> {
+  if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error("Could not acknowledge companion events.");
+  let response: Response;
+  let value: { acknowledged?: unknown; protocolVersion?: unknown };
+  try {
+    response = await fetch(server + "/api/pair/ack", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${tvCredential}` },
+      body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, sequence }),
+    });
+    value = await response.json() as typeof value;
+  } catch { throw new Error("Could not acknowledge companion events."); }
+  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || value.acknowledged !== sequence) throw new Error("Could not acknowledge companion events.");
 }
 
 /** Converts a safe provider selection into a local playback candidate. */

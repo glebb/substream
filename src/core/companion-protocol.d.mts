@@ -1,4 +1,4 @@
-export const COMPANION_PROTOCOL_VERSION: 1;
+export const COMPANION_PROTOCOL_VERSION: 2;
 
 export type CompanionSelectionWire = {
   kind: "movie" | "series" | "episode";
@@ -19,9 +19,10 @@ export type CompanionEventWire = {
 };
 
 export type CompanionEventsPayload = {
-  protocolVersion: 1;
+  protocolVersion: 2;
   events: CompanionEventWire[];
   paired: boolean;
+  retentionGap: { throughSequence: number; firstAvailableSequence: number } | null;
 };
 
 export function supportsCompanionProtocolVersion(value: unknown): boolean;

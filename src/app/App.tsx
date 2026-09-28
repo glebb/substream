@@ -12,7 +12,7 @@ import { OpenSubtitlesClient, OpenSubtitlesRequestError, type SubtitleResult } f
 import { rankSubtitleResults } from "../core/subtitles/rank.ts";
 import { adjustSubtitleOffsetSeconds } from "../core/subtitles/timing.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
-import { providerRequestUrl } from "../platform/provider-request.ts";
+import { fetchProviderPlaylist } from "../platform/browser/provider-fetch.ts";
 import { clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimingOffset } from "../platform/browser/subtitle-timing-config.ts";
 import { clearSubtitlePreferences, loadSubtitlePreferences, saveLastSubtitleLanguage, saveSubtitleFontSize, saveSubtitleLanguagePreference, type SubtitleLanguage } from "../platform/browser/subtitle-preferences.ts";
 import { clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared } from "../platform/browser/catalog-preferences.ts";
@@ -2298,7 +2298,7 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
           updateImportStage("Provider catalogue unavailable. Falling back to M3U import…");
         }
       }
-      const response = await fetch(providerRequestUrl(url), { cache: "no-store" });
+      const response = await fetchProviderPlaylist(url);
       if (!response.ok) {
         updateImportStage("Playlist server responded with HTTP " + response.status);
         throw new Error("Playlist request failed");

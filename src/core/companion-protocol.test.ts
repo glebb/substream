@@ -4,7 +4,7 @@ import { COMPANION_PROTOCOL_VERSION, parseCompanionEvent, parseCompanionEventsPa
 describe("companion protocol", () => {
   const selection = { kind: "episode", id: 42, seriesId: "7", title: "  Example  ", year: 2024, season: 1, episode: 2, extension: "MKV", sourceFingerprint: "vod_test" };
 
-  it("normalizes selections into an allow-listed safe v1 shape", () => {
+  it("normalizes selections into an allow-listed safe v2 shape", () => {
     const parsed = parseCompanionSelection({ ...selection, streamUrl: "https://private.invalid/token=secret", browserCredential: "secret", password: "secret" });
     expect(parsed).toEqual({ kind: "episode", id: "42", seriesId: "7", title: "Example", year: 2024, season: 1, episode: 2, extension: "mkv", sourceFingerprint: "vod_test" });
     expect(JSON.stringify(parsed)).not.toMatch(/streamUrl|credential|password|private\.invalid/);
@@ -17,16 +17,19 @@ describe("companion protocol", () => {
   });
 
   it("validates versioned events and rejects unsupported versions or malformed events", () => {
-    expect(COMPANION_PROTOCOL_VERSION).toBe(1);
-    expect(supportsCompanionProtocolVersion(undefined)).toBe(true);
-    expect(supportsCompanionProtocolVersion(1)).toBe(true);
-    expect(supportsCompanionProtocolVersion(2)).toBe(false);
+    expect(COMPANION_PROTOCOL_VERSION).toBe(2);
+    expect(supportsCompanionProtocolVersion(undefined)).toBe(false);
+    expect(supportsCompanionProtocolVersion(1)).toBe(false);
+    expect(supportsCompanionProtocolVersion(2)).toBe(true);
     const event = parseCompanionEvent({ sequence: 3, action: "play", selection, debug: "discard me" });
     expect(event).toMatchObject({ sequence: 3, action: "play", selection: { id: "42" } });
     expect(event).not.toHaveProperty("debug");
     expect(parseCompanionEvent({ sequence: 0, selection })).toBeNull();
     expect(parseCompanionEvent({ sequence: 3, action: "launch", selection })).toBeNull();
-    expect(parseCompanionEventsPayload({ protocolVersion: 2, events: [], paired: true })).toBeNull();
-    expect(parseCompanionEventsPayload({ protocolVersion: 1, events: [{ sequence: -1, selection }], paired: true })).toBeNull();
+    expect(parseCompanionEventsPayload({ protocolVersion: 1, events: [], paired: true })).toBeNull();
+    expect(parseCompanionEventsPayload({ protocolVersion: 2, events: [{ sequence: -1, selection }], paired: true })).toBeNull();
+    expect(parseCompanionEventsPayload({ protocolVersion: 2, events: [], paired: true, retentionGap: { throughSequence: 2, firstAvailableSequence: 3 } }))
+      .toMatchObject({ retentionGap: { throughSequence: 2, firstAvailableSequence: 3 } });
+    expect(parseCompanionEventsPayload({ protocolVersion: 2, events: [], paired: true, retentionGap: { throughSequence: 3, firstAvailableSequence: 3 } })).toBeNull();
   });
 });

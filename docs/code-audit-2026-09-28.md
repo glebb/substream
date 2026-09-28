@@ -24,7 +24,7 @@ The TV remains the authority for its local playlist credentials and resolves the
 
 ### P0 — unauthenticated relay control plane
 
-At the time of this audit, the relay bound to `0.0.0.0` by default, used permissive CORS, and exposed session state and catalogue reads. Since then, loopback-by-default, explicit LAN opt-in, strict configured-origin checks, and separate scoped TV/browser credentials have been implemented. The remaining control plane uses scoped credentials for active-session checks, event reads, and `pair/select` / `pair/play`; catalogue/search routes have since been removed. Request rate limits beyond pairing attempts and replay protection remain open concerns.
+At the time of this audit, the relay bound to `0.0.0.0` by default, used permissive CORS, and exposed session state and catalogue reads. Since then, loopback-by-default, explicit LAN opt-in, strict configured-origin checks, separate scoped TV/browser credentials, long polling, and event acknowledgements have been implemented. The remaining control plane uses scoped credentials for active-session checks, event reads, acknowledgements, and `pair/select` / `pair/play`; catalogue/search routes have since been removed. Per-endpoint rate limits, durable device identities, and TLS remain open concerns.
 
 Impact at audit time: any party that could reach the relay could replace the TV session, obtain the active session identifier, enumerate provider metadata, or enqueue playback. The implemented controls reduce that exposure, though LAN mode still sends credentials over plain HTTP and the relay remains a development service.
 
@@ -36,11 +36,11 @@ Plan:
 4. Authenticate every command, add expiry/rotation, request rate limits and audit-safe security events. Add adversarial route tests for cross-origin reads/writes, session replacement, replay, and multiple clients.
 5. For any non-development distribution, terminate TLS and bind the authorization model to a real user/device identity.
 
-### P0 — credential-bearing playlist crosses an unencrypted LAN boundary
+### Resolved P0 — registration no longer transmits playlist credentials
 
-The TV calls `POST /api/connect` with `playlistUrl`; `xtreamConnectionFromPlaylist` extracts username/password and the relay keeps them in process memory for the session. The TV accepts both HTTP and HTTPS relay addresses, and the default deployment documentation uses HTTP. The Tizen manifest also permits all origins.
+The TV now derives its account-aware source fingerprint locally and sends only that safe identifier to `POST /api/connect`; the relay stores no playlist URL, provider username, password, or stream URL. The relay no longer resolves episode metadata against the provider. A paired browser sends identifiers and display metadata, and the TV verifies the fingerprint and derives the final stream URL locally.
 
-Impact: a passive LAN observer or active network attacker can obtain/replace the playlist credentials; a compromised relay process has usable provider credentials. This conflicts with the otherwise sound goal that stream URLs never cross the playback-command boundary.
+Residual risk: pairing and scoped session credentials still travel over plain HTTP in explicit LAN mode, so TLS is required before any non-development distribution. A source fingerprint matches an account/provider context but is not cryptographic proof of account ownership; paired browser commands are therefore still validated by the TV/provider at playback time.
 
 Plan:
 
@@ -51,7 +51,7 @@ Plan:
 
 ### P1 — resource exhaustion and SSRF-adjacent media conversion surface
 
-The media endpoint is restricted to loopback peers and now uses a global FFmpeg job cap, request-size limits, a 2 GiB output cap, bounded job/probe/source-transfer durations, DNS-pinned egress, and special-use IP rejection. Episode resolution also has a provider deadline. Per-client conversion quotas, metrics, and broader route-level observability remain open work.
+The media endpoint is restricted to loopback peers and now uses a global FFmpeg job cap, request-size limits, a 2 GiB output cap, bounded job/probe/source-transfer durations, DNS-pinned egress, and special-use IP rejection. Per-client conversion quotas, metrics, and broader route-level observability remain open work.
 
 Plan:
 
@@ -115,18 +115,18 @@ Plan: replace polling with push/long-poll and exponential backoff; stream files 
 | --- | --- | --- | --- | --- |
 | Normal M3U/Xtream VOD and live playback | Holds playlist and resolves stream URLs; AVPlay/browser adapter plays | Not required | Optional independent client | Provider reachability and device codec support only |
 | Browser catalogue search / Play here | Not required | Not required | Fetches its own Xtream catalogue; caches safe metadata | Browser needs its own matching playlist/provider access |
-| Play on TV | Registers credential-bearing playlist, polls events, verifies provider fingerprint, constructs final URL locally | Holds session/provider credentials and queues commands | Reads active session and sends identifier-only selection | Requires reachable relay, active TV session, same provider/account fingerprint, 30-minute renewal, and polling delivery |
+| Play on TV | Registers a locally derived source fingerprint and constructs the final URL locally | Holds source fingerprint, scoped session credentials, and queued commands | Redeems one-time code and sends identifier-only selection | Requires reachable relay, active TV session, same provider/account fingerprint, 30-minute renewal, and long-poll delivery |
 | Nordic SkyShowtime EPG fallback | Fetches public feed directly, then falls back to provider guide | Optional public-guide CORS bridge for browsers only | Uses configured relay bridge when available | Relay outage cannot affect Tizen; guide failure does not block tuning |
 | Browser MKV audio compatibility | Not used by Tizen | Loopback-only FFmpeg/ffprobe source proxy and HLS files | Calls same-origin `/api/media/*` | Development-only; requires local relay, tools, public-reachable source and disk/CPU capacity |
 | Serving built web app | Can use packaged Tizen assets | Can serve `dist/` | May be opened from relay but need not be | Co-hosting UI and privileged API expands the relay's attack surface |
 
-Important boundary: Play on TV deliberately sends only identifiers from browser through relay to TV, and TV derives the playable URL. This is the correct optional integration shape. It is weakened because TV registration sends the full credential-bearing playlist to the relay first. The preferred target is therefore an authenticated, credential-minimizing relay rather than moving stream URLs into browser commands. The relay must have no other TV product responsibilities.
+Important boundary: Play on TV deliberately sends only identifiers from browser through relay to TV, and TV derives the playable URL. TV registration likewise sends only a safe account-aware fingerprint. The relay must have no other TV product responsibilities.
 
 ## Delivery plan
 
 ### Phase 0 — enforce optionality and contain exposure (P0/P1, before wider LAN use)
 
-The live-TV EPG relay dependency has been removed. Next, implement loopback-by-default, explicit LAN opt-in, strict CORS/origin checks, authenticated one-time pairing, scoped session credentials, and safe request logging. Update setup text and add route-level security tests. Success criterion: the TV works unchanged with no relay, and an unpaired LAN host or arbitrary web origin cannot read session state, send commands, or replace the TV.
+Implemented: the live-TV EPG relay dependency is removed; the relay is loopback-by-default with explicit LAN opt-in, configured CORS origins, one-time pairing, scoped credentials, credential-free TV registration, and synthetic adversarial route coverage. Plain HTTP remains an explicit development-only limitation.
 
 ### Phase 1 — make the service bounded (P1)
 
@@ -138,4 +138,4 @@ Decision: relay catalogue/search is unsupported. The unused `/api/search` and `/
 
 ### Phase 3 — scale UX reliability (P2)
 
-Adopt push/long-poll delivery with acknowledgements, model multiple devices or explicitly forbid them, move catalogue indexing/search off the UI thread, and add target-device performance benchmarks. Success criterion: restart/reconnect/multiple-device behavior is deterministic and 50k-record synthetic searches meet the agreed budget.
+Implemented: authenticated bounded long polling and acknowledgements with explicit retention-gap reporting. Remaining work is to model multiple devices or explicitly tighten the single-device contract, move catalogue indexing/search off the UI thread, and add target-device performance benchmarks. Restart/reconnect state remains intentionally in-memory.
