@@ -30,7 +30,7 @@ import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
 import { CompanionPanel } from "./CompanionPanel.tsx";
 import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../platform/companion/search-catalog.ts";
-import { companionServerUrl, CompanionConnectionError, getCompanionConnection, saveCompanionServerUrl, sendCompanionPlayback, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
+import { companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionServerUrl, sendCompanionPlayback, type BrowserCompanionConnection, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
 import { LiveTv } from "./LiveTv.tsx";
 
 type ScreenState = "loading" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
@@ -197,6 +197,8 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
   const [editingCompanionServer, setEditingCompanionServer] = useState(false);
   const [companionServerDraft, setCompanionServerDraft] = useState(companionServerUrl);
   const [webTvConnectionStatus, setWebTvConnectionStatus] = useState("");
+  const [webTvPairingCode, setWebTvPairingCode] = useState("");
+  const [browserCompanion, setBrowserCompanion] = useState<BrowserCompanionConnection | null>(null);
   const [showVideoInfo, setShowVideoInfo] = useState(false);
   const [showPlayerTools, setShowPlayerTools] = useState(false);
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
@@ -669,18 +671,39 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
       setWebTvConnectionStatus("Set the LAN relay address here before checking for a TV.");
       return;
     }
+    if (!browserCompanion) {
+      setWebTvConnectionStatus("Pair this browser first using the one-time code shown in TV Settings.");
+      return;
+    }
     try {
-      const active = await getCompanionConnection(server);
+      const active = await getCompanionConnection(server, browserCompanion.browserCredential);
       const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
       if (active.expiresAt <= Date.now()) setWebTvConnectionStatus("TV connection has expired. Reconnect Substream on the TV.");
       else if (!provider || active.sourceFingerprint !== provider.pairingFingerprint()) setWebTvConnectionStatus("TV is connected, but its provider does not match this browser playlist.");
       else setWebTvConnectionStatus("TV is connected and the provider matches.");
     } catch (error) {
       setWebTvConnectionStatus(error instanceof CompanionConnectionError && error.kind === "no-tv"
-        ? "Relay is reachable, but no TV is connected. Open Substream on the TV and connect it in Settings."
+        ? "This browser pairing is no longer active. Use the latest code shown in TV Settings to pair again."
         : error instanceof CompanionConnectionError && error.kind === "unreachable"
           ? "TV relay is unreachable. Check the address and that the relay is running on your network."
           : "Relay returned an invalid TV connection response.");
+    }
+  };
+
+  const pairBrowserWithTv = async () => {
+    const server = companionOrigin();
+    if (!server) {
+      setWebTvConnectionStatus("Set the LAN relay address before entering the TV pairing code.");
+      return;
+    }
+    try {
+      const paired = await redeemCompanionCode(server, webTvPairingCode);
+      setBrowserCompanion(paired);
+      setWebTvPairingCode("");
+      setWebTvConnectionStatus("Browser paired with this TV. You can now send playback from search results.");
+    } catch {
+      setBrowserCompanion(null);
+      setWebTvConnectionStatus("Pairing code is invalid or expired. Read the latest code shown in TV Settings.");
     }
   };
 
@@ -723,11 +746,15 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
       setTvPlaybackStatus("This title cannot be sent to the connected TV.");
       return;
     }
+    if (!browserCompanion || browserCompanion.expiresAt <= Date.now()) {
+      setTvPlaybackStatus("Pair this browser with the TV in Settings using the one-time code shown on the TV.");
+      return;
+    }
     let active;
-    try { active = await getCompanionConnection(server); }
+    try { active = await getCompanionConnection(server, browserCompanion.browserCredential); }
     catch (error) {
       setTvPlaybackStatus(error instanceof CompanionConnectionError && error.kind === "no-tv"
-        ? "Relay is reachable, but no TV is connected."
+        ? "TV connection or browser pairing has expired. Pair again using the latest code shown on the TV."
         : error instanceof CompanionConnectionError && error.kind === "unreachable"
           ? "TV relay is unreachable. Check its address and that it is running."
           : "TV connection could not be read. Check the relay response.");
@@ -739,6 +766,10 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
     }
     if (active.sourceFingerprint !== record.sourceFingerprint) {
       setTvPlaybackStatus("TV is connected, but its provider does not match this title.");
+      return;
+    }
+    if (browserCompanion.expiresAt !== active.expiresAt || browserCompanion.sourceFingerprint !== active.sourceFingerprint) {
+      setTvPlaybackStatus("Pair this browser with the TV in Settings using the one-time code shown on the TV.");
       return;
     }
     const episodeMatch = title.id.match(/^xtream:episode:(\d{1,20})$/);
@@ -764,7 +795,7 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
       ? { ...selectionDetails, kind: "episode", seriesId: String(detailsTitle?.providerSeriesId ?? record.id) }
       : { ...selectionDetails, kind: "movie" };
     try {
-      await sendCompanionPlayback(server, active.sessionId, selection);
+      await sendCompanionPlayback(server, browserCompanion.browserCredential, selection);
       setTvPlaybackStatus(`Sent “${title.title}” to TV.`);
     } catch {
       setTvPlaybackStatus("Could not send playback to the TV. Check the connection and try again.");
@@ -2426,6 +2457,11 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
             <div className="settings-actions">
               <button className={settingsFocusClass("companion-start")} data-settings-focus="companion-start" type="button" ref={(element) => registerSettingsControl("companion-start", element)} onClick={saveWebTvRelay}>Save relay address</button>
               <button type="button" onClick={() => void checkWebTvConnection()}>Check TV connection</button>
+            </div>
+            <label htmlFor="web-tv-pairing-code">One-time code shown on the TV</label>
+            <div className="settings-actions">
+              <input id="web-tv-pairing-code" inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={webTvPairingCode} onChange={(event) => setWebTvPairingCode(event.target.value.replace(/\D/g, ""))} placeholder="8-digit code" />
+              <button type="button" onClick={() => void pairBrowserWithTv()} disabled={webTvPairingCode.length !== 8}>Pair browser</button>
             </div>
             {webTvConnectionStatus && <p className="hint" role="status" aria-live="polite">{webTvConnectionStatus}</p>}
           </section>}

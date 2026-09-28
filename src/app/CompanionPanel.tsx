@@ -25,6 +25,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
   const [server, setServer] = useState(companionServerUrl());
   const [draft, setDraft] = useState(companionServerUrl());
   const [connection, setConnection] = useState<CompanionConnection | null>(null);
+  const [paired, setPaired] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const sequence = useRef(0);
@@ -50,8 +51,13 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
           try { await connect(true); } finally { renewalInFlight.current = false; }
           return;
         }
-        const events = await companionEvents(server, connection.sessionId, sequence.current);
-        for (const event of events) {
+        if (!paired && Date.now() >= connection.pairingExpiresAt) {
+          await connect(true);
+          return;
+        }
+        const response = await companionEvents(server, connection.tvCredential, sequence.current);
+        setPaired(response.paired);
+        for (const event of response.events) {
           sequence.current = Math.max(sequence.current, event.sequence);
           const client = XtreamClient.fromPlaylistUrl(playlistUrl);
           if (!client || event.selection.sourceFingerprint !== client.pairingFingerprint()) {
@@ -89,7 +95,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
     void poll();
     const timer = window.setInterval(() => void poll(), 1_500);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [connection, playlistUrl, server]);
+  }, [connection, paired, playlistUrl, server]);
 
   const connect = async (silent = false) => {
     if (connectInFlight.current) return;
@@ -97,9 +103,9 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
     if (!silent) { setError(""); setStatus("Connecting to companion service…"); }
     try {
       const normalized = new URL((silent ? server : draft).trim()).origin;
-      const result = await connectCompanionService(normalized, playlistUrl);
-      setServer(normalized); setConnection(result); sequence.current = 0;
-      setStatus("TV connection active. Search in the web app to send playback here.");
+      const result = await connectCompanionService(normalized, playlistUrl, connection?.tvCredential);
+      setServer(normalized); setConnection(result); sequence.current = 0; setPaired(false);
+      setStatus("Pair this TV in the web app using the code below.");
     } catch (cause) { if (!silent) { setStatus(""); setError(cause instanceof Error ? cause.message : "Companion service connection failed."); } }
     finally { connectInFlight.current = false; }
   };
@@ -129,7 +135,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
 
   return <section className="settings-section companion-panel">
     <h3>TV connection</h3>
-    <p className="hint">Connect this TV to the LAN service so the web app can search the full Xtream catalogue and send playback here. Credentials and stream URLs stay on this TV and the LAN service.</p>
+    <p className="hint">Connect this TV, then enter its one-time pairing code in the web app to enable remote search and playback. Stream URLs stay on this TV.</p>
     <RemoteEditable
       label="LAN service address"
       value={draft}
@@ -141,7 +147,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
       renderEditor={(controlRef) => <label htmlFor="companion-url">LAN service address<input className={focusClass("companion-url")} data-settings-focus="companion-url" id="companion-url" type="url" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="http://192.168.1.50:8787" autoComplete="off" ref={(element) => { controlRef(element); registerControl?.("companion-url", element); }} /></label>}
     />
     <button className={focusClass("companion-start")} data-settings-focus="companion-start" type="button" ref={(element) => registerControl?.("companion-start", element)} onClick={() => void connect()} disabled={!playlistUrl.trim() || !draft.trim()}>{connection ? "Reconnect TV connection" : "Connect TV"}</button>
-    {connection && <p className="companion-code" role="status"><span className="hint">Connected to {server}</span></p>}
+    {connection && <p className="companion-code" role="status"><span className="hint">Connected to {server}.{paired ? " Browser paired successfully." : " Enter this one-time code in the web app before it expires:"}</span>{!paired && <><br /><strong aria-label={`Pairing code ${connection.pairingCode}`}>{connection.pairingCode}</strong></>}</p>}
     {status && <p className="hint" role="status" aria-live="polite">{status}</p>}
     {error && <p className="error" role="alert">{error}</p>}
   </section>;

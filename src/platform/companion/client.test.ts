@@ -5,7 +5,7 @@ vi.mock("../package-defaults.ts", () => ({ packageDefaults: {
   companionServerUrl: "http://192.0.2.44:8787",
 } }));
 
-import { companionSelectionTitle, companionServerUrl, connectCompanionService, getCompanionConnection, saveCompanionServerUrl, sendCompanionPlayback } from "./client.ts";
+import { companionEvents, companionSelectionTitle, companionServerUrl, connectCompanionService, getCompanionConnection, redeemCompanionCode, saveCompanionServerUrl, sendCompanionPlayback } from "./client.ts";
 
 describe("companion client", () => {
   it("uses the non-secret companion address embedded from local configuration", () => {
@@ -30,12 +30,42 @@ describe("companion client", () => {
   });
 
   it("distinguishes an unreachable relay from a reachable relay with no TV", async () => {
+    const browserCredential = "b".repeat(64);
     vi.stubGlobal("fetch", async () => { throw new Error("private network detail"); });
-    try { await expect(getCompanionConnection("http://192.0.2.44:8787")).rejects.toMatchObject({ kind: "unreachable" }); }
+    try { await expect(getCompanionConnection("http://192.0.2.44:8787", browserCredential)).rejects.toMatchObject({ kind: "unreachable" }); }
     finally { vi.unstubAllGlobals(); }
     vi.stubGlobal("fetch", async () => ({ status: 404, ok: false, json: async () => ({ error: "No TV is connected." }) }));
-    try { await expect(getCompanionConnection("http://192.0.2.44:8787")).rejects.toMatchObject({ kind: "no-tv" }); }
+    try { await expect(getCompanionConnection("http://192.0.2.44:8787", browserCredential)).rejects.toMatchObject({ kind: "no-tv" }); }
     finally { vi.unstubAllGlobals(); }
+  });
+
+  it("sends the browser credential when reading active TV status", async () => {
+    let authorization = "";
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      authorization = (init?.headers as Record<string, string>)?.authorization ?? "";
+      return { status: 200, ok: true, json: async () => ({ expiresAt: Date.now() + 10_000, sourceFingerprint: "vod_test" }) };
+    });
+    try {
+      const credential = "b".repeat(64);
+      await expect(getCompanionConnection("http://192.0.2.44:8787", credential)).resolves.toMatchObject({ sourceFingerprint: "vod_test" });
+      expect(authorization).toBe(`Bearer ${credential}`);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("sends the current TV credential when rotating its session", async () => {
+    let authorization = "";
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      authorization = (init?.headers as Record<string, string>)?.authorization ?? "";
+      return { ok: true, json: async () => ({
+        tvCredential: "a".repeat(64), pairingCode: "01234567", pairingExpiresAt: Date.now() + 60_000,
+        expiresAt: Date.now() + 30 * 60_000, sourceFingerprint: "vod_test",
+      }) };
+    });
+    try {
+      const previous = "t".repeat(64);
+      await connectCompanionService("http://192.0.2.44:8787", "https://iptv.invalid/get.php?username=u&password=p", previous);
+      expect(authorization).toBe(`Bearer ${previous}`);
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("sanitizes malformed network response errors", async () => {
@@ -45,6 +75,27 @@ describe("companion client", () => {
         .rejects.toThrow("Companion service response was unavailable or invalid.");
       await expect(sendCompanionPlayback("http://192.0.2.44:8787", "session", { kind: "movie", id: "42", title: "Example", year: null, extension: "mp4", sourceFingerprint: "vod_x" }))
         .rejects.toThrow("Could not send playback to the TV.");
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("uses one-time redemption and scoped bearer credentials without putting them in URLs", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      calls.push({ url, ...(init ? { init } : {}) });
+      if (url.endsWith("/api/pair/redeem")) return { ok: true, json: async () => ({ browserCredential: "b".repeat(64), expiresAt: 123, sourceFingerprint: "vod_test" }) };
+      if (url.endsWith("/api/pair/play")) return { ok: true, json: async () => ({ accepted: true }) };
+      return { ok: true, json: async () => ({ events: [] }) };
+    });
+    try {
+      const paired = await redeemCompanionCode("http://relay.test", "12345678");
+      await sendCompanionPlayback("http://relay.test", paired.browserCredential, { kind: "movie", id: "42", title: "Example", year: null, extension: "mp4", sourceFingerprint: "vod_test" });
+      await companionEvents("http://relay.test", "t".repeat(64), 0);
+      expect(calls.map(({ url }) => url)).toEqual([
+        "http://relay.test/api/pair/redeem", "http://relay.test/api/pair/play", "http://relay.test/api/pair/events?after=0",
+      ]);
+      expect(calls[1]?.init?.headers).toMatchObject({ authorization: `Bearer ${paired.browserCredential}` });
+      expect(calls[2]?.init?.headers).toMatchObject({ authorization: `Bearer ${"t".repeat(64)}` });
+      expect(JSON.stringify(calls)).not.toContain("streamUrl");
     } finally { vi.unstubAllGlobals(); }
   });
 

@@ -27,7 +27,7 @@ export type BrowserSearchOptions = {
 };
 
 type FetchResponse = { ok: boolean; json(): Promise<unknown> };
-type Fetcher = (url: string, init?: { method?: string; cache?: RequestCache }) => Promise<FetchResponse>;
+type Fetcher = (url: string, init?: { method?: string; cache?: RequestCache; headers?: Record<string, string> }) => Promise<FetchResponse>;
 
 const DATABASE_NAME = "substream-companion";
 const STORE_NAME = "catalogues";
@@ -129,17 +129,16 @@ export function createCompanionSearchClient(options: {
       } catch { return []; }
     },
 
-    async refresh(sourceFingerprint: string, sessionId: string): Promise<{ records: SafeSearchRecord[]; refreshedAt: number }> {
-      if (!baseUrl || !isFingerprint(sourceFingerprint) || !isSafeSessionId(sessionId)) {
+    async refresh(sourceFingerprint: string, browserCredential: string): Promise<{ records: SafeSearchRecord[]; refreshedAt: number }> {
+      if (!baseUrl || !isFingerprint(sourceFingerprint) || !isSafeSessionId(browserCredential)) {
         throw new Error("Search catalogue connection is unavailable.");
       }
       const url = new URL("/api/catalogue", baseUrl);
-      url.searchParams.set("sessionId", sessionId);
       url.searchParams.set("refresh", "1");
       let response: FetchResponse;
       let payload: unknown;
       try {
-        response = await fetcher(url.toString(), { cache: "no-store" });
+        response = await fetcher(url.toString(), { cache: "no-store", headers: { authorization: `Bearer ${browserCredential}` } });
         payload = await response.json();
       } catch { throw new Error("Search catalogue refresh failed."); }
       const body = isObject(payload) ? payload : {};

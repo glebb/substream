@@ -12,6 +12,7 @@ vi.mock("./companion-service.mjs", async (importOriginal) => {
 });
 
 const { route } = await import("./companion-server.mjs");
+let previousTvCredential = "";
 
 function request(method, value) {
   return {
@@ -20,14 +21,15 @@ function request(method, value) {
   };
 }
 
-async function callRoute(method, path, body, origin) {
+async function callRoute(method, path, body, origin, authorization) {
   const result = { status: 0, headers: {}, body: "" };
   const response = {
     writeHead(status, headers) { result.status = status; result.headers = headers; },
     end(value = "") { result.body = String(value); },
   };
   const input = request(method, body);
-  input.headers = { host: "relay.test", ...(origin ? { origin } : {}) };
+  input.headers = { host: "relay.test", ...(origin ? { origin } : {}), ...(authorization ? { authorization } : {}) };
+  input.socket = { remoteAddress: "127.0.0.1" };
   await route(input, response, new URL(`http://relay.test${path}`));
   return { ...result, json: () => JSON.parse(result.body) };
 }
@@ -38,11 +40,18 @@ describe("LAN relay playback route", () => {
       playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture",
     });
     const session = connected.json();
+    previousTvCredential = session.tvCredential;
     expect(connected.status).toBe(200);
     expect(session.sourceFingerprint).toMatch(/^vod_/);
     expect(JSON.stringify(session)).not.toContain("fixture");
 
-    const postPlay = (selection) => callRoute("POST", "/api/pair/play", { sessionId: session.sessionId, selection });
+    expect(session.tvCredential).toMatch(/^[a-f0-9]{64}$/);
+    expect(session.pairingCode).toMatch(/^\d{8}$/);
+    const redeemed = await callRoute("POST", "/api/pair/redeem", { code: session.pairingCode }, "http://localhost:5173");
+    const browserCredential = redeemed.json().browserCredential;
+    expect(browserCredential).toMatch(/^[a-f0-9]{64}$/);
+    expect((await callRoute("POST", "/api/pair/redeem", { code: session.pairingCode }, "http://localhost:5173")).status).toBe(400);
+    const postPlay = (selection) => callRoute("POST", "/api/pair/play", { selection }, undefined, `Bearer ${browserCredential}`);
     const base = { title: "Synthetic Movie", year: 2024, extension: "mp4", sourceFingerprint: session.sourceFingerprint };
     const movie = await postPlay({ ...base, kind: "movie", id: "11" });
     expect(movie.status).toBe(200);
@@ -56,10 +65,45 @@ describe("LAN relay playback route", () => {
     expect(foreignEpisode.body).not.toContain("synthetic");
     expect(foreignEpisode.body).not.toContain("fixture");
 
-    const eventResponse = await callRoute("GET", `/api/pair/events?sessionId=${encodeURIComponent(session.sessionId)}&after=0`);
+    const deniedEvents = await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${browserCredential}`);
+    expect(deniedEvents.status).toBe(404);
+    const eventResponse = await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${session.tvCredential}`);
     expect(eventResponse.json().events).toHaveLength(1);
     expect(eventResponse.json().events[0]).toMatchObject({ action: "play", selection: { kind: "movie", id: "11" } });
     expect(eventResponse.body).not.toMatch(/password|streamUrl|fixture/);
+  });
+
+  it("keeps TV credentials private, replaces old sessions, and rejects browser credentials for TV polling", async () => {
+    const firstConnection = await callRoute("POST", "/api/connect", { playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture" }, undefined, `Bearer ${previousTvCredential}`);
+    expect(firstConnection.status).toBe(200);
+    const first = firstConnection.json();
+    previousTvCredential = first.tvCredential;
+    const unpairedActive = await callRoute("GET", "/api/active");
+    expect(unpairedActive.status).toBe(404);
+    expect(unpairedActive.body).not.toContain(first.sourceFingerprint);
+    expect(unpairedActive.body).not.toContain(String(first.expiresAt));
+    expect(unpairedActive.body).not.toContain(first.tvCredential);
+    expect(unpairedActive.body).not.toContain(first.pairingCode);
+    expect((await callRoute("GET", "/api/active", undefined, undefined, `Bearer ${first.tvCredential}`)).status).toBe(404);
+    const firstPair = await callRoute("POST", "/api/pair/redeem", { code: first.pairingCode }, "http://localhost:5173");
+    const active = await callRoute("GET", "/api/active", undefined, undefined, `Bearer ${firstPair.json().browserCredential}`);
+    expect(active.status).toBe(200);
+    expect(active.body).not.toContain(first.tvCredential);
+    expect(active.body).not.toContain(firstPair.json().browserCredential);
+    expect(active.json()).not.toHaveProperty("sessionId");
+    const deniedReplacement = await callRoute("POST", "/api/connect", { playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture" });
+    expect(deniedReplacement.status).toBe(404);
+    expect(deniedReplacement.body).not.toMatch(/session|credential|fingerprint/i);
+    expect((await callRoute("GET", "/api/active", undefined, undefined, `Bearer ${firstPair.json().browserCredential}`)).json()).toMatchObject(active.json());
+    const second = (await callRoute("POST", "/api/connect", { playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture" }, undefined, `Bearer ${first.tvCredential}`)).json();
+    previousTvCredential = second.tvCredential;
+    const oldRedeem = await callRoute("POST", "/api/pair/redeem", { code: first.pairingCode }, "http://localhost:5173");
+    expect(oldRedeem.status).toBe(400);
+    const currentRedeem = await callRoute("POST", "/api/pair/redeem", { code: second.pairingCode }, "http://localhost:5173");
+    expect(currentRedeem.status).toBe(200);
+    expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${first.tvCredential}`)).status).toBe(404);
+    expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${currentRedeem.json().browserCredential}`)).status).toBe(404);
+    expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${second.tvCredential}`)).status).toBe(200);
   });
 
   it("exposes the public guide only as a credential-free CORS bridge", async () => {

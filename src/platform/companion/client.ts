@@ -14,7 +14,10 @@ export type CompanionSelection = {
 };
 
 export type CompanionEvent = { sequence: number; action?: "play" | "select"; selection: CompanionSelection };
-export type CompanionConnection = { sessionId: string; expiresAt: number; sourceFingerprint?: string };
+export type CompanionEventsResult = { events: CompanionEvent[]; paired: boolean };
+export type CompanionConnection = { tvCredential: string; pairingCode: string; pairingExpiresAt: number; expiresAt: number; sourceFingerprint: string };
+export type ActiveCompanionConnection = { expiresAt: number; sourceFingerprint: string };
+export type BrowserCompanionConnection = ActiveCompanionConnection & { browserCredential: string };
 export type CompanionPlaybackSelection = Omit<CompanionSelection, "kind" | "seriesId"> & ({ kind: "movie" } | { kind: "episode"; seriesId: string });
 
 export type CompanionConnectionErrorKind = "unreachable" | "no-tv" | "invalid";
@@ -52,56 +55,68 @@ export function saveCompanionServerUrl(value: string): string {
   return origin;
 }
 
-export async function connectCompanionService(server: string, playlistUrl: string): Promise<CompanionConnection> {
+export async function connectCompanionService(server: string, playlistUrl: string, tvCredential?: string): Promise<CompanionConnection> {
   let response: Response;
-  let value: { sessionId?: string; expiresAt?: number; sourceFingerprint?: string };
+  let value: Partial<CompanionConnection>;
   try {
     response = await fetch(server + "/api/connect", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...(tvCredential ? { authorization: `Bearer ${tvCredential}` } : {}) },
     body: JSON.stringify({ playlistUrl }),
     });
     value = await response.json() as typeof value;
   } catch { throw new Error("Companion service response was unavailable or invalid."); }
-  if (!response.ok || !value.sessionId || !value.expiresAt) throw new Error("TV connection could not be established.");
-  return { sessionId: value.sessionId, expiresAt: value.expiresAt, ...(value.sourceFingerprint ? { sourceFingerprint: value.sourceFingerprint } : {}) };
+  if (!response.ok || !/^[a-f0-9]{64}$/i.test(value.tvCredential || "") || !/^\d{8}$/.test(value.pairingCode || "")
+    || !Number.isFinite(value.pairingExpiresAt) || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint) throw new Error("TV connection could not be established.");
+  return value as CompanionConnection;
 }
 
-/** Read the TV-owned active session. This does not register or replace the TV session. */
-export async function getCompanionConnection(server: string): Promise<CompanionConnection> {
+/** Read public TV status only; this endpoint never returns either scoped credential. */
+export async function getCompanionConnection(server: string, browserCredential: string): Promise<ActiveCompanionConnection> {
   let response: Response;
-  let value: { sessionId?: string; expiresAt?: number; sourceFingerprint?: string };
-  try { response = await fetch(server + "/api/active", { cache: "no-store" }); }
+  let value: Partial<ActiveCompanionConnection>;
+  try { response = await fetch(server + "/api/active", { cache: "no-store", headers: { authorization: `Bearer ${browserCredential}` } }); }
   catch { throw new CompanionConnectionError("unreachable"); }
   try { value = await response.json() as typeof value; }
   catch { throw new CompanionConnectionError("invalid"); }
   if (response.status === 404) throw new CompanionConnectionError("no-tv");
-  if (!response.ok || !value.sessionId || !value.expiresAt || !value.sourceFingerprint) throw new CompanionConnectionError("invalid");
-  return { sessionId: value.sessionId, expiresAt: value.expiresAt, sourceFingerprint: value.sourceFingerprint };
+  if (!response.ok || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint || "tvCredential" in value || "browserCredential" in value) throw new CompanionConnectionError("invalid");
+  return value as ActiveCompanionConnection;
 }
 
-export async function sendCompanionPlayback(server: string, sessionId: string, selection: CompanionPlaybackSelection): Promise<void> {
+export async function redeemCompanionCode(server: string, code: string): Promise<BrowserCompanionConnection> {
+  let response: Response;
+  let value: Partial<BrowserCompanionConnection>;
+  try {
+    response = await fetch(server + "/api/pair/redeem", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: code.trim() }) });
+    value = await response.json() as typeof value;
+  } catch { throw new Error("Could not redeem the TV pairing code."); }
+  if (!response.ok || !/^[a-f0-9]{64}$/i.test(value.browserCredential || "") || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint) throw new Error("Pairing code is invalid or expired.");
+  return value as BrowserCompanionConnection;
+}
+
+export async function sendCompanionPlayback(server: string, browserCredential: string, selection: CompanionPlaybackSelection): Promise<void> {
   let response: Response;
   let value: { accepted?: boolean };
   try {
     response = await fetch(server + "/api/pair/play", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sessionId, selection }),
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${browserCredential}` },
+    body: JSON.stringify({ selection }),
     });
     value = await response.json() as typeof value;
   } catch { throw new Error("Could not send playback to the TV."); }
   if (!response.ok || value.accepted !== true) throw new Error("Could not send playback to the TV.");
 }
 
-export async function companionEvents(server: string, sessionId: string, after: number): Promise<CompanionEvent[]> {
+export async function companionEvents(server: string, tvCredential: string, after: number): Promise<CompanionEventsResult> {
   let response: Response;
-  let value: { events?: CompanionEvent[] };
+  let value: { events?: CompanionEvent[]; paired?: boolean };
   try {
-    response = await fetch(server + "/api/pair/events?sessionId=" + encodeURIComponent(sessionId) + "&after=" + after, { cache: "no-store" });
+    response = await fetch(server + "/api/pair/events?after=" + after, { cache: "no-store", headers: { authorization: `Bearer ${tvCredential}` } });
     value = await response.json() as typeof value;
   } catch { throw new Error("Companion service response was unavailable or invalid."); }
   if (!response.ok) throw new Error("Companion connection expired.");
-  return Array.isArray(value.events) ? value.events : [];
+  return { events: Array.isArray(value.events) ? value.events : [], paired: value.paired === true };
 }
 
 /** Converts a safe provider selection into a local playback candidate. */

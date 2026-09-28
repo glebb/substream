@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,8 @@ const distDir = join(projectDir, "dist");
 const sessions = new Map();
 let activeSessionId = "";
 const SESSION_TTL_MS = 30 * 60 * 1000;
+const PAIRING_TTL_MS = 5 * 60 * 1000;
+const pairingAttempts = new Map();
 const mediaJobs = new Map();
 const NORDIC_EPG_URL = "https://epgshare01.online/epgshare01/epg_ripper_SE1.xml.gz";
 const NORDIC_EPG_MAX_BYTES = 8 * 1024 * 1024;
@@ -173,7 +175,22 @@ function sessionFor(value) {
 }
 
 function publicSession(session) {
-  return { sessionId: session.id, expiresAt: session.createdAt + SESSION_TTL_MS, sourceFingerprint: session.connection.sourceFingerprint };
+  return { expiresAt: session.createdAt + SESSION_TTL_MS, sourceFingerprint: session.connection.sourceFingerprint };
+}
+
+function bearer(request) {
+  const value = request.headers?.authorization;
+  const match = typeof value === "string" ? value.match(/^Bearer ([a-f0-9]{64})$/i) : null;
+  return match?.[1] || "";
+}
+
+function sessionForCredential(request, scope) {
+  const credential = bearer(request);
+  if (!credential) return null;
+  const session = sessions.get(activeSessionId);
+  if (!session || Date.now() >= session.createdAt + SESSION_TTL_MS) return null;
+  if (scope === "tv" ? session.tvCredential !== credential : session.browserCredential !== credential) return null;
+  return session;
 }
 
 function validateSelection(value) {
@@ -208,7 +225,7 @@ export async function route(request, response, url) {
   if (allowedOrigin(origin)) response.corsOrigin = origin;
   if (request.method === "OPTIONS") {
     if (!allowedOrigin(origin)) return json(response, 403, { error: "Request origin is not allowed." });
-    response.writeHead(204, { "access-control-allow-origin": origin, "access-control-allow-methods": "GET,POST,DELETE,OPTIONS", "access-control-allow-headers": "content-type", vary: "Origin" });
+    response.writeHead(204, { "access-control-allow-origin": origin, "access-control-allow-methods": "GET,POST,DELETE,OPTIONS", "access-control-allow-headers": "content-type, authorization", vary: "Origin" });
     response.end();
     return;
   }
@@ -216,23 +233,50 @@ export async function route(request, response, url) {
   if (url.pathname.startsWith("/api/media/")) { const handled = await mediaRoute(request, response, url); if (handled !== false) return; }
   if (request.method === "GET" && url.pathname === "/api/nordic-epg") return nordicEpg(response);
   if (request.method === "POST" && url.pathname === "/api/connect") {
+    // A live TV owns the single active slot. An app reload loses its in-memory
+    // credential, so replacing that session then requires an explicit relay restart.
+    const current = sessionFor(activeSessionId);
+    if (current && sessionForCredential(request, "tv") !== current) return json(response, 404, { error: "Companion connection could not be established." });
     try {
       const input = await body(request);
       const connection = xtreamConnectionFromPlaylist(String(input.playlistUrl || ""));
       if (!connection) return json(response, 400, { error: "Only Xtream provider URLs can be paired during development." });
-      const session = { id: randomBytes(18).toString("hex"), createdAt: Date.now(), connection, records: null, events: [], nextEvent: 1 };
+      const session = {
+        id: randomBytes(18).toString("hex"), createdAt: Date.now(), connection, records: null, events: [], nextEvent: 1,
+        tvCredential: randomBytes(32).toString("hex"), browserCredential: "",
+        pairingCode: String(randomInt(0, 100_000_000)).padStart(8, "0"),
+        pairingExpiresAt: Date.now() + PAIRING_TTL_MS, pairingRedeemed: false,
+      };
       sessions.clear();
       sessions.set(session.id, session);
       activeSessionId = session.id;
-      return json(response, 200, publicSession(session));
+      return json(response, 200, { ...publicSession(session), tvCredential: session.tvCredential, pairingCode: session.pairingCode, pairingExpiresAt: session.pairingExpiresAt });
     } catch { return json(response, 400, { error: "Companion connection request was invalid." }); }
   }
+  if (request.method === "POST" && url.pathname === "/api/pair/redeem") {
+    if (!allowedOrigin(origin)) return json(response, 403, { error: "Request origin is not allowed." });
+    const peer = String(request.socket?.remoteAddress || "unknown");
+    const now = Date.now();
+    const attempt = pairingAttempts.get(peer);
+    if (attempt && now - attempt.startedAt < 60_000 && attempt.count >= 10) return json(response, 429, { error: "Pairing attempts are temporarily limited." });
+    pairingAttempts.set(peer, !attempt || now - attempt.startedAt >= 60_000 ? { startedAt: now, count: 1 } : { ...attempt, count: attempt.count + 1 });
+    try {
+      const input = await body(request);
+      const session = sessions.get(activeSessionId);
+      if (!session || Date.now() >= session.createdAt + SESSION_TTL_MS || session.pairingRedeemed
+        || Date.now() >= session.pairingExpiresAt || String(input.code || "") !== session.pairingCode) return json(response, 400, { error: "Pairing code is invalid or expired." });
+      session.pairingRedeemed = true;
+      session.pairingCode = "";
+      session.browserCredential = randomBytes(32).toString("hex");
+      return json(response, 200, { ...publicSession(session), browserCredential: session.browserCredential });
+    } catch { return json(response, 400, { error: "Pairing request was invalid." }); }
+  }
   if (request.method === "GET" && url.pathname === "/api/active") {
-    const session = sessionFor(activeSessionId);
-    return session ? json(response, 200, publicSession(session)) : json(response, 404, { error: "No TV is connected. Open Substream on the TV, then connect from Settings if needed." });
+    const session = sessionForCredential(request, "browser");
+    return session ? json(response, 200, publicSession(session)) : json(response, 404, { error: "No paired TV connection is available." });
   }
   if (request.method === "GET" && url.pathname === "/api/search") {
-    const session = sessionFor(url.searchParams.get("sessionId"));
+    const session = sessionForCredential(request, "browser");
     const query = url.searchParams.get("q") || "";
     if (!session) return json(response, 404, { error: "Companion connection expired." });
     if (query.trim().length < 2) return json(response, 200, { results: [] });
@@ -241,7 +285,7 @@ export async function route(request, response, url) {
     } catch { return json(response, 502, { error: "Provider catalogue is unavailable." }); }
   }
   if (request.method === "GET" && url.pathname === "/api/catalogue") {
-    const session = sessionFor(url.searchParams.get("sessionId"));
+    const session = sessionForCredential(request, "browser");
     if (!session) return json(response, 404, { error: "Companion connection expired." });
     try {
       const refresh = url.searchParams.get("refresh") === "1";
@@ -251,7 +295,7 @@ export async function route(request, response, url) {
   if (request.method === "POST" && url.pathname === "/api/pair/select") {
     try {
       const input = await body(request);
-      const session = sessionFor(String(input.sessionId || ""));
+      const session = sessionForCredential(request, "browser");
       const selection = validateSelection(input.selection);
       if (!session || !selection || selection.sourceFingerprint !== session.connection.sourceFingerprint) return json(response, 400, { error: "Selection is invalid or companion connection expired." });
       const event = { sequence: session.nextEvent++, selection };
@@ -263,7 +307,7 @@ export async function route(request, response, url) {
   if (request.method === "POST" && url.pathname === "/api/pair/play") {
     try {
       const input = await body(request);
-      const session = sessionFor(String(input.sessionId || ""));
+      const session = sessionForCredential(request, "browser");
       const selection = validateSelection(input.selection);
       if (!session || !selection || selection.sourceFingerprint !== session.connection.sourceFingerprint
         || !/^(movie|episode)$/.test(selection.kind)
@@ -281,10 +325,10 @@ export async function route(request, response, url) {
     } catch { return json(response, 400, { error: "Playback command was invalid." }); }
   }
   if (request.method === "GET" && url.pathname === "/api/pair/events") {
-    const session = sessionFor(url.searchParams.get("sessionId"));
+    const session = sessionForCredential(request, "tv");
     if (!session) return json(response, 404, { error: "Companion connection expired." });
     const after = Number(url.searchParams.get("after") || 0);
-    return json(response, 200, { events: session.events.filter((event) => event.sequence > after) });
+    return json(response, 200, { events: session.events.filter((event) => event.sequence > after), paired: session.pairingRedeemed });
   }
   if (url.pathname.startsWith("/api/")) return json(response, 404, { error: "Not found" });
   return serveStatic(url.pathname, response);
@@ -333,7 +377,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     console.error(`Companion service could not listen on port ${port}: ${explanation} (${code}).`);
     process.exitCode = 1;
   });
-  if (lanEnabled) console.warn("WARNING: Companion LAN mode exposes an unauthenticated, plain-HTTP relay to the local network. Use only on a trusted network; TV playlist credentials pass through this service.");
+  if (lanEnabled) console.warn("WARNING: Companion LAN mode uses plain HTTP. Pairing codes, scoped credentials, and TV playlist credentials are unencrypted in transit; use only on a trusted network.");
   server.listen(port, host, () => {
     const address = server.address();
     const listeningPort = address && typeof address === "object" ? address.port : port;
