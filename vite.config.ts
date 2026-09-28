@@ -63,6 +63,14 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       proxy: {
+        // EPGShare's public XMLTV endpoint does not permit browser CORS.
+        // Development uses this narrow, credential-free proxy; packaged TV
+        // builds use the configured LAN companion relay instead.
+        "/api/nordic-epg": {
+          changeOrigin: true,
+          rewrite: () => "/epgshare01/epg_ripper_SE1.xml.gz",
+          target: "https://epgshare01.online",
+        },
         // Keep local web development convenient while the actual TV relay runs
         // as a separate process. Browser Settings can still point at any LAN
         // relay explicitly; that address bypasses this same-origin proxy.

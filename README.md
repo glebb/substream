@@ -2,7 +2,7 @@
 
 Substream is an IPTV live TV and video-on-demand player for Samsung Tizen TVs and browsers. It supports M3U libraries, on-demand Xtream catalogues, TMDb details, OpenSubtitles downloads, local favourites, and playback resume.
 
-Live TV currently requires an Xtream-compatible `get.php` source. It browses Finnish provider categories, shows available programme information, and plays embedded subtitles when the stream and device support them.
+Live TV currently requires an Xtream-compatible `get.php` source. It browses Finnish provider categories, shows available programme information, and plays embedded subtitles when the stream and device support them. Finnish SkyShowtime 1 and 2 can fill missing provider guide slots from a Nordic XMLTV source; configure the optional trusted-LAN companion server for this fallback because the public guide does not allow direct browser CORS requests. See [Current behavior and architecture](docs/status.md#live-tv).
 
 ## Start in a browser
 

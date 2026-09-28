@@ -17,6 +17,8 @@ const sessions = new Map();
 let activeSessionId = "";
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const mediaJobs = new Map();
+const NORDIC_EPG_URL = "https://epgshare01.online/epgshare01/epg_ripper_SE1.xml.gz";
+const NORDIC_EPG_MAX_BYTES = 8 * 1024 * 1024;
 
 function mediaDebug(event, fields = {}) {
   if (process.env.MEDIA_COMPAT_DEBUG !== "1") return;
@@ -122,6 +124,25 @@ function json(response, status, value) {
   response.end(body);
 }
 
+async function nordicEpg(response) {
+  try {
+    const upstream = await fetch(NORDIC_EPG_URL, { signal: AbortSignal.timeout(30_000) });
+    const declaredLength = Number(upstream.headers.get("content-length"));
+    if (!upstream.ok || (Number.isFinite(declaredLength) && declaredLength > NORDIC_EPG_MAX_BYTES)) throw new Error("Nordic EPG unavailable");
+    const payload = Buffer.from(await upstream.arrayBuffer());
+    if (payload.byteLength > NORDIC_EPG_MAX_BYTES) throw new Error("Nordic EPG too large");
+    response.writeHead(200, {
+      "content-type": "application/gzip",
+      "content-length": payload.byteLength,
+      "cache-control": "public, max-age=300",
+      "access-control-allow-origin": "*",
+    });
+    response.end(payload);
+  } catch {
+    json(response, 502, { error: "Nordic EPG is unavailable." });
+  }
+}
+
 async function body(request) {
   let text = "";
   for await (const chunk of request) text += chunk;
@@ -173,6 +194,7 @@ function publicCatalogue(records) {
 export async function route(request, response, url) {
   if (request.method === "OPTIONS") { response.writeHead(204, { "access-control-allow-origin": request.headers?.origin || "null", "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "content-type" }); response.end(); return; }
   if (url.pathname.startsWith("/api/media/")) { const handled = await mediaRoute(request, response, url); if (handled !== false) return; }
+  if (request.method === "GET" && url.pathname === "/api/nordic-epg") return nordicEpg(response);
   if (request.method === "POST" && url.pathname === "/api/connect") {
     try {
       const input = await body(request);

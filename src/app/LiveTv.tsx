@@ -9,6 +9,8 @@ import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avp
 import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "../platform/tizen/remote.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { DnaGuideClient } from "../platform/dna/client.ts";
+import { NordicSkyShowtimeEpgClient, skyShowtimeNordicXmltvId } from "../platform/nordic/skyshowtime-epg.ts";
+import { companionServerUrl } from "../platform/companion/client.ts";
 import { focusTitleListItem } from "./title-list-focus.ts";
 
 type Props = { onMainMenu(): void };
@@ -76,6 +78,13 @@ export function LiveTv({ onMainMenu }: Props) {
   const playlistUrl = loadPlaylistUrl();
   const client = useMemo(() => XtreamClient.fromPlaylistUrl(playlistUrl), [playlistUrl]);
   const dnaClient = useMemo(() => new DnaGuideClient(), []);
+  const nordicEpgClient = useMemo(() => {
+    const relay = companionServerUrl();
+    // The development server proxies this public feed because it omits CORS.
+    // Packaged clients must use the configured LAN relay instead.
+    const sourceUrl = relay ? `${relay}/api/nordic-epg` : import.meta.env.DEV ? "/api/nordic-epg" : undefined;
+    return new NordicSkyShowtimeEpgClient(undefined, sourceUrl);
+  }, []);
   const cacheKey = client ? CACHE_PREFIX + client.pairingFingerprint() : "";
   const cached = useMemo(() => cacheKey ? safeCache(cacheKey) : null, [cacheKey]);
   const [cacheSavedAt, setCacheSavedAt] = useState(cached?.savedAt ?? 0);
@@ -312,8 +321,12 @@ export function LiveTv({ onMainMenu }: Props) {
         const guide = initial[channel.id];
         const now = Date.now();
         if (!guide) return true;
-        if (!channel.dnaChannelId) return !guideIsFresh(guide, now);
         const slots = selectCurrentAndNextProgramme(guide.programmes, now);
+        // Never preserve an empty/partial cached guide for a channel with the
+        // Nordic fallback: it may have been saved before the relay became
+        // available, and would otherwise suppress the recovery for 12 minutes.
+        if (skyShowtimeNordicXmltvId(channel) && (!slots.current || !slots.next)) return true;
+        if (!channel.dnaChannelId) return !guideIsFresh(guide, now);
         if (!slots.current || !slots.next) {
           return !guideIsFresh(guide, now)
             || !guide.dnaAttemptAt || now - guide.dnaAttemptAt >= EPG_CACHE_TTL_MS;
@@ -330,9 +343,18 @@ export function LiveTv({ onMainMenu }: Props) {
         try {
           let programmes: EpgProgramme[] = [];
           let dnaAttemptAt: number | undefined;
-          try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT); } catch { /* continue to DNA fallback */ }
-          const providerSlots = selectCurrentAndNextProgramme(programmes, Date.now());
-          if (channel.dnaChannelId && (!providerSlots.current || !providerSlots.next)) {
+          const nordicXmltvId = skyShowtimeNordicXmltvId(channel);
+          if (nordicXmltvId) {
+            // This guide is more reliable than the provider's often-empty
+            // short-EPG response, and fetching it first avoids a stalled
+            // provider request leaving the visible row blank.
+            try { programmes = await nordicEpgClient.schedule(nordicXmltvId, channel.providerStreamId); }
+            catch { try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT); } catch { /* guide remains unavailable */ } }
+          } else {
+            try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT); } catch { /* continue to DNA fallback */ }
+          }
+          const slotsAfterNordicFallback = selectCurrentAndNextProgramme(programmes, Date.now());
+          if (channel.dnaChannelId && (!slotsAfterNordicFallback.current || !slotsAfterNordicFallback.next)) {
             dnaAttemptAt = Date.now();
             try {
               const now = Date.now();
@@ -362,7 +384,7 @@ export function LiveTv({ onMainMenu }: Props) {
     };
     for (let workerIndex = 0; workerIndex < Math.min(EPG_CONCURRENCY, missing.length); workerIndex += 1) void worker();
     return () => { cancelled = true; };
-  }, [cacheKey, channels, client, guideRefresh, selectedCategory]);
+  }, [cacheKey, channels, client, guideRefresh, nordicEpgClient, selectedCategory]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setGuideNow(Date.now()), 30_000);

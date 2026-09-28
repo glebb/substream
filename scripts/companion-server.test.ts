@@ -60,3 +60,22 @@ describe("LAN relay playback route", () => {
     expect(eventResponse.body).not.toMatch(/password|streamUrl|fixture/);
   });
 });
+
+describe("Nordic EPG relay route", () => {
+  it("relays a bounded public guide without provider credentials", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      headers: { get: (name) => name === "content-length" ? "3" : null },
+      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await callRoute("GET", "/api/nordic-epg");
+      expect(result.status).toBe(200);
+      expect(result.headers).toMatchObject({ "content-type": "application/gzip", "access-control-allow-origin": "*" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
