@@ -107,11 +107,13 @@ describe("LAN relay playback route", () => {
     const browserCredential = redeemed.json().browserCredential;
     expect(browserCredential).toMatch(/^[a-f0-9]{64}$/);
     expect((await callRoute("POST", "/api/pair/redeem", { code: session.pairingCode }, "http://localhost:5173")).status).toBe(400);
-    const postPlay = (selection) => callRoute("POST", "/api/pair/play", { selection }, undefined, `Bearer ${browserCredential}`);
+    const postPlay = (selection, protocolVersion = 1) => callRoute("POST", "/api/pair/play", { protocolVersion, selection }, undefined, `Bearer ${browserCredential}`);
     const base = { title: "Synthetic Movie", year: 2024, extension: "mp4", sourceFingerprint: session.sourceFingerprint };
-    const movie = await postPlay({ ...base, kind: "movie", id: "11" });
+    const movie = await postPlay({ ...base, kind: "movie", id: "11", streamUrl: "https://private.invalid/token=fixture", tvCredential: "fixture" });
     expect(movie.status).toBe(200);
-    expect(movie.json()).toEqual({ accepted: true });
+    expect(movie.json()).toEqual({ protocolVersion: 1, accepted: true });
+
+    expect((await postPlay({ ...base, kind: "movie", id: "13" }, 2)).status).toBe(400);
 
     const mismatch = await postPlay({ ...base, kind: "movie", id: "12", sourceFingerprint: "vod_mismatch" });
     expect(mismatch.status).toBe(400);
@@ -124,9 +126,10 @@ describe("LAN relay playback route", () => {
     const deniedEvents = await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${browserCredential}`);
     expect(deniedEvents.status).toBe(404);
     const eventResponse = await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${session.tvCredential}`);
+    expect(eventResponse.json().protocolVersion).toBe(1);
     expect(eventResponse.json().events).toHaveLength(1);
     expect(eventResponse.json().events[0]).toMatchObject({ action: "play", selection: { kind: "movie", id: "11" } });
-    expect(eventResponse.body).not.toMatch(/password|streamUrl|fixture/);
+    expect(eventResponse.body).not.toMatch(/password|streamUrl|fixture|private\.invalid|tvCredential/);
   });
 
   it("keeps TV credentials private, replaces old sessions, and rejects browser credentials for TV polling", async () => {

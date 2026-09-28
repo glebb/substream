@@ -7,6 +7,7 @@ import { fetchXtreamAction, loadXtreamCatalogue, resolveXtreamEpisode, searchCat
 import { readFile as readMediaFile } from "node:fs/promises";
 import { randomBytes as randomToken } from "node:crypto";
 import { prepareMedia } from "./media-compat.mjs";
+import { COMPANION_PROTOCOL_VERSION, parseCompanionSelection, supportsCompanionProtocolVersion } from "../src/core/companion-protocol.mjs";
 
 const port = Number(process.env.COMPANION_PORT || 8787);
 const lanEnabled = process.argv.includes("--lan") || process.env.COMPANION_LAN === "1";
@@ -231,23 +232,6 @@ function sessionForCredential(request, scope) {
   return session;
 }
 
-function validateSelection(value) {
-  if (!value || !/^(movie|series|episode)$/.test(value.kind) || !/^\d{1,20}$/.test(String(value.id ?? ""))) return null;
-  const title = typeof value.title === "string" ? value.title.trim().slice(0, 240) : "";
-  if (!title) return null;
-  return {
-    kind: value.kind,
-    id: String(value.id),
-    ...(value.kind === "episode" && /^\d{1,20}$/.test(String(value.seriesId ?? "")) ? { seriesId: String(value.seriesId) } : {}),
-    title,
-    year: Number.isSafeInteger(value.year) ? value.year : null,
-    season: Number.isSafeInteger(value.season) && value.season > 0 ? value.season : null,
-    episode: Number.isSafeInteger(value.episode) && value.episode > 0 ? value.episode : null,
-    extension: /^[a-z0-9]{1,10}$/i.test(String(value.extension ?? "")) ? String(value.extension).toLowerCase() : "mp4",
-    sourceFingerprint: typeof value.sourceFingerprint === "string" ? value.sourceFingerprint : "",
-  };
-}
-
 async function catalogueFor(session, refresh = false) {
   if (session.catalogueLoad) return session.catalogueLoad;
   if (!refresh && session.records) return session.records;
@@ -288,6 +272,7 @@ export async function route(request, response, url) {
     if (current && sessionForCredential(request, "tv") !== current) return json(response, 404, { error: "Companion connection could not be established." });
     try {
       const input = await body(request);
+      if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Companion protocol version is unsupported." });
       const connection = xtreamConnectionFromPlaylist(String(input.playlistUrl || ""));
       if (!connection) return json(response, 400, { error: "Only Xtream provider URLs can be paired during development." });
       const session = {
@@ -299,7 +284,7 @@ export async function route(request, response, url) {
       sessions.clear();
       sessions.set(session.id, session);
       activeSessionId = session.id;
-      return json(response, 200, { ...publicSession(session), tvCredential: session.tvCredential, pairingCode: session.pairingCode, pairingExpiresAt: session.pairingExpiresAt });
+      return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, ...publicSession(session), tvCredential: session.tvCredential, pairingCode: session.pairingCode, pairingExpiresAt: session.pairingExpiresAt });
     } catch { return json(response, 400, { error: "Companion connection request was invalid." }); }
   }
   if (request.method === "POST" && url.pathname === "/api/pair/redeem") {
@@ -311,18 +296,19 @@ export async function route(request, response, url) {
     pairingAttempts.set(peer, !attempt || now - attempt.startedAt >= 60_000 ? { startedAt: now, count: 1 } : { ...attempt, count: attempt.count + 1 });
     try {
       const input = await body(request);
+      if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Pairing protocol version is unsupported." });
       const session = sessions.get(activeSessionId);
       if (!session || Date.now() >= session.createdAt + SESSION_TTL_MS || session.pairingRedeemed
         || Date.now() >= session.pairingExpiresAt || String(input.code || "") !== session.pairingCode) return json(response, 400, { error: "Pairing code is invalid or expired." });
       session.pairingRedeemed = true;
       session.pairingCode = "";
       session.browserCredential = randomBytes(32).toString("hex");
-      return json(response, 200, { ...publicSession(session), browserCredential: session.browserCredential });
+      return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, ...publicSession(session), browserCredential: session.browserCredential });
     } catch { return json(response, 400, { error: "Pairing request was invalid." }); }
   }
   if (request.method === "GET" && url.pathname === "/api/active") {
     const session = sessionForCredential(request, "browser");
-    return session ? json(response, 200, publicSession(session)) : json(response, 404, { error: "No paired TV connection is available." });
+    return session ? json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, ...publicSession(session) }) : json(response, 404, { error: "No paired TV connection is available." });
   }
   if (request.method === "GET" && url.pathname === "/api/search") {
     const session = sessionForCredential(request, "browser");
@@ -345,19 +331,21 @@ export async function route(request, response, url) {
     try {
       const input = await body(request);
       const session = sessionForCredential(request, "browser");
-      const selection = validateSelection(input.selection);
+      if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Selection protocol version is unsupported." });
+      const selection = parseCompanionSelection(input.selection);
       if (!session || !selection || selection.sourceFingerprint !== session.connection.sourceFingerprint) return json(response, 400, { error: "Selection is invalid or companion connection expired." });
       const event = { sequence: session.nextEvent++, selection };
       session.events.push(event);
       session.events = session.events.slice(-20);
-      return json(response, 200, { accepted: true });
+      return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, accepted: true });
     } catch { return json(response, 400, { error: "Selection request was invalid." }); }
   }
   if (request.method === "POST" && url.pathname === "/api/pair/play") {
     try {
       const input = await body(request);
       const session = sessionForCredential(request, "browser");
-      const selection = validateSelection(input.selection);
+      if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Playback protocol version is unsupported." });
+      const selection = parseCompanionSelection(input.selection);
       if (!session || !selection || selection.sourceFingerprint !== session.connection.sourceFingerprint
         || !/^(movie|episode)$/.test(selection.kind)
         || (selection.kind === "episode" && !selection.seriesId)) return json(response, 400, { error: "Playback command is invalid or the TV connection expired." });
@@ -370,14 +358,16 @@ export async function route(request, response, url) {
       const event = { sequence: session.nextEvent++, action: "play", selection };
       session.events.push(event);
       session.events = session.events.slice(-20);
-      return json(response, 200, { accepted: true });
+      return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, accepted: true });
     } catch { return json(response, 400, { error: "Playback command was invalid." }); }
   }
   if (request.method === "GET" && url.pathname === "/api/pair/events") {
     const session = sessionForCredential(request, "tv");
     if (!session) return json(response, 404, { error: "Companion connection expired." });
     const after = Number(url.searchParams.get("after") || 0);
-    return json(response, 200, { events: session.events.filter((event) => event.sequence > after), paired: session.pairingRedeemed });
+    const requestedVersion = url.searchParams.get("protocolVersion");
+    if (requestedVersion !== null && !supportsCompanionProtocolVersion(Number(requestedVersion))) return json(response, 400, { error: "Events protocol version is unsupported." });
+    return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, events: session.events.filter((event) => event.sequence > after), paired: session.pairingRedeemed });
   }
   if (url.pathname.startsWith("/api/")) return json(response, 404, { error: "Not found" });
   return serveStatic(url.pathname, response);

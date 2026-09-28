@@ -8,6 +8,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 
 const ffprobeDefault = process.env.FFPROBE_PATH || "ffprobe";
 const ffmpegDefault = process.env.FFMPEG_PATH || "ffmpeg";
@@ -64,16 +65,82 @@ export function validMediaSource(value) {
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
     if (url.username || url.password || !url.hostname || url.hostname === "localhost" || url.hostname.endsWith(".localhost") || url.hostname.endsWith(".local")) return false;
     const host = url.hostname.replace(/^\[|\]$/g, "");
-    if (/^(?:127\.|10\.|192\.168\.|169\.254\.|0\.|255\.)/.test(host) || /^172\.(?:1[6-9]|2\d|3[01])\./.test(host) || host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")) return false;
+    if (isIP(host) && !publicAddress(host)) return false;
     return true;
   } catch { return false; }
 }
 
+function inCidr(value, network, prefixLength, bitLength) {
+  const shift = BigInt(bitLength - prefixLength);
+  return (value >> shift) === (network >> shift);
+}
+
+function ipv4Value(address) {
+  if (isIP(address) !== 4) return null;
+  return address.split(".").reduce((value, octet) => (value << 8n) | BigInt(octet), 0n);
+}
+
+function ipv6Value(address) {
+  if (isIP(address) !== 6) return null;
+  let normalized = address.toLowerCase();
+  const embeddedIpv4 = normalized.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (embeddedIpv4) {
+    const value = ipv4Value(embeddedIpv4[1]);
+    if (value === null) return null;
+    normalized = normalized.slice(0, -embeddedIpv4[1].length) + `${(value >> 16n).toString(16)}:${(value & 0xffffn).toString(16)}`;
+  }
+  const halves = normalized.split("::");
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const groups = halves.length === 2
+    ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right]
+    : left;
+  if (groups.length !== 8) return null;
+  return groups.reduce((value, group) => (value << 16n) | BigInt(`0x${group || "0"}`), 0n);
+}
+
+function publicIpv4(address) {
+  const value = ipv4Value(address);
+  if (value === null) return false;
+  // IANA IPv4 special-purpose and non-global ranges, including protocol,
+  // documentation, benchmarking, shared-address, and reserved blocks.
+  const excluded = [
+    ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
+    ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24],
+    ["192.88.99.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24],
+    ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
+  ];
+  return !excluded.some(([network, prefix]) => inCidr(value, ipv4Value(network), prefix, 32));
+}
+
 function publicAddress(address) {
-  return !(/^(?:127\.|10\.|192\.168\.|169\.254\.|0\.|255\.)/.test(address)
-    || /^172\.(?:1[6-9]|2\d|3[01])\./.test(address)
-    || address === "::1" || /^f[cd]/i.test(address) || /^fe[89ab]/i.test(address)
-    || address === "::" || /^::ffff:(?:127\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.)/i.test(address));
+  const family = isIP(address);
+  if (family === 4) return publicIpv4(address);
+  if (family !== 6) return false;
+
+  const value = ipv6Value(address);
+  if (value === null) return false;
+  // IPv4-mapped IPv6 addresses inherit the IPv4 classification of their tail.
+  if ((value >> 32n) === 0xffffn) {
+    const ipv4 = value & 0xffffffffn;
+    const mappedAddress = [24n, 16n, 8n, 0n].map((shift) => Number((ipv4 >> shift) & 0xffn)).join(".");
+    return publicIpv4(mappedAddress);
+  }
+
+  // Only global unicast space is eligible. This also rejects unspecified,
+  // loopback, IPv4-compatible, ULA, link-local, multicast, and reserved space.
+  if (!inCidr(value, 0x20000000000000000000000000000000n, 3, 128)) return false;
+  const excluded = [
+    ["2001::", 23], // IETF protocol assignments (includes Teredo and ORCHID).
+    ["2001:db8::", 32], // Documentation.
+    ["2002::", 16], // Deprecated 6to4.
+    ["3fff::", 20], // Documentation.
+    ["5f00::", 16], // Segment-routing SIDs.
+    ["64:ff9b::", 96], // Well-known NAT64 prefix.
+    ["64:ff9b:1::", 48], // Local-use NAT64 prefix.
+  ];
+  return !excluded.some(([network, prefix]) => inCidr(value, ipv6Value(network), prefix, 128))
+    && !inCidr(value, 0x01000000000000000000000000000000n, 64, 128); // Discard-only 100::/64.
 }
 
 async function resolvePublicAddress(url, resolveHost = lookup) {

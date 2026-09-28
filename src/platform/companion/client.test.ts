@@ -83,20 +83,39 @@ describe("companion client", () => {
     vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
       calls.push({ url, ...(init ? { init } : {}) });
       if (url.endsWith("/api/pair/redeem")) return { ok: true, json: async () => ({ browserCredential: "b".repeat(64), expiresAt: 123, sourceFingerprint: "vod_test" }) };
-      if (url.endsWith("/api/pair/play")) return { ok: true, json: async () => ({ accepted: true }) };
-      return { ok: true, json: async () => ({ events: [] }) };
+      if (url.endsWith("/api/pair/play")) return { ok: true, json: async () => ({ protocolVersion: 1, accepted: true }) };
+      return { ok: true, json: async () => ({ protocolVersion: 1, events: [], paired: true }) };
     });
     try {
       const paired = await redeemCompanionCode("http://relay.test", "12345678");
-      await sendCompanionPlayback("http://relay.test", paired.browserCredential, { kind: "movie", id: "42", title: "Example", year: null, extension: "mp4", sourceFingerprint: "vod_test" });
+      const selectionWithUntrustedExtras = { kind: "movie", id: "42", title: "Example", year: null, extension: "mp4", sourceFingerprint: "vod_test", streamUrl: "https://private.invalid/token=secret", tvCredential: "secret" } as unknown as Parameters<typeof sendCompanionPlayback>[2];
+      await sendCompanionPlayback("http://relay.test", paired.browserCredential, selectionWithUntrustedExtras);
       await companionEvents("http://relay.test", "t".repeat(64), 0);
       expect(calls.map(({ url }) => url)).toEqual([
-        "http://relay.test/api/pair/redeem", "http://relay.test/api/pair/play", "http://relay.test/api/pair/events?after=0",
+        "http://relay.test/api/pair/redeem", "http://relay.test/api/pair/play", "http://relay.test/api/pair/events?after=0&protocolVersion=1",
       ]);
+      expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({ protocolVersion: 1, code: "12345678" });
+      expect(JSON.parse(String(calls[1]?.init?.body))).toMatchObject({ protocolVersion: 1, selection: { kind: "movie", id: "42" } });
       expect(calls[1]?.init?.headers).toMatchObject({ authorization: `Bearer ${paired.browserCredential}` });
       expect(calls[2]?.init?.headers).toMatchObject({ authorization: `Bearer ${"t".repeat(64)}` });
       expect(JSON.stringify(calls)).not.toContain("streamUrl");
+      expect(JSON.stringify(calls)).not.toContain("private.invalid");
+      expect(JSON.stringify(calls)).not.toContain('"tvCredential"');
     } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("rejects an unsupported events schema and strips unsafe event fields", async () => {
+    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ protocolVersion: 1, paired: true, events: [{
+      sequence: 1, selection: { kind: "movie", id: "42", title: "Example", year: null, extension: "mp4", sourceFingerprint: "vod_test", streamUrl: "https://private.invalid/token=secret", browserCredential: "secret" },
+    }] }) }));
+    try {
+      const result = await companionEvents("http://relay.test", "t".repeat(64), 0);
+      expect(result.events[0]?.selection).not.toHaveProperty("streamUrl");
+      expect(result.events[0]?.selection).not.toHaveProperty("browserCredential");
+    } finally { vi.unstubAllGlobals(); }
+    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ protocolVersion: 2, events: [], paired: true }) }));
+    try { await expect(companionEvents("http://relay.test", "t".repeat(64), 0)).rejects.toThrow("response was unavailable or invalid"); }
+    finally { vi.unstubAllGlobals(); }
   });
 
   it("turns a safe selection into a local provider title without a stream URL", () => {

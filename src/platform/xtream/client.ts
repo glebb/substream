@@ -1,4 +1,5 @@
-import { normalizeTitle, searchTerms, stableId, type VodCatalogItem } from "../../core/catalog/index.ts";
+import { normalizeTitle, searchTerms, type VodCatalogItem } from "../../core/catalog/index.ts";
+import { xtreamConnectionMetadata } from "../../core/provider/xtream.ts";
 import { providerRequestUrl } from "../provider-request.ts";
 import type { EpgProgramme, LiveCategory, ProviderLiveStream } from "../../core/live/index.ts";
 
@@ -15,6 +16,8 @@ type XtreamConnection = {
   streamBaseUrl: string;
   username: string;
   password: string;
+  sourceFingerprint: string;
+  pairingFingerprint: string;
 };
 
 type XtreamCategoryResponse = { category_id?: string | number; category_name?: string };
@@ -54,13 +57,11 @@ export class XtreamClient {
     }
     const username = playlist.searchParams.get("username");
     const password = playlist.searchParams.get("password");
-    if (!username || !password || !/\/get\.php$/i.test(playlist.pathname)) return null;
-
-    const apiUrl = new URL(playlist.toString());
-    apiUrl.pathname = apiUrl.pathname.replace(/get\.php$/i, "player_api.php");
-    apiUrl.search = "";
-    const streamBaseUrl = playlist.origin + playlist.pathname.slice(0, playlist.pathname.lastIndexOf("/") + 1);
-    return new XtreamClient({ apiUrl, streamBaseUrl, username, password }, request);
+    if (!username || !password) return null;
+    const metadata = xtreamConnectionMetadata({ origin: playlist.origin, pathname: playlist.pathname, username, password });
+    if (!metadata) return null;
+    return new XtreamClient({ apiUrl: new URL(metadata.apiUrl), streamBaseUrl: metadata.streamBaseUrl, username, password,
+      sourceFingerprint: metadata.sourceFingerprint, pairingFingerprint: metadata.pairingFingerprint }, request);
   }
 
   async categories(): Promise<XtreamCategory[]> {
@@ -210,12 +211,12 @@ export class XtreamClient {
 
   /** Stable server/path fingerprint that deliberately excludes playlist credentials. */
   sourceFingerprint(): string {
-    return stableId(this.connection.apiUrl.origin + this.connection.apiUrl.pathname);
+    return this.connection.sourceFingerprint;
   }
 
   /** Account-aware pairing identity; hashes the username without exposing it. */
   pairingFingerprint(): string {
-    return stableId(this.connection.apiUrl.origin + this.connection.apiUrl.pathname + "\0" + this.connection.username);
+    return this.connection.pairingFingerprint;
   }
 
   private async get<T>(action: string, parameters: Record<string, string> = {}): Promise<T> {

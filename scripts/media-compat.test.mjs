@@ -339,29 +339,65 @@ describe("browser media compatibility planning", () => {
     await rm(tempRoot, { recursive: true, force: true });
   });
 
-  it("rejects non-HTTP, credentialed, and private-network media sources", () => {
+  it.each([
+    "0.1.2.3", "10.20.30.40", "100.64.0.1", "100.127.255.254", "127.0.0.1",
+    "169.254.1.2", "172.16.0.1", "172.31.255.254", "192.0.0.1", "192.0.2.1",
+    "192.88.99.1", "192.168.1.20", "198.18.0.1", "198.19.255.254", "198.51.100.1",
+    "203.0.113.1", "224.0.0.1", "239.255.255.255", "240.0.0.1", "255.255.255.255",
+    "::", "::1", "::192.0.2.1", "::ffff:10.0.0.1", "::ffff:7f00:1", "fc00::1",
+    "fd12:3456::1", "fe80::1", "ff02::1", "100::1", "2001::1", "2001:2::1",
+    "2001:db8::1", "2002::1", "3fff::1", "5f00::1", "64:ff9b::a00:1", "64:ff9b:1::1",
+  ])("rejects non-global literal media origin %s", (address) => {
+    const host = address.includes(":") ? `[${address}]` : address;
+    expect(validMediaSource(`http://${host}/video.mkv`)).toBe(false);
+  });
+
+  it.each(["8.8.8.8", "93.184.216.34", "216.239.32.10", "2001:4860:4860::8888"])(
+    "allows global unicast literal media origin %s", (address) => {
+      const host = address.includes(":") ? `[${address}]` : address;
+      expect(validMediaSource(`https://${host}/video.mkv`)).toBe(true);
+    },
+  );
+
+  it("rejects non-HTTP and credentialed media sources", () => {
     expect(validMediaSource("https://media.example.invalid/video.mkv?token=test")).toBe(true);
     expect(validMediaSource("file:///etc/passwd")).toBe(false);
     expect(validMediaSource("http://user:pass@media.example.invalid/video.mkv")).toBe(false);
-    expect(validMediaSource("http://127.0.0.1/video.mkv")).toBe(false);
-    expect(validMediaSource("http://192.168.1.20/video.mkv")).toBe(false);
   });
 
-  it("rejects a malicious private DNS answer before attempting an upstream connection", async () => {
+  it.each([
+    "10.0.0.7", "100.64.0.2", "127.0.0.1", "169.254.0.4", "172.20.1.1", "192.0.2.5",
+    "192.168.1.9", "198.18.0.4", "203.0.113.7", "224.0.0.1", "240.0.0.1", "::1",
+    "fc00::1", "fe80::1", "ff02::1", "2001:db8::7", "3fff::7", "::ffff:192.168.1.9",
+  ])("rejects a non-public DNS answer (%s) before attempting an upstream connection", async (address) => {
     const request = vi.fn();
     await expect(fetchMediaSource("http://media.example.invalid/video.mkv", {
-      resolveHost: async () => [{ address: "10.0.0.7", family: 4 }],
+      resolveHost: async () => [{ address, family: address.includes(":") ? 6 : 4 }],
       request,
     })).rejects.toThrow("Media source is not allowed.");
     expect(request).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["93.184.216.34", 4],
+    ["2001:4860:4860::8888", 6],
+  ])("allows a public DNS answer (%s) and uses the injected request", async (address, family) => {
+    const request = vi.fn(async () => new Response("synthetic media", { status: 200 }));
+    const response = await fetchMediaSource("http://media.example.invalid/video.mkv", {
+      resolveHost: async () => [{ address, family }],
+      request,
+    });
+    expect(response.status).toBe(200);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0][2]).toEqual({ address, family });
+  });
+
   it("pins the first validated address and resolves redirects independently", async () => {
     const resolveHost = vi.fn(async (hostname) => hostname === "media.example.invalid"
-      ? [{ address: "203.0.113.7", family: 4 }]
+      ? [{ address: "93.184.216.34", family: 4 }]
       : [{ address: "192.168.1.9", family: 4 }]);
     const request = vi.fn(async (_url, _headers, address) => {
-      expect(address).toEqual({ address: "203.0.113.7", family: 4 });
+      expect(address).toEqual({ address: "93.184.216.34", family: 4 });
       return new Response(null, { status: 302, headers: { location: "http://redirect.example.invalid/video.mkv" } });
     });
     await expect(fetchMediaSource("http://media.example.invalid/video.mkv", { resolveHost, request }))

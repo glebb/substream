@@ -1,3 +1,5 @@
+import { xtreamConnectionMetadata } from "../src/core/provider/xtream.ts";
+
 /**
  * LAN companion provider service.  This module intentionally returns only
  * catalogue metadata and provider identifiers; credentials and stream URLs
@@ -9,11 +11,10 @@ export function xtreamConnectionFromPlaylist(playlistUrl) {
   try { playlist = new URL(playlistUrl); } catch { return null; }
   const username = playlist.searchParams.get("username");
   const password = playlist.searchParams.get("password");
-  if (!username || !password || !/\/get\.php$/i.test(playlist.pathname)) return null;
-  const apiUrl = new URL(playlist.toString());
-  apiUrl.pathname = apiUrl.pathname.replace(/get\.php$/i, "player_api.php");
-  apiUrl.search = "";
-  return { apiUrl, username, password, sourceFingerprint: stableId(apiUrl.origin + apiUrl.pathname + "\0" + username) };
+  if (!username || !password) return null;
+  const metadata = xtreamConnectionMetadata({ origin: playlist.origin, pathname: playlist.pathname, username, password });
+  if (!metadata) return null;
+  return { apiUrl: new URL(metadata.apiUrl), username, password, sourceFingerprint: metadata.pairingFingerprint };
 }
 
 export async function fetchXtreamAction(connection, action, parameters = {}, request = fetch, { timeoutMs = 30_000, signal } = {}) {
@@ -137,13 +138,4 @@ function normalizeSearch(value) {
 function numberOrNull(value) {
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
-}
-
-function stableId(value) {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `vod_${(hash >>> 0).toString(36)}`;
 }
