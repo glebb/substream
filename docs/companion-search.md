@@ -28,7 +28,7 @@ The relay serves the built web application at its root and relay APIs under `/ap
    npm run dev:personal
    ```
 
-   The default relay port is `8787`; `COMPANION_PORT` changes it. The service listens on LAN interfaces. `npm run companion:dev` remains available when you need to start the relay by itself.
+   This development command opts into LAN mode and prints a warning because the relay uses plain HTTP and currently has no authentication. The standalone `npm run companion:dev` binds to `127.0.0.1` by default; pass `--lan` (`node scripts/companion-server.mjs --lan`) or set `COMPANION_LAN=1` to expose it on LAN interfaces. `COMPANION_PORT` changes the default port `8787`, and `COMPANION_HOST` can select the LAN bind address when LAN mode is enabled. `COMPANION_ALLOWED_ORIGINS` is a comma-separated exact-origin allow-list; it defaults to Vite's `http://localhost:5173` and `http://127.0.0.1:5173` origins.
 
 3. Rebuild and deploy the TV application after changing `COMPANION_SERVER_URL`. Ensure the TV and computer running the relay can reach each other on the LAN.
 
@@ -50,7 +50,7 @@ TV playback requires a reachable relay, an active TV session, and a matching Xtr
 | Browser provider connection | The playlist configured in that browser, used to refresh Xtream Search and resolve **Play here** |
 | Catalogue/search responses | Catalogue metadata and playback identifiers; no credentials or stream URLs |
 
-When the TV registers, it sends its playlist URL and credentials to the relay, which keeps them in memory for the active session. This registration is only needed for the opt-in **Play on TV** feature; an unreachable or unconfigured relay does not affect normal TV use. The relay intentionally has no authentication gate and uses plain HTTP for local development. Keep it on a trusted LAN and do not expose it to the internet. A public service needs HTTPS/WSS, authentication and rate limiting, and secure server-side credential storage. Never print or commit `.env`, playlist URLs, OpenSubtitles credentials, tokens, or signed media URLs. Tests use synthetic catalogue fixtures only.
+When the TV registers, it sends its playlist URL and credentials to the relay, which keeps them in memory for the active session. This registration is only needed for the opt-in **Play on TV** feature; an unreachable or unconfigured relay does not affect normal TV use. The relay defaults to loopback and has an exact-origin CORS allow-list, but LAN mode still uses plain HTTP and has no authentication or pairing gate. Keep LAN mode on a trusted network and do not expose it to the internet. Authenticated pairing and stronger transport protection remain required follow-up work. Never print or commit `.env`, playlist URLs, OpenSubtitles credentials, tokens, or signed media URLs. Tests use synthetic catalogue fixtures only.
 
 ## Troubleshooting
 

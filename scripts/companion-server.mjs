@@ -9,7 +9,10 @@ import { randomBytes as randomToken } from "node:crypto";
 import { prepareMedia } from "./media-compat.mjs";
 
 const port = Number(process.env.COMPANION_PORT || 8787);
-const host = process.env.COMPANION_HOST || "0.0.0.0";
+const lanEnabled = process.argv.includes("--lan") || process.env.COMPANION_LAN === "1";
+const host = lanEnabled ? (process.env.COMPANION_HOST || "0.0.0.0") : "127.0.0.1";
+const allowedOrigins = new Set((process.env.COMPANION_ALLOWED_ORIGINS || "http://localhost:5173,http://127.0.0.1:5173")
+  .split(",").map((origin) => origin.trim()).filter(Boolean));
 const projectDir = fileURLToPath(new URL("../", import.meta.url));
 const publicDir = join(projectDir, "public");
 const distDir = join(projectDir, "dist");
@@ -43,6 +46,14 @@ function sameOriginRequest(request) {
 function loopbackPeer(request) {
   const address = String(request.socket?.remoteAddress || "").toLowerCase();
   return address === "::1" || address === "127.0.0.1" || address === "::ffff:127.0.0.1";
+}
+
+function allowedOrigin(origin) {
+  if (!origin) return false;
+  try {
+    const parsed = new URL(origin);
+    return parsed.origin === origin && allowedOrigins.has(origin);
+  } catch { return false; }
 }
 
 async function readPlaylistWithRetry(filename, attempts = 5) {
@@ -98,7 +109,7 @@ async function mediaRoute(request, response, url) {
     const data = isPlaylist ? await readPlaylistWithRetry(filename) : await readMediaFile(filename);
     if (!data) throw new Error("Playlist is being updated.");
     if (isPlaylist) job.lastPlaylist = data;
-    response.writeHead(200, { "content-type": isPlaylist ? "application/vnd.apple.mpegurl" : "video/mp2t", "content-length": data.byteLength, "cache-control": "no-store", ...(request.headers.origin ? { "access-control-allow-origin": request.headers.origin } : {}) });
+    response.writeHead(200, { "content-type": isPlaylist ? "application/vnd.apple.mpegurl" : "video/mp2t", "content-length": data.byteLength, "cache-control": "no-store", ...(allowedOrigin(request.headers.origin) ? { "access-control-allow-origin": request.headers.origin, vary: "Origin" } : {}) });
     mediaDebug("served", { kind: routeKind, status: 200, bytes: data.byteLength });
     response.end(data);
   } catch {
@@ -107,7 +118,7 @@ async function mediaRoute(request, response, url) {
     // complete manifest instead of a fatal 503 that stops playback.
     if (isPlaylist && job.lastPlaylist) {
       mediaDebug("served_cached", { kind: "playlist", status: 200, bytes: job.lastPlaylist.byteLength });
-      response.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "content-length": job.lastPlaylist.byteLength, "cache-control": "no-store", ...(request.headers.origin ? { "access-control-allow-origin": request.headers.origin } : {}) });
+      response.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "content-length": job.lastPlaylist.byteLength, "cache-control": "no-store", ...(allowedOrigin(request.headers.origin) ? { "access-control-allow-origin": request.headers.origin, vary: "Origin" } : {}) });
       response.end(job.lastPlaylist);
       return true;
     }
@@ -120,7 +131,7 @@ async function mediaRoute(request, response, url) {
 
 function json(response, status, value) {
   const body = JSON.stringify(value);
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...(response.corsOrigin ? { "access-control-allow-origin": response.corsOrigin, vary: "Origin" } : {}) });
   response.end(body);
 }
 
@@ -136,7 +147,7 @@ async function nordicEpg(response) {
       "content-type": "application/gzip",
       "content-length": payload.byteLength,
       "cache-control": "public, max-age=300",
-      "access-control-allow-origin": "*",
+      ...(response.corsOrigin ? { "access-control-allow-origin": response.corsOrigin, vary: "Origin" } : {}),
     });
     response.end(payload);
   } catch {
@@ -193,7 +204,15 @@ function publicCatalogue(records) {
 }
 
 export async function route(request, response, url) {
-  if (request.method === "OPTIONS") { response.writeHead(204, { "access-control-allow-origin": request.headers?.origin || "null", "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "content-type" }); response.end(); return; }
+  const origin = request.headers?.origin;
+  if (allowedOrigin(origin)) response.corsOrigin = origin;
+  if (request.method === "OPTIONS") {
+    if (!allowedOrigin(origin)) return json(response, 403, { error: "Request origin is not allowed." });
+    response.writeHead(204, { "access-control-allow-origin": origin, "access-control-allow-methods": "GET,POST,DELETE,OPTIONS", "access-control-allow-headers": "content-type", vary: "Origin" });
+    response.end();
+    return;
+  }
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && origin && !allowedOrigin(origin)) return json(response, 403, { error: "Request origin is not allowed." });
   if (url.pathname.startsWith("/api/media/")) { const handled = await mediaRoute(request, response, url); if (handled !== false) return; }
   if (request.method === "GET" && url.pathname === "/api/nordic-epg") return nordicEpg(response);
   if (request.method === "POST" && url.pathname === "/api/connect") {
@@ -314,10 +333,11 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     console.error(`Companion service could not listen on port ${port}: ${explanation} (${code}).`);
     process.exitCode = 1;
   });
+  if (lanEnabled) console.warn("WARNING: Companion LAN mode exposes an unauthenticated, plain-HTTP relay to the local network. Use only on a trusted network; TV playlist credentials pass through this service.");
   server.listen(port, host, () => {
     const address = server.address();
     const listeningPort = address && typeof address === "object" ? address.port : port;
-    console.log(`Companion service listening on http://127.0.0.1:${listeningPort}`);
+    console.log(`Companion service listening on http://${host}:${listeningPort}`);
   });
 
   const mediaCleanup = setInterval(() => {

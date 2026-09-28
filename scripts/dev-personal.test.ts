@@ -28,7 +28,7 @@ describe("personal development launcher", () => {
       env: expect.objectContaining({ PERSONAL_BUILD: "1" }),
       stdio: "inherit",
     }));
-    expect(spawnChild).toHaveBeenNthCalledWith(2, process.execPath, ["scripts/companion-server.mjs"], expect.objectContaining({
+    expect(spawnChild).toHaveBeenNthCalledWith(2, process.execPath, ["scripts/companion-server.mjs", "--lan"], expect.objectContaining({
       cwd: "/project",
       stdio: "inherit",
     }));

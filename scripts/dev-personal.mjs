@@ -10,7 +10,7 @@ export function startDevStack({ spawnChild = spawn, root = projectRoot, onExit =
     env: { ...process.env, PERSONAL_BUILD: "1" },
     stdio: "inherit",
   });
-  const relay = spawnChild(process.execPath, ["scripts/companion-server.mjs"], {
+  const relay = spawnChild(process.execPath, ["scripts/companion-server.mjs", "--lan"], {
     cwd: root,
     env: process.env,
     stdio: "inherit",

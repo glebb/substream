@@ -20,13 +20,15 @@ function request(method, value) {
   };
 }
 
-async function callRoute(method, path, body) {
+async function callRoute(method, path, body, origin) {
   const result = { status: 0, headers: {}, body: "" };
   const response = {
     writeHead(status, headers) { result.status = status; result.headers = headers; },
     end(value = "") { result.body = String(value); },
   };
-  await route(request(method, body), response, new URL(`http://relay.test${path}`));
+  const input = request(method, body);
+  input.headers = { host: "relay.test", ...(origin ? { origin } : {}) };
+  await route(input, response, new URL(`http://relay.test${path}`));
   return { ...result, json: () => JSON.parse(result.body) };
 }
 
@@ -68,12 +70,29 @@ describe("LAN relay playback route", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
     try {
-      const result = await callRoute("GET", "/api/nordic-epg");
+      const result = await callRoute("GET", "/api/nordic-epg", undefined, "http://localhost:5173");
       expect(result.status).toBe(200);
-      expect(result.headers).toMatchObject({ "content-type": "application/gzip", "access-control-allow-origin": "*" });
+      expect(result.headers).toMatchObject({ "content-type": "application/gzip", "access-control-allow-origin": "http://localhost:5173" });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("rejects state-changing requests from origins outside the configured allow-list", async () => {
+    const response = await callRoute("POST", "/api/connect", {
+      playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture",
+    }, "https://attacker.invalid");
+    expect(response.status).toBe(403);
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("answers preflight only for configured browser origins", async () => {
+    const allowed = await callRoute("OPTIONS", "/api/connect", undefined, "http://localhost:5173");
+    const rejected = await callRoute("OPTIONS", "/api/connect", undefined, "https://attacker.invalid");
+    expect(allowed.status).toBe(204);
+    expect(allowed.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
+    expect(rejected.status).toBe(403);
+    expect(rejected.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
