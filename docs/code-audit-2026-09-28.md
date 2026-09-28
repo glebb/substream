@@ -69,11 +69,11 @@ Plan:
 
 Plan: create a shared, platform-independent provider domain module with interfaces such as `ProviderTransport`, `ProviderConnection`, and `PlaybackResolver`. Browser and Node should inject fetch implementations. Keep credentials in platform adapters and return typed domain values from the shared module. Relay catalogue search is unsupported: the browser owns catalogue search and contacts its configured provider directly.
 
-### P2 — companion protocol is implicit and stateful
+### P2 — companion remains intentionally single-device and in-memory
 
-The protocol is spread across the React panel, browser client, Node routes, and documentation. Session state is an in-memory `Map`, `activeSessionId` makes the service single-TV, the event list retains only 20 messages, and polling is the delivery mechanism. Restart, a second TV, or an offline poll loses/replaces state without a protocol-level acknowledgement.
+The protocol now has a versioned schema, separate scoped browser/TV capabilities, bounded authenticated long polling, acknowledgement, and explicit queue-retention-gap reporting. Session state is still an in-memory `Map`, and one active session is deliberately supported. A relay restart loses pairing/session state; a TV app reload loses its in-memory TV credential and must wait for expiry or restart the relay before registering again. Delivery is at least once until acknowledgement, so a crash after local handling but before ACK commit can replay a command.
 
-Plan: publish a versioned schema (request/response/event types, ownership, error codes, TTL, ordering, acknowledgement and migration). Add a `deviceId` and separate browser/TV capabilities. Use server-sent events, WebSocket, or authenticated long polling with backoff. If persistence is out of scope, codify “one TV, no restart recovery” in code and UI rather than silently clearing a prior session.
+Remaining plan: either add durable device identities, persistence, and multi-device ownership, or make the one-TV/no-restart-recovery development constraint more explicit in UI and setup guidance.
 
 ### P2 — layer boundaries are mostly good but application composition is concentrated
 
@@ -93,7 +93,7 @@ Follow-up: add a component-level TV integration test that boots live and VOD flo
 
 ### P1 — browser catalogue work remains large and UI-thread bound
 
-The relay catalogue loader and its per-session cache were removed because production Search uses the browser-owned provider connection. Browser refresh has a four-worker limit, but does normalization/record accumulation on the UI thread. Provider requests do not impose deadlines.
+The relay catalogue loader and its per-session cache were removed because production Search uses the browser-owned provider connection. Browser refresh has a four-worker limit, does normalization/record accumulation on the UI thread, and its Xtream/provider playlist requests now have cancellable bounded deadlines.
 
 Plan: keep catalogue search in the browser, add incremental/indexed storage, cancellation/deadlines and size ceilings as needed, and move normalization/index construction to a worker for browser-compatible builds. Measure catalogue size, refresh duration, peak heap and first-search latency on representative synthetic catalogues.
 
@@ -103,11 +103,11 @@ Plan: keep catalogue search in the browser, add incremental/indexed storage, can
 
 Plan: store records individually with indexes by source fingerprint and normalized tokens; debounce search input; keep a compact in-memory token index after a controlled initial load; sort once or maintain stable sort keys. Establish a performance budget (for example: 50k records, <100 ms query on target browser/TV) and add benchmark fixtures that contain no real playlist data.
 
-### P2 — polling and media transfer amplify steady-state load
+### P2 — media transfer and guide bridge still amplify steady-state load
 
-Each connected TV calls `/api/pair/events` every 1.5 seconds. HLS segment handling reads whole segment files into memory before responding; concurrent clients can multiply this allocation. The EPG relay downloads and buffers the entire compressed response on every cache miss.
+TV event delivery now uses authenticated 25-second long polling with failure backoff, so idle polling no longer generates a request every 1.5 seconds. HLS segment handling still reads complete segment files into memory before responding; concurrent clients can multiply that allocation. The EPG relay still downloads and buffers the compressed response on each cache miss.
 
-Plan: replace polling with push/long-poll and exponential backoff; stream files with backpressure; cache EPG payloads in memory with single-flight fetches and conditional refresh. Put limits and metrics around active streams and response bytes.
+Remaining plan: stream files with backpressure; cache EPG payloads in memory with single-flight fetches and conditional refresh; and add limits and metrics around active streams and response bytes.
 
 ## TV ↔ computer dependency map
 
@@ -130,7 +130,7 @@ Implemented: the live-TV EPG relay dependency is removed; the relay is loopback-
 
 ### Phase 1 — make the service bounded (P1)
 
-Introduce deadlines, abort propagation, request/body limits, provider/catalogue single-flight cache, conversion concurrency/disk/duration limits, and structured metrics. Success criterion: synthetic slow/large/redirecting upstreams cannot exhaust a development machine, and the UI receives a sanitized bounded-time error.
+Implemented: body limits, abort propagation and deadlines, browser/provider request deadlines, conversion concurrency/output/duration limits, DNS-pinned media egress, and synthetic slow/large/redirecting tests. Remaining Phase 1 work is structured metrics, per-client quotas, and guide/media streaming/cache observability.
 
 ### Phase 2 — consolidate domains and protocol (P1/P2)
 
