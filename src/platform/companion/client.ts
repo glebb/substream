@@ -101,11 +101,12 @@ export async function sendCompanionPlayback(server: string, browserCredential: s
   if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || value.accepted !== true) throw new Error("Could not send playback to the TV.");
 }
 
-export async function companionEvents(server: string, tvCredential: string, after: number): Promise<CompanionEventsResult> {
+export async function companionEvents(server: string, tvCredential: string, after: number, options: { waitMs?: number; signal?: AbortSignal } = {}): Promise<CompanionEventsResult> {
   let response: Response;
   let value: unknown;
   try {
-    response = await fetch(server + "/api/pair/events?after=" + after + "&protocolVersion=" + COMPANION_PROTOCOL_VERSION, { cache: "no-store", headers: { authorization: `Bearer ${tvCredential}` } });
+    const waitMs = Math.max(0, Math.min(25_000, Math.floor(options.waitMs ?? 25_000)));
+    response = await fetch(server + "/api/pair/events?after=" + after + "&protocolVersion=" + COMPANION_PROTOCOL_VERSION + "&wait=" + waitMs, { cache: "no-store", headers: { authorization: `Bearer ${tvCredential}` }, ...(options.signal ? { signal: options.signal } : {}) });
     value = await response.json() as typeof value;
   } catch { throw new Error("Companion service response was unavailable or invalid."); }
   if (!response.ok) throw new Error("Companion connection expired.");

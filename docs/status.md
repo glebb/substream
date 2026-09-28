@@ -42,7 +42,7 @@ Settings holds playlist and API configuration. If local storage is denied, confi
 | `src/core/live`, `src/core/subtitles` | Live selection/EPG and subtitle rules |
 | `src/platform/xtream`, `tmdb`, `opensubtitles` | External service adapters |
 | `src/platform/browser`, `web`, `tizen` | Playback, device storage, network and remote integration |
-| `src/platform/companion` | Optional web-to-TV VOD command client and safe search-cache utilities |
+| `src/platform/companion` | Optional web-to-TV VOD command client and browser-owned Xtream search/cache adapter |
 | `src/app/App.tsx`, `LiveTv.tsx` | VOD/application shell and live UI |
 | `src/app/remote-navigation.ts`, `remote-editable.tsx` | Focus decisions and deliberate TV text editing |
 | `scripts/`, `vite.config.ts`, `tizen/` | Development services, build targets, packaging and deployment |

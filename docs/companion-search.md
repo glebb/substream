@@ -14,7 +14,7 @@ The normal app provides Search; there is no separate companion page. The optiona
 
 ## Optional setup for Play on TV
 
-The relay serves the built web application at its root and relay APIs under `/api/*`. You do not need to open the app through the relay to search or play in the browser.
+The relay serves the built web application at its root. It does not serve catalogue or search APIs: browser search connects directly to the provider configured in the web app. Relay APIs are limited to paired TV playback commands, the public Nordic guide CORS bridge, and the development-only browser MKV audio fallback. You do not need to open the app through the relay to search or play in the browser.
 
 1. Copy `.env.example` to the ignored `.env` file if needed. Set the relay's LAN address for the TV build:
 
@@ -45,16 +45,15 @@ TV playback requires a reachable relay, an active TV session, and a matching Xtr
 | Location | Data held |
 | --- | --- |
 | TV app | Playlist URL/provider credentials and final stream URLs; normal TV features remain local to the TV app |
-| LAN relay memory | TV's active Xtream credentials and provider records, plus pending playback commands |
+| LAN relay memory | TV's active Xtream credentials and pending playback commands |
 | Web browser IndexedDB | Safe Xtream title metadata, content type, provider IDs, source fingerprint, extension/category metadata, and refresh timestamp; imported M3U catalogue data is held by the app's local catalogue store |
 | Browser provider connection | The playlist configured in that browser, used to refresh Xtream Search and resolve **Play here** |
-| Catalogue/search responses | Catalogue metadata and playback identifiers; no credentials or stream URLs |
 
 When the TV registers, it sends its playlist URL and credentials to the relay, which keeps them in memory for the active session. A one-time pairing code grants one browser a separate scoped credential; the TV credential can renew or replace only its own active session. These credentials are held in app memory. If the TV app reloads while the relay remains running, it loses its TV credential and cannot replace the still-live session; restart the relay to clear its in-memory session, or wait for the 30-minute session expiry. Restarting the relay also clears all sessions. This registration is only needed for the opt-in **Play on TV** feature; an unreachable or unconfigured relay does not affect normal TV use. The relay defaults to loopback and has an exact-origin CORS allow-list, but LAN mode still uses plain HTTP, so playlist credentials, pairing codes, and bearer credentials are unencrypted in transit. Keep LAN mode on a trusted network and do not expose it to the internet. Never print or commit `.env`, playlist URLs, OpenSubtitles credentials, tokens, or signed media URLs. Tests use synthetic catalogue fixtures only.
 
 ## Troubleshooting
 
-- **Xtream Search is empty:** confirm a valid Xtream playlist is configured in the browser app, then refresh the catalogue. Search does not use the TV's provider session.
+- **Xtream Search is empty:** confirm a valid Xtream playlist is configured in the browser app, then refresh the catalogue. Search does not use the TV's provider session or relay APIs.
 - **M3U Search is empty:** import the playlist in that browser app and check that the local catalogue contains searchable entries.
 - **Search works offline but looks stale:** reconnect the browser to its configured provider and refresh the Xtream catalogue.
 - **Play here fails:** confirm the browser can reach its configured provider and that the selected title belongs to it.

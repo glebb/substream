@@ -92,7 +92,7 @@ describe("companion client", () => {
       await sendCompanionPlayback("http://relay.test", paired.browserCredential, selectionWithUntrustedExtras);
       await companionEvents("http://relay.test", "t".repeat(64), 0);
       expect(calls.map(({ url }) => url)).toEqual([
-        "http://relay.test/api/pair/redeem", "http://relay.test/api/pair/play", "http://relay.test/api/pair/events?after=0&protocolVersion=1",
+        "http://relay.test/api/pair/redeem", "http://relay.test/api/pair/play", "http://relay.test/api/pair/events?after=0&protocolVersion=1&wait=25000",
       ]);
       expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({ protocolVersion: 1, code: "12345678" });
       expect(JSON.parse(String(calls[1]?.init?.body))).toMatchObject({ protocolVersion: 1, selection: { kind: "movie", id: "42" } });
@@ -116,6 +116,22 @@ describe("companion client", () => {
     vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ protocolVersion: 2, events: [], paired: true }) }));
     try { await expect(companionEvents("http://relay.test", "t".repeat(64), 0)).rejects.toThrow("response was unavailable or invalid"); }
     finally { vi.unstubAllGlobals(); }
+  });
+
+  it("bounds long-poll duration and forwards cancellation to fetch", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      requestUrl = url;
+      requestInit = init;
+      return { ok: true, json: async () => ({ protocolVersion: 1, paired: false, events: [] }) };
+    });
+    const controller = new AbortController();
+    try {
+      await companionEvents("http://relay.test", "t".repeat(64), 9, { waitMs: 90_000, signal: controller.signal });
+      expect(requestUrl).toContain("after=9&protocolVersion=1&wait=25000");
+      expect(requestInit?.signal).toBe(controller.signal);
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("turns a safe selection into a local provider title without a stream URL", () => {

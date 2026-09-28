@@ -1,12 +1,10 @@
 // @ts-nocheck
 import { describe, expect, it, vi } from "vitest";
-import { loadXtreamCatalogue } from "./companion-service.mjs";
-
+import { EventEmitter } from "node:events";
 vi.mock("./companion-service.mjs", async (importOriginal) => {
   const original = await importOriginal();
   return {
     ...original,
-    loadXtreamCatalogue: vi.fn(async () => []),
     resolveXtreamEpisode: vi.fn(async (connection, seriesId, episodeId) => seriesId === "7" && episodeId === "101"
       ? { id: episodeId, kind: "episode", title: "Synthetic Show S01E01", year: null, extension: "mkv", sourceFingerprint: connection.sourceFingerprint }
       : null),
@@ -17,23 +15,43 @@ const { route } = await import("./companion-server.mjs");
 let previousTvCredential = "";
 
 function request(method, value) {
-  return {
-    method,
-    async *[Symbol.asyncIterator]() { yield JSON.stringify(value); },
-  };
+  const input = new EventEmitter();
+  input.method = method;
+  input.headers = {};
+  input.socket = { remoteAddress: "127.0.0.1" };
+  input.destroy = () => {};
+  input[Symbol.asyncIterator] = async function* () { yield JSON.stringify(value); };
+  return input;
 }
 
 async function callRoute(method, path, body, origin, authorization) {
   const result = { status: 0, headers: {}, body: "" };
-  const response = {
+  const response = Object.assign(new EventEmitter(), {
+    writableFinished: false,
+    writableEnded: false,
     writeHead(status, headers) { result.status = status; result.headers = headers; },
-    end(value = "") { result.body = String(value); },
-  };
+    end(value = "") { result.body = String(value); this.writableEnded = true; this.writableFinished = true; this.emit("finish"); this.emit("close"); },
+  });
   const input = request(method, body);
   input.headers = { host: "relay.test", ...(origin ? { origin } : {}), ...(authorization ? { authorization } : {}) };
   input.socket = { remoteAddress: "127.0.0.1" };
   await route(input, response, new URL(`http://relay.test${path}`));
-  return { ...result, json: () => JSON.parse(result.body) };
+  return { ...result, input, response, json: () => JSON.parse(result.body) };
+}
+
+function pendingEvents(session, wait = 25_000) {
+  const result = { status: 0, headers: {}, body: "" };
+  const input = request("GET");
+  input.headers = { host: "relay.test", authorization: `Bearer ${session.tvCredential}` };
+  const response = Object.assign(new EventEmitter(), {
+    writableFinished: false,
+    writableEnded: false,
+    writeHead(status, headers) { result.status = status; result.headers = headers; },
+    end(value = "") { result.body = String(value); this.writableEnded = true; this.writableFinished = true; this.emit("finish"); this.emit("close"); },
+  });
+  const completed = route(input, response, new URL(`http://relay.test/api/pair/events?after=0&wait=${wait}`))
+    .then(() => ({ ...result, input, response, json: () => JSON.parse(result.body) }));
+  return { input, response, completed };
 }
 
 async function callRouteWithRequest(input, path) {
@@ -57,6 +75,49 @@ async function pairedBrowser() {
 }
 
 describe("LAN relay playback route", () => {
+  it("long-polls until an authenticated browser command is queued", async () => {
+    const authorization = await pairedBrowser();
+    const current = await callRoute("GET", "/api/active", undefined, undefined, authorization);
+    const pending = pendingEvents({ tvCredential: previousTvCredential });
+    await vi.waitFor(() => expect(pending.input.listenerCount("aborted")).toBe(1));
+    const selection = { kind: "movie", id: "31", title: "Synthetic", year: null, extension: "mp4", sourceFingerprint: current.json().sourceFingerprint };
+    expect((await callRoute("POST", "/api/pair/play", { protocolVersion: 1, selection }, undefined, authorization)).status).toBe(200);
+    const result = await pending.completed;
+    expect(result.status).toBe(200);
+    expect(result.json().events).toMatchObject([{ sequence: 1, action: "play", selection: { id: "31" } }]);
+    expect(pending.input.listenerCount("aborted")).toBe(0);
+    expect(pending.response.listenerCount("close")).toBe(0);
+  });
+
+  it("times out and removes disconnected waiters", async () => {
+    await pairedBrowser();
+    const tvCredential = previousTvCredential;
+    const timed = pendingEvents({ tvCredential }, 8);
+    const timeoutResult = await timed.completed;
+    expect(timeoutResult.status).toBe(200);
+    expect(timeoutResult.json()).toMatchObject({ events: [], paired: true });
+    expect(timed.input.listenerCount("aborted")).toBe(0);
+
+    const disconnected = pendingEvents({ tvCredential });
+    await vi.waitFor(() => expect(disconnected.input.listenerCount("aborted")).toBe(1));
+    disconnected.input.emit("aborted");
+    await disconnected.completed;
+    expect(disconnected.input.listenerCount("aborted")).toBe(0);
+    expect(disconnected.response.listenerCount("close")).toBe(0);
+  });
+
+  it("ends a pending poll when the TV session is replaced", async () => {
+    await pairedBrowser();
+    const tvCredential = previousTvCredential;
+    const pending = pendingEvents({ tvCredential });
+    await vi.waitFor(() => expect(pending.input.listenerCount("aborted")).toBe(1));
+    const replacement = await callRoute("POST", "/api/connect", { playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture" }, undefined, `Bearer ${tvCredential}`);
+    previousTvCredential = replacement.json().tvCredential;
+    const result = await pending.completed;
+    expect(result.status).toBe(404);
+    expect(pending.input.listenerCount("aborted")).toBe(0);
+  });
+
   it("rejects declared and streamed oversized request bodies before parsing them", async () => {
     let declaredBodyRead = false;
     let declaredDestroyed = false;
@@ -94,7 +155,7 @@ describe("LAN relay playback route", () => {
   it("accepts a movie, rejects a fingerprint mismatch, and rejects an episode outside its series", async () => {
     const connected = await callRoute("POST", "/api/connect", {
       playlistUrl: "https://iptv.invalid/get.php?username=synthetic&password=fixture",
-    });
+    }, undefined, previousTvCredential ? `Bearer ${previousTvCredential}` : undefined);
     const session = connected.json();
     previousTvCredential = session.tvCredential;
     expect(connected.status).toBe(200);
@@ -162,54 +223,12 @@ describe("LAN relay playback route", () => {
     expect(currentRedeem.status).toBe(200);
     expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${first.tvCredential}`)).status).toBe(404);
     expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${currentRedeem.json().browserCredential}`)).status).toBe(404);
-    expect((await callRoute("GET", "/api/pair/events?after=0", undefined, undefined, `Bearer ${second.tvCredential}`)).status).toBe(200);
+    expect((await callRoute("GET", "/api/pair/events?after=0&wait=0", undefined, undefined, `Bearer ${second.tvCredential}`)).status).toBe(200);
   });
 
-  it("single-flights initial and refresh catalogue loads per paired session", async () => {
-    let resolveLoad;
-    let calls = 0;
-    loadXtreamCatalogue.mockReset().mockImplementation(() => {
-      calls += 1;
-      return new Promise((resolve) => { resolveLoad = resolve; });
-    });
-    const authorization = await pairedBrowser();
-    const initial = [
-      callRoute("GET", "/api/catalogue", undefined, undefined, authorization),
-      callRoute("GET", "/api/catalogue?refresh=1", undefined, undefined, authorization),
-      callRoute("GET", "/api/search?q=example", undefined, undefined, authorization),
-    ];
-    await vi.waitFor(() => expect(calls).toBe(1));
-    resolveLoad([{ id: "1", kind: "movie", title: "Example", searchTitle: "example", year: null, extension: "mp4", category: "Films", sourceFingerprint: "vod_fixture" }]);
-    const firstResults = await Promise.all(initial);
-    expect(firstResults.map((result) => result.status)).toEqual([200, 200, 200]);
-    expect(calls).toBe(1);
-
-    let resolveRefresh;
-    loadXtreamCatalogue.mockImplementation(() => {
-      calls += 1;
-      return new Promise((resolve) => { resolveRefresh = resolve; });
-    });
-    const refreshing = callRoute("GET", "/api/catalogue?refresh=1", undefined, undefined, authorization);
-    await vi.waitFor(() => expect(calls).toBe(2));
-    const joinedRefresh = callRoute("GET", "/api/catalogue", undefined, undefined, authorization);
-    resolveRefresh([]);
-    expect((await Promise.all([refreshing, joinedRefresh])).map((result) => result.status)).toEqual([200, 200]);
-    expect(calls).toBe(2);
-  });
-
-  it("clears failed catalogue loads so the next caller can retry", async () => {
-    let calls = 0;
-    loadXtreamCatalogue.mockReset().mockImplementation(async () => {
-      calls += 1;
-      if (calls === 1) throw new Error("https://provider.invalid/?username=secret&password=secret");
-      return [];
-    });
-    const authorization = await pairedBrowser();
-    const failed = await callRoute("GET", "/api/catalogue", undefined, undefined, authorization);
-    expect(failed.status).toBe(502);
-    expect(failed.body).not.toMatch(/provider\.invalid|secret/);
-    expect((await callRoute("GET", "/api/catalogue", undefined, undefined, authorization)).status).toBe(200);
-    expect(calls).toBe(2);
+  it("does not expose relay catalogue or search APIs", async () => {
+    expect((await callRoute("GET", "/api/catalogue")).status).toBe(404);
+    expect((await callRoute("GET", "/api/search?q=synthetic")).status).toBe(404);
   });
 
   it("exposes the public guide only as a credential-free CORS bridge", async () => {

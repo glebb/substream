@@ -31,7 +31,6 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
   const sequence = useRef(0);
   const renewalInFlight = useRef(false);
   const retryRenewalAt = useRef(0);
-  const pollInFlight = useRef(false);
   const connectInFlight = useRef(false);
   const onPlayRef = useRef(onPlay);
   const onSelectedRef = useRef(onSelected);
@@ -41,43 +40,54 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
   useEffect(() => {
     if (!connection) return;
     let cancelled = false;
+    const controller = new AbortController();
+    let retryTimer: number | undefined;
+    let resolveRetry: (() => void) | undefined;
+    let failures = 0;
+    const pause = (ms: number) => new Promise<void>((resolve) => {
+      resolveRetry = resolve;
+      retryTimer = window.setTimeout(() => { retryTimer = undefined; resolveRetry = undefined; resolve(); }, ms);
+    });
     const poll = async () => {
-      if (pollInFlight.current) return;
-      pollInFlight.current = true;
-      try {
-        if (Date.now() >= connection.expiresAt - 120_000 && Date.now() >= retryRenewalAt.current && !renewalInFlight.current) {
-          renewalInFlight.current = true;
-          retryRenewalAt.current = Date.now() + 10_000;
-          try { await connect(true); } finally { renewalInFlight.current = false; }
-          return;
-        }
-        if (!paired && Date.now() >= connection.pairingExpiresAt) {
-          await connect(true);
-          return;
-        }
-        const response = await companionEvents(server, connection.tvCredential, sequence.current);
-        setPaired(response.paired);
-        for (const event of response.events) {
-          sequence.current = Math.max(sequence.current, event.sequence);
-          const client = XtreamClient.fromPlaylistUrl(playlistUrl);
-          if (!client || event.selection.sourceFingerprint !== client.pairingFingerprint()) {
-            setError("The selected title belongs to a different provider connection.");
+      while (!cancelled) {
+        try {
+          if (Date.now() >= connection.expiresAt - 120_000 && Date.now() >= retryRenewalAt.current && !renewalInFlight.current) {
+            renewalInFlight.current = true;
+            retryRenewalAt.current = Date.now() + 10_000;
+            try { await connect(true); } finally { renewalInFlight.current = false; }
+            if (!cancelled) await pause(500);
             continue;
           }
-          const candidate = companionSelectionTitle(event.selection);
-          if (!candidate) continue;
-          const streamKind = candidate.contentType === "movie" ? "movie" : "series";
-          candidate.streamUrl = client.streamUrlFor(streamKind, event.selection.id, event.selection.extension);
-          if (event.action === "play") {
-            setStatus(`${candidate.title} sent to TV playback.`);
-            onPlayRef.current(candidate);
-          } else if (onSelectedRef.current) {
-            setStatus(`${candidate.title} received from companion.`);
-            onSelectedRef.current(candidate);
+          if (!paired && Date.now() >= connection.pairingExpiresAt) {
+            await connect(true);
+            if (!cancelled) await pause(2_000);
+            continue;
           }
-        }
-      } catch (cause) {
-        if (!cancelled) {
+          const response = await companionEvents(server, connection.tvCredential, sequence.current, { signal: controller.signal });
+          failures = 0;
+          setPaired(response.paired);
+          for (const event of response.events) {
+            sequence.current = Math.max(sequence.current, event.sequence);
+            const client = XtreamClient.fromPlaylistUrl(playlistUrl);
+            if (!client || event.selection.sourceFingerprint !== client.pairingFingerprint()) {
+              setError("The selected title belongs to a different provider connection.");
+              continue;
+            }
+            const candidate = companionSelectionTitle(event.selection);
+            if (!candidate) continue;
+            const streamKind = candidate.contentType === "movie" ? "movie" : "series";
+            candidate.streamUrl = client.streamUrlFor(streamKind, event.selection.id, event.selection.extension);
+            if (event.action === "play") {
+              setStatus(`${candidate.title} sent to TV playback.`);
+              onPlayRef.current(candidate);
+            } else if (onSelectedRef.current) {
+              setStatus(`${candidate.title} received from companion.`);
+              onSelectedRef.current(candidate);
+            }
+          }
+        } catch (cause) {
+          if (cancelled || controller.signal.aborted) break;
+          failures += 1;
           const message = cause instanceof Error && cause.message === "Companion connection expired."
             ? cause.message
             : "TV connection was interrupted. Reconnecting…";
@@ -85,16 +95,21 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
           if (message === "Companion connection expired." && !renewalInFlight.current) {
             renewalInFlight.current = true;
             retryRenewalAt.current = Date.now() + 10_000;
-            window.setTimeout(() => { void connect(true).finally(() => { renewalInFlight.current = false; }); }, 5_000);
+            await pause(5_000);
+            if (!cancelled) await connect(true).finally(() => { renewalInFlight.current = false; });
+            continue;
           }
+          await pause(companionRetryDelay(failures - 1));
         }
-      } finally {
-        pollInFlight.current = false;
       }
     };
     void poll();
-    const timer = window.setInterval(() => void poll(), 1_500);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      resolveRetry?.();
+    };
   }, [connection, paired, playlistUrl, server]);
 
   const connect = async (silent = false) => {

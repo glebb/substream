@@ -24,9 +24,9 @@ The TV remains the authority for its local playlist credentials and resolves the
 
 ### P0 — unauthenticated relay control plane
 
-`scripts/companion-server.mjs` binds to `0.0.0.0` by default. Its generic JSON helper sends `Access-Control-Allow-Origin: *`; preflight reflects any origin. `/api/active` returns the bearer-like `sessionId`, and the same ID authorizes catalogue reads, event reads, and `pair/select` / `pair/play`. `/api/connect` clears the existing session and makes the caller's connection active. There is no client authentication, device identity, origin policy, request rate limit, or replay protection.
+At the time of this audit, the relay bound to `0.0.0.0` by default, used permissive CORS, and exposed session state and catalogue reads. Since then, loopback-by-default, explicit LAN opt-in, strict configured-origin checks, and separate scoped TV/browser credentials have been implemented. The remaining control plane uses scoped credentials for active-session checks, event reads, and `pair/select` / `pair/play`; catalogue/search routes have since been removed. Request rate limits beyond pairing attempts and replay protection remain open concerns.
 
-Impact: any party that can reach the relay can replace the TV session, obtain the active session identifier, enumerate provider metadata, or enqueue playback. A browser on the same network can read API responses because of permissive CORS. The documented trusted-LAN restriction reduces exposure but is not an authorization control.
+Impact at audit time: any party that could reach the relay could replace the TV session, obtain the active session identifier, enumerate provider metadata, or enqueue playback. The implemented controls reduce that exposure, though LAN mode still sends credentials over plain HTTP and the relay remains a development service.
 
 Plan:
 
@@ -51,7 +51,7 @@ Plan:
 
 ### P1 — resource exhaustion and SSRF-adjacent media conversion surface
 
-The media endpoint is correctly restricted to loopback peers and performs public-address checks, which is a strong start. However, it has no cap on live FFmpeg jobs, output size, source duration, input transfer time, or per-client concurrency. `body()` accumulates data before enforcing its 128 KiB limit. `assertPublicHost()` validates DNS separately from the subsequent fetch rather than pinning a validated address, leaving a DNS-rebinding window. Provider catalogue requests and most relay routes also lack timeouts.
+The media endpoint is restricted to loopback peers and now uses a global FFmpeg job cap, request-size limits, a 2 GiB output cap, bounded job/probe/source-transfer durations, DNS-pinned egress, and special-use IP rejection. Episode resolution also has a provider deadline. Per-client conversion quotas, metrics, and broader route-level observability remain open work.
 
 Plan:
 
@@ -65,9 +65,9 @@ Plan:
 
 ### P1 — duplicated provider domain logic
 
-`src/platform/xtream/client.ts` and `scripts/companion-service.mjs` independently parse Xtream playlists, derive fingerprints, construct authenticated requests, normalize titles, fetch categories, and resolve episodes. They already differ in validation and lifecycle behavior. `createCompanionSearchClient` is also present but production UI uses the browser-owned client, making the relay catalogue API partly orphaned.
+`src/core/provider/xtream.ts` now owns Xtream playlist endpoint derivation and source/pairing fingerprints for both browser and relay adapters. Provider request construction and episode resolution remain adapter-specific. The unused `createCompanionSearchClient` and relay catalogue/search APIs have been removed; production search uses the browser-owned client and its own provider connection.
 
-Plan: create a shared, platform-independent provider domain module with interfaces such as `ProviderTransport`, `ProviderConnection`, `CatalogueRepository`, and `PlaybackResolver`. Browser and Node should inject fetch/storage implementations. Keep credentials in platform adapters and return only typed safe records from the shared module. Delete or wire the unused relay-search client/API after choosing one search architecture.
+Plan: create a shared, platform-independent provider domain module with interfaces such as `ProviderTransport`, `ProviderConnection`, and `PlaybackResolver`. Browser and Node should inject fetch implementations. Keep credentials in platform adapters and return typed domain values from the shared module. Relay catalogue search is unsupported: the browser owns catalogue search and contacts its configured provider directly.
 
 ### P2 — companion protocol is implicit and stateful
 
@@ -91,11 +91,11 @@ Follow-up: add a component-level TV integration test that boots live and VOD flo
 
 ## Performance and reliability findings
 
-### P1 — catalogue work is unbounded and duplicated per session
+### P1 — browser catalogue work remains large and UI-thread bound
 
-The relay loads every category sequentially, retains the entire catalogue in RAM for a session, serializes the complete list for `/api/catalogue`, and refresh requests can overlap because there is no in-flight promise coalescing. Browser refresh has a better four-worker limit, but does all normalization/record accumulation on the UI thread. Provider requests do not impose deadlines.
+The relay catalogue loader and its per-session cache were removed because production Search uses the browser-owned provider connection. Browser refresh has a four-worker limit, but does normalization/record accumulation on the UI thread. Provider requests do not impose deadlines.
 
-Plan: add a catalogue repository keyed by provider fingerprint with TTL, in-flight request deduplication, bounded category concurrency, pagination/streaming where the provider supports it, and size ceilings. Move normalization/index construction to a worker for browser/Tizen-compatible builds. Measure catalogue size, refresh duration, peak heap and first-search latency on representative synthetic catalogues.
+Plan: keep catalogue search in the browser, add incremental/indexed storage, cancellation/deadlines and size ceilings as needed, and move normalization/index construction to a worker for browser-compatible builds. Measure catalogue size, refresh duration, peak heap and first-search latency on representative synthetic catalogues.
 
 ### P2 — full-catalogue search/storage path does repeated linear work
 
@@ -134,7 +134,7 @@ Introduce deadlines, abort propagation, request/body limits, provider/catalogue 
 
 ### Phase 2 — consolidate domains and protocol (P1/P2)
 
-Extract the shared provider domain and formalize a versioned companion protocol. Decide whether relay catalogue search is supported; remove dead client/API code if not. Success criterion: one tested domain implementation governs fingerprints, catalogue records, episode validation and serialization.
+Decision: relay catalogue/search is unsupported. The unused `/api/search` and `/api/catalogue` routes, session catalogue cache/loader, relay catalogue service, and `createCompanionSearchClient` were removed. Search stays browser-owned and uses the browser's configured provider connection. Remaining work is to extract shared provider-domain logic and continue formalizing the versioned playback-command protocol; browser search remains responsible for its own catalogue indexing/storage performance.
 
 ### Phase 3 — scale UX reliability (P2)
 

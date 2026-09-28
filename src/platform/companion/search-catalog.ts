@@ -26,9 +26,6 @@ export type BrowserSearchOptions = {
   providerFactory?: (playlistUrl: string) => BrowserSearchProvider | null;
 };
 
-type FetchResponse = { ok: boolean; json(): Promise<unknown> };
-type Fetcher = (url: string, init?: { method?: string; cache?: RequestCache; headers?: Record<string, string> }) => Promise<FetchResponse>;
-
 const DATABASE_NAME = "substream-companion";
 const STORE_NAME = "catalogues";
 
@@ -102,53 +99,6 @@ export function createBrowserSearchClient(options: BrowserSearchOptions) {
       const refreshedAt = Date.now();
       // Save only a complete catalogue. A failed category must never replace a good cache.
       try { await storage.save(sourceFingerprint, records, refreshedAt); } catch { /* The live result is still usable. */ }
-      return { records, refreshedAt };
-    },
-  };
-}
-
-/** Browser adapter for the relay's credential-free catalogue and its offline cache. */
-export function createCompanionSearchClient(options: {
-  baseUrl: string;
-  fetcher?: Fetcher;
-  storage?: SearchCatalogueStorage;
-}) {
-  const baseUrl = safeBaseUrl(options.baseUrl);
-  const fetcher = options.fetcher ?? ((url, init) => fetch(url, init));
-  const storage = options.storage ?? new IndexedDbSearchCatalogueStorage();
-
-  return {
-    async loadCached(sourceFingerprint: string): Promise<SafeSearchRecord[]> {
-      if (!isFingerprint(sourceFingerprint)) return [];
-      try {
-        const records = await storage.load(sourceFingerprint);
-        return records.flatMap((record) => {
-          const valid = sanitizeRecord(record);
-          return valid && valid.sourceFingerprint === sourceFingerprint ? [valid] : [];
-        });
-      } catch { return []; }
-    },
-
-    async refresh(sourceFingerprint: string, browserCredential: string): Promise<{ records: SafeSearchRecord[]; refreshedAt: number }> {
-      if (!baseUrl || !isFingerprint(sourceFingerprint) || !isSafeSessionId(browserCredential)) {
-        throw new Error("Search catalogue connection is unavailable.");
-      }
-      const url = new URL("/api/catalogue", baseUrl);
-      url.searchParams.set("refresh", "1");
-      let response: FetchResponse;
-      let payload: unknown;
-      try {
-        response = await fetcher(url.toString(), { cache: "no-store", headers: { authorization: `Bearer ${browserCredential}` } });
-        payload = await response.json();
-      } catch { throw new Error("Search catalogue refresh failed."); }
-      const body = isObject(payload) ? payload : {};
-      if (!response.ok || !Array.isArray(body.records)) throw new Error("Search catalogue refresh failed.");
-      const records = body.records.flatMap((item) => {
-        const record = sanitizeRecord(item);
-        return record && record.sourceFingerprint === sourceFingerprint ? [record] : [];
-      });
-      const refreshedAt = typeof body.refreshedAt === "number" && Number.isFinite(body.refreshedAt) ? body.refreshedAt : Date.now();
-      try { await storage.save(sourceFingerprint, records, refreshedAt); } catch { /* Cache is optional; fresh results remain usable. */ }
       return { records, refreshedAt };
     },
   };
@@ -241,10 +191,6 @@ function sanitizeRecord(value: unknown): SafeSearchRecord | null {
   return { id, kind, title: normalized.title, searchTitle: normalized.searchTitle, year: year ?? normalized.year, extension, category, sourceFingerprint };
 }
 
-function safeBaseUrl(value: string): string {
-  try { const url = new URL(value); return url.protocol === "http:" || url.protocol === "https:" ? url.origin : ""; } catch { return ""; }
-}
-function isSafeSessionId(value: string): boolean { return /^[A-Za-z0-9_-]{8,160}$/.test(value); }
 function isFingerprint(value: string): boolean { return /^[A-Za-z0-9_-]{3,128}$/.test(value); }
 function isObject(value: unknown): value is Record<string, unknown> { return !!value && typeof value === "object" && !Array.isArray(value); }
 function normalizeSearch(value: string): string { return value.normalize("NFKD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim(); }

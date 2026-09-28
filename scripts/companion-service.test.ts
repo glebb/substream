@@ -2,7 +2,7 @@
 // system Node binary during LAN development.
 // @ts-nocheck
 import { describe, expect, it } from "vitest";
-import { loadXtreamCatalogue, resolveXtreamEpisode, searchCatalogue, xtreamConnectionFromPlaylist } from "./companion-service.mjs";
+import { resolveXtreamEpisode, xtreamConnectionFromPlaylist } from "./companion-service.mjs";
 
 describe("LAN companion provider service", () => {
   it("accepts Xtream URLs without exposing credentials in the connection fingerprint", () => {
@@ -14,25 +14,6 @@ describe("LAN companion provider service", () => {
     expect(connection?.sourceFingerprint).not.toBe(xtreamConnectionFromPlaylist("https://iptv.example/get.php?username=bob&password=other")?.sourceFingerprint);
     expect(connection?.sourceFingerprint).toBe(xtreamConnectionFromPlaylist("https://iptv.example/get.php?username=alice&password=rotated")?.sourceFingerprint);
     expect(xtreamConnectionFromPlaylist("https://iptv.example/list.m3u")).toBeNull();
-  });
-
-  it("loads and searches synthetic provider records while returning safe metadata only", async () => {
-    const connection = xtreamConnectionFromPlaylist("https://iptv.example/get.php?username=u&password=p")!;
-    const responses: Record<string, unknown> = {
-      get_vod_categories: [{ category_id: 1, category_name: "Films" }],
-      get_series_categories: [{ category_id: 2, category_name: "Shows" }],
-      get_vod_streams: [{ stream_id: 42, name: "The Example (2024)", container_extension: "mkv" }],
-      get_series: [{ series_id: 7, name: "Example Show" }],
-    };
-    const records = await loadXtreamCatalogue(connection, async (url) => {
-      const action = new URL(String(url)).searchParams.get("action")!;
-      return { ok: true, status: 200, json: async () => responses[action] ?? [] };
-    });
-    const found = searchCatalogue(records, "example");
-    expect(found.map((item) => item.id)).toEqual(["7", "42"]);
-    expect(found[1]).toMatchObject({ kind: "movie", title: "The Example", year: 2024, extension: "mkv" });
-    expect(JSON.stringify(found)).not.toContain("password");
-    expect(JSON.stringify(found)).not.toContain("streamUrl");
   });
 
   it("resolves an episode against its series and returns safe metadata only", async () => {
@@ -54,34 +35,11 @@ describe("LAN companion provider service", () => {
     expect(JSON.stringify(await resolveXtreamEpisode(connection, "7", "101", request))).not.toContain("password");
   });
 
-  it("aborts hanging catalogue and episode provider calls on their deadlines", async () => {
+  it("aborts hanging episode provider calls on their deadlines", async () => {
     const connection = xtreamConnectionFromPlaylist("https://iptv.example/get.php?username=u&password=p")!;
     const hangingRequest = (_url: URL, { signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
       signal.addEventListener("abort", () => reject(signal.reason), { once: true });
     });
-    await expect(loadXtreamCatalogue(connection, hangingRequest, { timeoutMs: 10 })).rejects.toThrow();
     await expect(resolveXtreamEpisode(connection, "7", "101", hangingRequest, { timeoutMs: 10 })).rejects.toThrow();
-  });
-
-  it("caps concurrent category fetches and the accumulated catalogue size", async () => {
-    const connection = xtreamConnectionFromPlaylist("https://iptv.example/get.php?username=u&password=p")!;
-    let activeCategoryFetches = 0;
-    let maximumCategoryFetches = 0;
-    const request = async (url: URL) => {
-      const action = url.searchParams.get("action")!;
-      if (action === "get_vod_categories") return { ok: true, json: async () => Array.from({ length: 8 }, (_, index) => ({ category_id: index, category_name: `Films ${index}` })) };
-      if (action === "get_series_categories") return { ok: true, json: async () => [] };
-      activeCategoryFetches += 1;
-      maximumCategoryFetches = Math.max(maximumCategoryFetches, activeCategoryFetches);
-      await new Promise((resolve) => setTimeout(resolve, 1));
-      activeCategoryFetches -= 1;
-      const categoryId = Number(url.searchParams.get("category_id"));
-      // Repeated IDs exercise the ceiling without retaining 50,000 fixtures.
-      return { ok: true, json: async () => Array.from({ length: 7_000 }, (_, index) => ({ stream_id: categoryId * 7_000 + index + 1, name: `Film ${categoryId}-${index}` })) };
-    };
-
-    const records = await loadXtreamCatalogue(connection, request);
-    expect(maximumCategoryFetches).toBeLessThanOrEqual(4);
-    expect(records).toHaveLength(50_000);
   });
 });
