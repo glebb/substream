@@ -4,11 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
 
 const ffprobeDefault = process.env.FFPROBE_PATH || "ffprobe";
 const ffmpegDefault = process.env.FFMPEG_PATH || "ffmpeg";
 const MAX_MEDIA_JOB_DURATION_MS = 2 * 60 * 60 * 1000;
+const MAX_MEDIA_PROBE_DURATION_MS = 30_000;
+const MAX_SOURCE_PROXY_DURATION_MS = MAX_MEDIA_JOB_DURATION_MS;
 const MAX_MEDIA_OUTPUT_BYTES = 2 * 1024 * 1024 * 1024;
 
 /** Keep unsupported containers/codecs out of the browser; video is always stream-copied. */
@@ -71,32 +76,95 @@ function publicAddress(address) {
     || address === "::" || /^::ffff:(?:127\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.)/i.test(address));
 }
 
-async function assertPublicHost(url) {
-  const addresses = await lookup(url.hostname, { all: true, verbatim: true }).catch(() => []);
+async function resolvePublicAddress(url, resolveHost = lookup) {
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const addresses = await resolveHost(hostname, { all: true, verbatim: true }).catch(() => []);
   if (!addresses.length || addresses.some(({ address }) => !publicAddress(address))) throw new Error("Media source is not allowed.");
+  return addresses[0];
 }
 
-async function fetchSource(sourceUrl, headers, redirects = 0, signal) {
+function raceAbort(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error("Media request aborted."));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => { cleanup(); reject(signal.reason instanceof Error ? signal.reason : new Error("Media request aborted.")); };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => { cleanup(); resolve(value); }, (error) => { cleanup(); reject(error); });
+  });
+}
+
+function requestPinned(url, headers, address, signal) {
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const transport = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const family = address.family || (address.address.includes(":") ? 6 : 4);
+  const request = transport(url, {
+    method: "GET",
+    headers: { ...headers, host: url.host },
+    // Bypass the resolver after validation. The connection target is the exact
+    // address checked above, while Host and TLS SNI/certificate checks retain
+    // the URL's original hostname.
+    hostname: address.address,
+    family,
+    servername: url.protocol === "https:" && !/^\d+(?:\.\d+){3}$/.test(hostname) && !hostname.includes(":") ? hostname : undefined,
+    lookup: (_requestedHostname, _options, callback) => callback(null, address.address, family),
+  });
+  return new Promise((resolve, reject) => {
+    const onAbort = () => request.destroy(signal.reason instanceof Error ? signal.reason : new Error("Media request aborted."));
+    if (signal?.aborted) { onAbort(); }
+    else signal?.addEventListener("abort", onAbort, { once: true });
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+    request.once("error", (error) => { cleanup(); reject(error); });
+    request.once("response", (incoming) => {
+      incoming.once("close", cleanup);
+      const body = incoming.statusCode === 204 || incoming.statusCode === 304 ? null : Readable.toWeb(incoming);
+      resolve(new Response(body, {
+        status: incoming.statusCode || 502,
+        statusText: incoming.statusMessage,
+        headers: incoming.headers,
+      }));
+    });
+    request.end();
+  });
+}
+
+export async function fetchMediaSource(sourceUrl, { headers, redirects = 0, signal, resolveHost = lookup, request = requestPinned } = {}) {
   const url = new URL(sourceUrl);
   if (!validMediaSource(url.toString()) || redirects > 4) throw new Error("Media source is not allowed.");
-  await assertPublicHost(url);
-  const upstream = await fetch(url, { headers, redirect: "manual", signal });
+  const address = await raceAbort(resolvePublicAddress(url, resolveHost), signal);
+  if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Media request aborted.");
+  const upstream = await request(url, headers, address, signal);
   if (upstream.status >= 300 && upstream.status < 400) {
     const location = upstream.headers.get("location");
     if (!location) throw new Error("Media source redirect was invalid.");
-    return fetchSource(new URL(location, url).toString(), headers, redirects + 1, signal);
+    await upstream.body?.cancel().catch(() => undefined);
+    return fetchMediaSource(new URL(location, url).toString(), { headers, redirects: redirects + 1, signal, resolveHost, request });
   }
   return upstream;
 }
 
-async function createSourceProxy(sourceUrl) {
+export async function createSourceProxy(sourceUrl, { fetchSource = fetchMediaSource, timeoutMs = MAX_SOURCE_PROXY_DURATION_MS, serverFactory = createServer } = {}) {
   const token = randomBytes(18).toString("hex");
-  const server = createServer(async (request, response) => {
+  const server = serverFactory(async (request, response) => {
     if (request.url !== `/${token}` || request.method !== "GET") { response.writeHead(404).end(); return; }
     const controller = new AbortController();
-    response.once("close", () => controller.abort());
+    let timedOut = false;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error("Media source timed out."));
+    }, timeoutMs);
+    deadline.unref?.();
+    response.once("close", () => controller.abort(new Error("Media client disconnected.")));
+    let upstream;
+    let reader;
+    const cancelUpstream = () => {
+      if (reader) void reader.cancel().catch(() => undefined);
+      else if (upstream?.body) void upstream.body.cancel().catch(() => undefined);
+    };
+    controller.signal.addEventListener("abort", cancelUpstream, { once: true });
     try {
-      const upstream = await fetchSource(sourceUrl, request.headers.range ? { range: request.headers.range } : undefined, 0, controller.signal);
+      upstream = await fetchSource(sourceUrl, { headers: request.headers.range ? { range: request.headers.range } : undefined, signal: controller.signal });
+      if (controller.signal.aborted) throw controller.signal.reason;
       response.writeHead(upstream.status, {
         ...(upstream.headers.get("content-type") ? { "content-type": upstream.headers.get("content-type") } : {}),
         ...(upstream.headers.get("content-length") ? { "content-length": upstream.headers.get("content-length") } : {}),
@@ -104,22 +172,75 @@ async function createSourceProxy(sourceUrl) {
         "accept-ranges": upstream.headers.get("accept-ranges") || "bytes",
       });
       if (!upstream.body) { response.end(); return; }
-      for await (const chunk of upstream.body) { if (response.destroyed) break; response.write(chunk); }
+      reader = upstream.body.getReader();
+      while (!response.destroyed) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        response.write(value);
+      }
+      if (controller.signal.aborted) throw controller.signal.reason;
       response.end();
-    } catch { if (!response.headersSent) response.writeHead(502); response.end(); }
+    } catch {
+      if (timedOut && response.headersSent) response.destroy();
+      else if (!response.destroyed) {
+        if (!response.headersSent) response.writeHead(timedOut ? 504 : 502);
+        response.end();
+      }
+    } finally {
+      clearTimeout(deadline);
+      controller.signal.removeEventListener("abort", cancelUpstream);
+      if (reader) { try { reader.releaseLock(); } catch { /* The upstream body may already be canceled. */ } }
+    }
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   const address = server.address();
   return { url: `http://127.0.0.1:${address.port}/${token}`, close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); }) };
 }
 
-export function runJson(binary, args, { spawnProcess = spawn } = {}) {
+export function runJson(binary, args, { spawnProcess = spawn, timeoutMs = MAX_MEDIA_PROBE_DURATION_MS, killGraceMs = 250 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawnProcess(binary, args, { stdio: ["ignore", "pipe", "ignore"] });
     let output = "";
-    child.stdout.on("data", (chunk) => { output += chunk; if (output.length > 4 * 1024 * 1024) child.kill(); });
-    child.once("error", () => reject(new Error("Media probe tool is unavailable.")));
+    let settled = false;
+    let timedOut = false;
+    let outputTooLarge = false;
+    let killTimer;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stopChild();
+    }, timeoutMs);
+    timer.unref?.();
+    const stopChild = () => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      try { child.kill("SIGTERM"); } catch { /* Process may have exited between checking and signaling. */ }
+      clearTimeout(killTimer);
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          try { child.kill("SIGKILL"); } catch { /* Process may have exited before escalation. */ }
+        }
+      }, killGraceMs);
+      killTimer.unref?.();
+    };
+    child.stdout.on("data", (chunk) => {
+      if (!outputTooLarge && output.length + chunk.length > 4 * 1024 * 1024) {
+        outputTooLarge = true;
+        stopChild();
+      } else if (!outputTooLarge) output += chunk;
+    });
+    child.once("error", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      reject(new Error("Media probe tool is unavailable."));
+    });
     child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      if (timedOut) return reject(new Error("Media probe timed out."));
+      if (outputTooLarge) return reject(new Error("Media probe returned too much data."));
       if (code !== 0) return reject(new Error("Media probe failed."));
       try { resolve(JSON.parse(output)); } catch { reject(new Error("Media probe returned invalid data.")); }
     });

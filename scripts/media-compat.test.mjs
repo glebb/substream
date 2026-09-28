@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { hlsOutputArguments, mediaPlan, prepareMedia, validMediaSource } from "./media-compat.mjs";
+import { createSourceProxy, fetchMediaSource, hlsOutputArguments, mediaPlan, prepareMedia, runJson, validMediaSource } from "./media-compat.mjs";
 
 const ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg";
 const ffprobePath = process.env.FFPROBE_PATH || "ffprobe";
@@ -48,6 +48,35 @@ function probeStreamTypes(input) {
       try { resolve(JSON.parse(output).streams); } catch { reject(new Error("Synthetic stream probe returned invalid data.")); }
     });
   });
+}
+
+function syntheticProxyHarness() {
+  let handler;
+  const server = {
+    once: vi.fn(),
+    listen: vi.fn((_port, _host, callback) => callback()),
+    address: () => ({ port: 12345 }),
+    close: (callback) => callback(),
+    closeAllConnections: vi.fn(),
+  };
+  const serverFactory = vi.fn((requestHandler) => { handler = requestHandler; return server; });
+  const issueRequest = (url) => {
+    let finish;
+    const finished = new Promise((resolve) => { finish = resolve; });
+    const response = new EventEmitter();
+    Object.assign(response, {
+      destroyed: false,
+      headersSent: false,
+      chunks: [],
+      writeHead(status, headers) { this.statusCode = status; this.headers = headers; this.headersSent = true; },
+      write(chunk) { this.chunks.push(Buffer.from(chunk)); return true; },
+      end() { this.ended = true; finish(); this.emit("close"); },
+      destroy() { this.destroyed = true; finish(); this.emit("close"); },
+    });
+    void handler({ url: new URL(url).pathname, method: "GET", headers: {} }, response);
+    return { response, finished };
+  };
+  return { serverFactory, issueRequest };
 }
 
 const syntheticProbe = (audioCodec) => ({
@@ -316,6 +345,115 @@ describe("browser media compatibility planning", () => {
     expect(validMediaSource("http://user:pass@media.example.invalid/video.mkv")).toBe(false);
     expect(validMediaSource("http://127.0.0.1/video.mkv")).toBe(false);
     expect(validMediaSource("http://192.168.1.20/video.mkv")).toBe(false);
+  });
+
+  it("rejects a malicious private DNS answer before attempting an upstream connection", async () => {
+    const request = vi.fn();
+    await expect(fetchMediaSource("http://media.example.invalid/video.mkv", {
+      resolveHost: async () => [{ address: "10.0.0.7", family: 4 }],
+      request,
+    })).rejects.toThrow("Media source is not allowed.");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("pins the first validated address and resolves redirects independently", async () => {
+    const resolveHost = vi.fn(async (hostname) => hostname === "media.example.invalid"
+      ? [{ address: "203.0.113.7", family: 4 }]
+      : [{ address: "192.168.1.9", family: 4 }]);
+    const request = vi.fn(async (_url, _headers, address) => {
+      expect(address).toEqual({ address: "203.0.113.7", family: 4 });
+      return new Response(null, { status: 302, headers: { location: "http://redirect.example.invalid/video.mkv" } });
+    });
+    await expect(fetchMediaSource("http://media.example.invalid/video.mkv", { resolveHost, request }))
+      .rejects.toThrow("Media source is not allowed.");
+    expect(resolveHost.mock.calls.map(([hostname]) => hostname)).toEqual([
+      "media.example.invalid", "redirect.example.invalid",
+    ]);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("bounds a hanging ffprobe process and escalates termination safely", async () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn((signal) => {
+      if (signal === "SIGKILL") {
+        child.signalCode = signal;
+        child.emit("close", null, signal);
+      }
+      return true;
+    });
+
+    await expect(runJson("synthetic-ffprobe", [], {
+      timeoutMs: 10,
+      killGraceMs: 10,
+      spawnProcess: vi.fn(() => child),
+    })).rejects.toThrow("Media probe timed out.");
+    expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("closes the source proxy when ffprobe reaches its deadline", async () => {
+    const closeProxy = vi.fn(async () => undefined);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn((signal) => {
+      if (signal === "SIGKILL") {
+        child.signalCode = signal;
+        child.emit("close", null, signal);
+      }
+      return true;
+    });
+
+    await expect(prepareMedia("https://media.example.invalid/video.mkv", {
+      timeoutMs: 10,
+      killGraceMs: 10,
+      sourceProxyFactory: async () => ({ url: "http://127.0.0.1:9999/opaque", close: closeProxy }),
+      spawnProcess: () => child,
+    })).rejects.toThrow("Media probe timed out.");
+    expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(closeProxy).toHaveBeenCalledOnce();
+  });
+
+  it("times out an upstream request independently of the proxy client and returns a sanitized response", async () => {
+    let receivedSignal;
+    const fetchSource = vi.fn((_sourceUrl, { signal }) => new Promise((_resolve, reject) => {
+      receivedSignal = signal;
+      signal.addEventListener("abort", () => reject(new Error("secret upstream detail")), { once: true });
+    }));
+    const { serverFactory, issueRequest } = syntheticProxyHarness();
+    const proxy = await createSourceProxy("https://media.example.invalid/video.mkv", { fetchSource, timeoutMs: 15, serverFactory });
+    try {
+      const { response, finished } = issueRequest(proxy.url);
+      await finished;
+      expect(response.statusCode).toBe(504);
+      expect(response.chunks).toEqual([]);
+      expect(receivedSignal.aborted).toBe(true);
+      expect(fetchSource).toHaveBeenCalledOnce();
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it("cancels and destroys a stalled upstream response stream at the proxy deadline", async () => {
+    let canceled = false;
+    const fetchSource = vi.fn(async () => new Response(new ReadableStream({
+      pull: () => new Promise(() => undefined),
+      cancel: () => { canceled = true; },
+    }), { status: 200, headers: { "content-type": "video/mp2t" } }));
+    const { serverFactory, issueRequest } = syntheticProxyHarness();
+    const proxy = await createSourceProxy("https://media.example.invalid/video.ts", { fetchSource, timeoutMs: 20, serverFactory });
+    try {
+      const { response, finished } = issueRequest(proxy.url);
+      await finished;
+      expect(response.statusCode).toBe(200);
+      expect(response.destroyed).toBe(true);
+      expect(canceled).toBe(true);
+    } finally {
+      await proxy.close();
+    }
   });
 
   it("rejects audio-only or malformed probe results", () => {
