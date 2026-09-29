@@ -1858,7 +1858,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     playerRef.current = player;
     player.setSubtitleTimingOffset?.(initialSubtitleOffset);
     const persistCurrentProgress = (value: PlaybackProgress | null) => {
-      if (!value || value.currentTimeSeconds < 5 || value.durationSeconds <= 0) return;
+      if (!value || value.currentTimeSeconds <= 0 || value.durationSeconds <= 0) return;
       const providerSourceId = selectedTitle.id.startsWith("xtream:")
         ? XtreamClient.fromPlaylistUrl(playlistUrl)?.sourceFingerprint()
         : undefined;
@@ -1891,11 +1891,16 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       onProgress: (value) => {
         playbackProgressRef.current = value;
         setPlaybackProgress(value);
-        if (value.currentTimeSeconds >= 5 && Date.now() - lastPersistedAtRef.current >= 10_000) {
+        if (value.durationSeconds > 0 && Date.now() - lastPersistedAtRef.current >= 10_000) {
           persistCurrentProgress(value);
         }
       },
     });
+    // Persist the latest known playhead when the app is backgrounded or the
+    // player screen is torn down. Progress callbacks are throttled, so relying
+    // on the periodic save alone loses the final interval on quick exits.
+    const persistOnPageHide = () => persistCurrentProgress(playbackProgressRef.current);
+    window.addEventListener("pagehide", persistOnPageHide);
     player.load(selectedTitle.streamUrl);
     if (resumeStartSecondsRef.current > 0) player.seekTo?.(resumeStartSecondsRef.current);
     resumeStartSecondsRef.current = 0;
@@ -1911,6 +1916,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
         window.clearTimeout(subtitleOffsetTimerRef.current);
         subtitleOffsetTimerRef.current = null;
       }
+      persistCurrentProgress(playbackProgressRef.current);
+      window.removeEventListener("pagehide", persistOnPageHide);
       playerRef.current = null;
       player.setEventHandlers(null);
       player.destroy();
