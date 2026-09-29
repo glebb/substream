@@ -1,5 +1,5 @@
 const STORAGE_KEY = "substream.playback-progress";
-const MAX_SAVED_TITLES = 500;
+const MAX_SAVED_TITLES = 10;
 const MAX_TITLE_ID_LENGTH = 256;
 
 export interface PlaybackHistoryItem {
