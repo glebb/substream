@@ -89,6 +89,7 @@ export type SettingsControlKey =
   | "playlist"
   | "companion-url"
   | "companion-start"
+  | "ui-language"
   | "subtitle-language"
   | "api-key-input"
   | "api-key-edit"
@@ -118,6 +119,7 @@ export function settingsControlOrder(options: SettingsControlOrderOptions): Sett
     "back",
     "companion-url",
     "companion-start",
+    "ui-language",
     "playlist",
     "subtitle-language",
     ...(options.apiKeyEditorOpen ? ["api-key-input", "api-key-save", "api-key-cancel"] as const : ["api-key-edit"] as const),

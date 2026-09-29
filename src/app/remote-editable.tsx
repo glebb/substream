@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
+import { LanguageContext, Localized } from "./language.tsx";
 
 export interface RemoteEditableProps {
   label: string;
@@ -18,13 +19,14 @@ export interface RemoteEditableProps {
  * Action/Enter, which prevents Samsung's IME from opening during navigation.
  */
 export function RemoteEditable({ label, value, editing, className = "", controlRef, remoteMode = true, onBeginEdit, renderEditor }: RemoteEditableProps) {
-  if (!remoteMode) return <>{renderEditor(controlRef)}</>;
-  if (editing) return <>{renderEditor(controlRef)}</>;
-  return <button
+  const { language } = useContext(LanguageContext);
+  if (!remoteMode) return <Localized language={language}>{renderEditor(controlRef)}</Localized>;
+  if (editing) return <Localized language={language}>{renderEditor(controlRef)}</Localized>;
+  return <Localized language={language}><button
     className={`remote-editable-trigger ${className}`.trim()}
     type="button"
     aria-label={`Edit ${label}${value ? `, current value ${value}` : ""}`}
     ref={controlRef}
     onClick={onBeginEdit}
-  >{label}: {value || "Not set"}</button>;
+  >{label}: {value || "Not set"}</button></Localized>;
 }

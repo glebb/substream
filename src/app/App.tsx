@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type FormEvent } from "react";
+import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type FormEvent } from "react";
 import { importM3uChunks, normalizeTitle, type VodCatalogItem } from "../core/catalog/index.ts";
 import { DEFAULT_MAX_WHOLE_RESPONSE_BYTES, responseTextChunks, validateWholeResponseFallback, WholeResponseFallbackError } from "../platform/browser/fetch-chunks.ts";
 import { clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl } from "../platform/browser/playlist-config.ts";
@@ -32,6 +32,7 @@ import { CompanionPanel } from "./CompanionPanel.tsx";
 import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../platform/companion/search-catalog.ts";
 import { companionDeviceLabel, companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, type BrowserCompanionConnection, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
 import { LiveTv } from "./LiveTv.tsx";
+import { LanguageContext, Localized, loadUiLanguage, saveUiLanguage, type UiLanguage } from "./language.tsx";
 
 type ScreenState = "loading" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 16;
@@ -102,6 +103,7 @@ function artworkLookupKey(title: Pick<BrowseArtworkTarget, "title" | "searchTitl
 }
 
 function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMainMenu(): void; onPlaylistSetup(): void; settingsOnOpen?: boolean }) {
+  const { language, setLanguage } = useContext(LanguageContext);
   const subtitleTimingAvailable = true;
   // The Chromium 47 preview exercises the TV layout and remote flow without
   // claiming that Tizen media APIs are present in the browser container.
@@ -510,7 +512,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
           setCatalogStatus("Provider catalogue is unavailable. Re-import the playlist to use the M3U fallback.");
           return;
         }
-        setCatalogStatus("Loading " + formatGroupDisplayName(group.name) + " from the provider…");
+        setCatalogStatus("Loading " + formatGroupDisplayName(group.name, language) + " from the provider…");
         const result = await browseRequestRef.current.run(
           () => group.providerContentType === "movie" ? client.movies(group.providerCategoryId!) : client.series(group.providerCategoryId!),
           "This provider category could not be loaded. Check the TV network and try again.",
@@ -533,7 +535,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       setCatalogStatus(items.length.toLocaleString() + " titles ready");
       return;
     }
-    setCatalogStatus("Loading " + formatGroupDisplayName(group.name) + "…");
+    setCatalogStatus("Loading " + formatGroupDisplayName(group.name, language) + "…");
     const result = await browseRequestRef.current.run(async () => {
       const store = await IndexedDbCatalogStore.open();
       try { return await store.byGroupPage(group.name, targetPage * PAGE_SIZE, PAGE_SIZE, targetSort); }
@@ -2229,6 +2231,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
         setSubtitleLanguagePreference("fi");
         clearFavouriteGroups();
         clearCatalogClearedMarker();
+        setLanguage("fi");
         setPlaylistUrl("");
         setOpenSubtitlesApiKey("");
         setContinueHistory([]);
@@ -2379,13 +2382,13 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const pickerOptions = episodePickerLevel === "seasons" ? pickerSeasons : pickerEpisodes;
   episodePickerOptionRefs.current.length = pickerOptions.length;
 
-  if (state === "loading") return <main className="screen"><p role="status" aria-live="polite">{startupStatus}</p><div className="groups skeleton-grid" aria-hidden="true">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-tile" key={index} />)}</div></main>;
-  if (state === "storage-error" && !settingsOnOpen) return <main className="screen">
+  if (state === "loading") return <Localized language={language}><main className="screen"><p role="status" aria-live="polite">{startupStatus}</p><div className="groups skeleton-grid" aria-hidden="true">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-tile" key={index} />)}</div></main></Localized>;
+  if (state === "storage-error" && !settingsOnOpen) return <Localized language={language}><main className="screen">
     <h1>Catalogue unavailable</h1>
     <p role="alert">{error}</p>
     <button type="button" autoFocus onClick={() => void refreshCatalog()}>Try again</button>
-  </main>;
-  if (state === "importing" || state === "auto-import") return <main className="screen"><h1>Importing library</h1><p role="status" aria-live="polite">{progress}</p></main>;
+  </main></Localized>;
+  if (state === "importing" || state === "auto-import") return <Localized language={language}><main className="screen"><h1>Importing library</h1><p role="status" aria-live="polite">{progress}</p></main></Localized>;
 
   const isTvTitleBrowse = state === "ready" && isTizen && Boolean(activeGroup) && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice;
   const openCompanionTitle = (title: VodCatalogItem) => {
@@ -2402,7 +2405,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     setDetailsOrigin(null);
     startPlayback(title);
   };
-  return <main className={"screen" + (isTizen ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen" : "")}>
+  return <Localized language={language}><main className={"screen" + (isTizen ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen" : "")}>
     <header className="app-header"><div><p className="eyebrow">{settingsOnOpen ? "SUBSTREAM · SETTINGS" : "SUBSTREAM · VIDEO-ON-DEMAND"}</p><h1>{settingsOnOpen ? "Settings" : state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
       {state === "ready" && !selectedTitle && !showSettings && <div className="header-actions"><button type="button" ref={mainMenuButtonRef} onClick={onMainMenu}>Main menu</button></div>}
     </header>
@@ -2433,6 +2436,13 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
               <button className={settingsFocusClass("back")} data-settings-focus="back" type="button" ref={(element) => registerSettingsControl("back", element)} onClick={() => { setEditingCompanionServer(false); if (settingsOnOpen) onMainMenu(); else setShowSettings(false); }}>{settingsOnOpen ? "Back to main menu" : "Back to library"}</button>
           </div>
           {isTizen && <CompanionPanel playlistUrl={playlistUrl} onPlay={openCompanionTitle} editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTizen} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
+          <section className="settings-section">
+            <h3>{language === "fi" ? "Käyttöliittymän kieli" : "Interface language"}</h3>
+            <label htmlFor="ui-language">{language === "fi" ? "Kieli" : "Language"}</label>
+            <select className={settingsFocusClass("ui-language")} data-settings-focus="ui-language" id="ui-language" value={language} ref={(element) => registerSettingsControl("ui-language", element)} onChange={(event) => setLanguage(event.target.value as UiLanguage)}>
+              <option value="fi">Suomi</option><option value="en">English</option>
+            </select>
+          </section>
           <section className="settings-section">
             <h3>Navigation and playlist</h3>
             <p className="hint">Your playlist URL is stored locally and remains masked.</p>
@@ -2645,9 +2655,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
               <RemoteEditable label="Season" value={subtitleSearchSeason} editing={editingSubtitleSeason} remoteMode={isTizen} className={`subtitle-search-number ${playerFocusIndex === subtitleSeasonFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchSeasonControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleSeason(true); window.requestAnimationFrame(() => subtitleSearchSeasonRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-season">Season<input id="subtitle-search-season" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchSeason} onChange={(event) => setSubtitleSearchSeason(event.target.value)} ref={(element) => { subtitleSearchSeasonRef.current = element; controlRef(element); }} /></label>} />
               <RemoteEditable label="Episode" value={subtitleSearchEpisode} editing={editingSubtitleEpisode} remoteMode={isTizen} className={`subtitle-search-number ${playerFocusIndex === subtitleEpisodeFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleEpisode(true); window.requestAnimationFrame(() => subtitleSearchEpisodeRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-episode">Episode<input id="subtitle-search-episode" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchEpisode} onChange={(event) => setSubtitleSearchEpisode(event.target.value)} ref={(element) => { subtitleSearchEpisodeRef.current = element; controlRef(element); }} /></label>} />
             </>}
-            <button className={playerFocusIndex === findSubtitleFocusIndex ? "remote-focused" : ""} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
+            <button className={`subtitle-search-submit ${playerFocusIndex === findSubtitleFocusIndex ? "remote-focused" : ""}`} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
           </div>
-          <p className="hint">An API key permits anonymous subtitle downloads within OpenSubtitles’ daily allowance.</p>
           {subtitleStatus && <p className="hint">{subtitleStatus}</p>}
           <div className="subtitle-results">
             {subtitleResults.map((subtitle, index) => <article key={subtitle.id}>
@@ -2659,7 +2668,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
         </section>}
       </section> : activeGroup ? <>
         <div className="catalogue-heading">
-          <div><h2 title={activeGroup.name}>{formatGroupDisplayName(activeGroup.name)}</h2><p className="hint">{browseCount.toLocaleString()} {browseMode === "episodes" ? "episodes" : "titles"} · page {page + 1} of {browsePageCount(browseCount, PAGE_SIZE)}</p></div>
+          <div><h2 title={formatGroupDisplayName(activeGroup.name, language)}>{formatGroupDisplayName(activeGroup.name, language)}</h2><p className="hint">{browseCount.toLocaleString()} {browseMode === "episodes" ? "episodes" : "titles"} · page {page + 1} of {browsePageCount(browseCount, PAGE_SIZE)}</p></div>
           <label className="sort-control">Sort
             <select ref={sortSelectRef} value={sort} onChange={(event) => {
               const nextSort = event.target.value as VodSort;
@@ -2728,7 +2737,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
           <p className="hint" role="status" aria-live="polite">{searchStatus || (searchProviderFingerprint ? "Search is available without a TV connection. Refresh the Xtream catalogue when needed." : "Searching titles saved on this device. Add an Xtream playlist to refresh a full provider catalogue.")}</p>
           <div className="groups search-results">
             {visibleSearchItems.map((result, index) => <button className={`tile title-card ${index === focusIndex ? "focused remote-focused" : ""}`} key={result.key} ref={(element) => { tileRefs.current[index] = element; }} type="button" onClick={() => result.record ? openSearchRecord(result.record, index) : openLocalSearchItem(result.item, index)}>
-              <BrowseArtwork title={result.title} image={browseArtwork[result.item.id]} /><span className="tile-copy"><strong>{result.title}</strong><span className="tile-meta">{result.kind === "series" ? "Series" : result.kind === "movie" ? "Movie" : "Other"}{result.year ? ` · ${result.year}` : ""}{result.category ? ` · ${formatCategoryBadge(result.category)}` : ""}</span></span>
+              <BrowseArtwork title={result.title} image={browseArtwork[result.item.id]} /><span className="tile-copy"><strong>{result.title}</strong><span className="tile-meta">{result.kind === "series" ? "Series" : result.kind === "movie" ? "Movie" : "Other"}{result.year ? ` · ${result.year}` : ""}{result.category ? ` · ${formatCategoryBadge(result.category, language)}` : ""}</span></span>
             </button>)}
             {!visibleSearchItems.length && searchQuery.trim().length >= 2 && <p className="empty-state">No matching titles found.</p>}
             {!visibleSearchItems.length && searchQuery.trim().length < 2 && <p className="empty-state">Enter at least two characters to search.</p>}
@@ -2738,19 +2747,22 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
           <div className="collection-heading"><h2>{browseCollection === "favourites" ? "Favourite groups" : browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">{browseCollection === "favourites" ? "Your saved movie genres and series categories." : "Choose a group to browse its titles. Provider groups load when selected."}</p><p className="remote-key-hint">Press the red remote key to toggle the focused group as a favourite.</p>{favouriteStatus && <p className="hint" role="status" aria-live="polite">{favouriteStatus}</p>}</div>
           <div className="groups group-grid">
           {visibleGroups.map((group, index) => <div className="favourite-tile" key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
-            <strong title={group.name}>{formatGroupDisplayName(group.name)}</strong><span>{group.providerCategoryId ? "Select to load titles" : `${group.count.toLocaleString()} titles`}</span>{favouriteGroupIds.includes(group.id) && <span className="favourite-indicator">★ Favourite</span>}
+            <strong title={formatGroupDisplayName(group.name, language)}>{formatGroupDisplayName(group.name, language)}</strong><span>{group.providerCategoryId ? "Select to load titles" : `${group.count.toLocaleString()} titles`}</span>{favouriteGroupIds.includes(group.id) && <span className="favourite-indicator">★ Favourite</span>}
           </button><button className="quiet-button favourite-toggle" type="button" tabIndex={isTizen ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTizen) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => toggleFavouriteForGroup(group)}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button></div>)}
           {!visibleGroups.length && <div className="empty-state"><h2>{browseCollection === "favourites" ? "No favourite groups yet" : `No ${browseCollection === "movies" ? "movie" : "series"} groups found`}</h2><p>{browseCollection === "favourites" ? "Use the red remote key on a group, or the button on a card, to save it on this device." : `Import a library with ${browseCollection === "movies" ? "movies" : "series"} to browse titles here.`}</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = "content"; setBrowseCollection("recent"); setFocusIndex(0); }}>Browse recent</button></div>}
           </div>
         </>}
       </>)}
     </section>}
-  </main>;
+  </main></Localized>;
 }
 
 type AppRoute = "home" | "live" | "vod" | "settings";
 
 export function App() {
+  const [language, setLanguageState] = useState<UiLanguage>(loadUiLanguage);
+  const setLanguage = (next: UiLanguage) => { setLanguageState(next); saveUiLanguage(next); };
+  useEffect(() => { document.documentElement.lang = language; }, [language]);
   const [route, setRoute] = useState<AppRoute>("home");
   const [homeFocus, setHomeFocus] = useState<0 | 1 | 2>(0);
   const [playlistSetupOpen, setPlaylistSetupOpen] = useState(() => !loadPlaylistUrl());
@@ -2812,10 +2824,10 @@ export function App() {
     window.requestAnimationFrame(() => (playlistSetupOpen ? playlistInputRef.current : cardRefs.current[homeFocus])?.focus());
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [homeFocus, playlistSetupOpen, route]);
-  if (route === "live") return <LiveTv onMainMenu={() => { setHomeFocus(0); setRoute("home"); }} />;
-  if (route === "vod") return <div className="vod-route"><VodApp onMainMenu={() => { setHomeFocus(1); setRoute("home"); }} onPlaylistSetup={openPlaylistSetup} /></div>;
-  if (route === "settings") return <div className="vod-route"><VodApp settingsOnOpen onMainMenu={() => { setHomeFocus(2); setRoute("home"); }} onPlaylistSetup={openPlaylistSetup} /></div>;
-  return <main className="app-home">
+  if (route === "live") return <LanguageContext.Provider value={{ language, setLanguage }}><LiveTv onMainMenu={() => { setHomeFocus(0); setRoute("home"); }} /></LanguageContext.Provider>;
+  if (route === "vod") return <LanguageContext.Provider value={{ language, setLanguage }}><div className="vod-route"><VodApp onMainMenu={() => { setHomeFocus(1); setRoute("home"); }} onPlaylistSetup={openPlaylistSetup} /></div></LanguageContext.Provider>;
+  if (route === "settings") return <LanguageContext.Provider value={{ language, setLanguage }}><div className="vod-route"><VodApp settingsOnOpen onMainMenu={() => { setHomeFocus(2); setRoute("home"); }} onPlaylistSetup={openPlaylistSetup} /></div></LanguageContext.Provider>;
+  return <LanguageContext.Provider value={{ language, setLanguage }}><Localized language={language}><main className="app-home">
     <div className="home-brand" aria-hidden="true"><img src="./branding/substream-icon.png" alt="" /><strong>Substream</strong></div>
     <section className="home-content" aria-label={playlistSetupOpen ? "Set up your playlist" : "Choose what to watch"}>
       {playlistSetupOpen ? <form className="home-playlist-setup" onSubmit={saveHomePlaylist}>
@@ -2831,5 +2843,5 @@ export function App() {
         <button className={`home-card ${homeFocus === 2 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[2] = element; }} onFocus={() => setHomeFocus(2)} onClick={() => setRoute("settings")}><strong>Settings</strong></button>
       </div>}
     </section>
-  </main>;
+  </main></Localized></LanguageContext.Provider>;
 }

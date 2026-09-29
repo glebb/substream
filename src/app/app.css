@@ -341,6 +341,7 @@ button:disabled { cursor: default; opacity: .45; }
   .subtitle-actions { align-items: stretch; flex-direction: column; }
   .subtitle-actions input, .subtitle-actions button { width: 100%; }
   .subtitle-search-options { align-items: stretch; flex-direction: column; }
+  .subtitle-search-options > .subtitle-search-submit { flex: none; }
   .subtitle-search-number, .subtitle-search-query { flex-basis: auto; }
   .continue-grid .tile:nth-child(odd), .continue-grid .tile:nth-child(even) { grid-column: span 1; }
   .playback-status { margin-left: 0; }
@@ -395,6 +396,13 @@ button:disabled { cursor: default; opacity: .45; }
 .settings-key-editor > label { display: block; max-width: 100%; overflow: hidden; }
 .settings-key-editor > label > input, .settings-key-editor > label > select { box-sizing: border-box; max-width: 100%; width: 100%; }
 .settings-key-editor > button, .settings-actions > button, .subtitle-actions > button { min-width: 140px; }
+.subtitle-search-options > .subtitle-search-submit {
+  box-sizing: border-box;
+  flex: 0 0 100%;
+  margin-right: 0;
+  min-width: 0;
+  width: 100%;
+}
 .settings-panel, .settings-section, .subtitles, .title-details { min-width: 0; }
 .groups { margin: -6px; }
 .groups > .favourite-tile { padding: 6px; }

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { preferredAudioTrackIndex } from "../core/media/audio.ts";
@@ -13,6 +13,7 @@ import { NordicSkyShowtimeEpgClient, nordicGuideSourceUrl, skyShowtimeNordicXmlt
 import { companionServerUrl } from "../platform/companion/client.ts";
 import { focusTitleListItem } from "./title-list-focus.ts";
 import { loadSubtitlePreferences } from "../platform/browser/subtitle-preferences.ts";
+import { LanguageContext, Localized } from "./language.tsx";
 
 type Props = { onMainMenu(): void };
 type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCategory: Record<string, LiveChannel[]> };
@@ -76,6 +77,7 @@ function categoryLabel(name: string): string {
 }
 
 export function LiveTv({ onMainMenu }: Props) {
+  const { language } = useContext(LanguageContext);
   const playlistUrl = loadPlaylistUrl();
   const client = useMemo(() => XtreamClient.fromPlaylistUrl(playlistUrl), [playlistUrl]);
   const dnaClient = useMemo(() => new DnaGuideClient(), []);
@@ -672,7 +674,7 @@ export function LiveTv({ onMainMenu }: Props) {
     const behindLiveSeconds = liveBufferWindow ? Math.max(0, liveBufferWindow.endSeconds - liveBufferWindow.currentSeconds) : 0;
     const hasLiveBuffer = !!liveBufferWindow && liveBufferWindow.endSeconds - liveBufferWindow.startSeconds >= 2;
     const atLiveEdge = behindLiveSeconds < 3;
-    return <main className={`screen player-screen live-player-screen ${playerFullscreen ? "is-fullscreen" : ""}`}>
+    return <Localized language={language}><main className={`screen player-screen live-player-screen ${playerFullscreen ? "is-fullscreen" : ""}`}>
     <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span></header>
     <div className="player-stage" ref={playerStageRef} tabIndex={-1} onClick={() => { if (playerFullscreen) showControls(); }}>
       {isTizenAvPlayAvailable() ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
@@ -695,10 +697,10 @@ export function LiveTv({ onMainMenu }: Props) {
       <span className="playback-status">{playbackState === "playing" || hasStartedPlayback ? `${liveSource === "hls" ? "HLS" : "Direct TS"} · ${liveSubtitleStatus || "Live"}` : playbackState === "error" ? `${liveSource === "hls" ? "HLS" : "Direct TS"} · Error` : `${liveSource === "hls" ? "HLS" : "Direct TS"} · Connecting`}</span>
       {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}
     </div>
-  </main>;
+  </main></Localized>;
   }
 
-  if (!selectedCategory) return <main className="screen live-screen">
+  if (!selectedCategory) return <Localized language={language}><main className="screen live-screen">
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV</p><h1>Finland</h1></div><button type="button" onClick={onMainMenu} ref={mainMenuRef}>Main menu</button></header>
     <p className="hint" role="status" aria-live="polite">{status}{cacheSavedAt && Date.now() - cacheSavedAt > STALE_AFTER_MS ? " · Saved list may be out of date." : ""}</p>
     <div className="live-list" ref={listViewportRef}>
@@ -707,9 +709,9 @@ export function LiveTv({ onMainMenu }: Props) {
       </button>)}
       {!categories.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No Finnish categories</h2><p>The provider did not return any matching Finland categories.</p><button type="button" ref={emptyRefreshRef} onClick={() => void refreshCategories()}>Refresh</button></div>}
     </div>
-  </main>;
+  </main></Localized>;
 
-  return <main className="screen live-screen">
+  return <Localized language={language}><main className="screen live-screen">
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV · FINLAND</p><h1>{categoryLabel(selectedCategory.name)}</h1></div><div className="header-actions"><button type="button" onClick={leaveCategory} ref={categoriesButtonRef}>Categories</button><button type="button" onClick={onMainMenu} ref={mainMenuRef}>Main menu</button></div></header>
     <p className="hint" role="status" aria-live="polite">{status}</p>
     <div className="live-list" ref={listViewportRef}>
@@ -749,5 +751,5 @@ export function LiveTv({ onMainMenu }: Props) {
       </button>)}
       {!channels.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No channels</h2><p>Refresh this category to try again.</p><button type="button" ref={emptyRefreshRef} onClick={() => void openCategory(selectedCategory)}>Refresh</button></div>}
     </div>
-  </main>;
+  </main></Localized>;
 }

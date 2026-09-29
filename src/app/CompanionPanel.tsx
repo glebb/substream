@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { acknowledgeCompanionEvents, companionDeviceIdentity, companionEvents, companionSelectionTitle, companionServerUrl, connectCompanionService, resetCompanionPairing, storedCompanionTvCredential, storeCompanionTvCredential, type CompanionConnection } from "../platform/companion/client.ts";
 import type { VodCatalogItem } from "../core/catalog/index.ts";
 import type { SettingsControlKey } from "./remote-navigation.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
+import { LanguageContext, Localized } from "./language.tsx";
 
 export function companionRetryDelay(attempt: number): number {
   return Math.min(2_000 * 2 ** Math.max(0, attempt), 30_000);
@@ -22,6 +23,7 @@ type CompanionPanelProps = {
 
 /** TV-side LAN companion connection. Only a provider item ID crosses back from the companion. */
 export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer, onEditingServerChange, remoteMode, registerControl, focusClass = () => "" }: CompanionPanelProps) {
+  const { language } = useContext(LanguageContext);
   const [server, setServer] = useState(companionServerUrl());
   const [draft, setDraft] = useState(companionServerUrl());
   const [identity] = useState(companionDeviceIdentity);
@@ -178,7 +180,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection, sourceFingerprint, server]);
 
-  return <section className="settings-section companion-panel">
+  return <Localized language={language}><section className="settings-section companion-panel">
     <h3>TV connection</h3>
     <p className="hint">Connect this TV, then pair its one-time code in the web app. Name each TV there so you can choose the playback target. Stream URLs stay on this TV.</p>
     <RemoteEditable
@@ -195,5 +197,5 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
     {connection && <p className="companion-code" role="status"><span className="hint">Connected to {server}.{paired ? " Browser paired successfully." : " Enter this one-time code in the web app before it expires:"}</span>{!paired && <><br /><strong aria-label={`Pairing code ${connection.pairingCode}`}>{connection.pairingCode}</strong></>}</p>}
     {status && <p className="hint" role="status" aria-live="polite">{status}</p>}
     {error && <p className="error" role="alert">{error}</p>}
-  </section>;
+  </section></Localized>;
 }
