@@ -3,7 +3,7 @@
  * Selection/event objects contain provider identifiers and display metadata
  * only. Credentials belong in authorization headers; stream URLs stay local.
  */
-export const COMPANION_PROTOCOL_VERSION = 2;
+export const COMPANION_PROTOCOL_VERSION = 3;
 
 const ID_PATTERN = /^\d{1,20}$/;
 const EXTENSION_PATTERN = /^[a-z0-9]{1,10}$/i;

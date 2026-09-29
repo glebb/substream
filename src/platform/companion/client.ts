@@ -4,9 +4,10 @@ import { packageDefaults } from "../package-defaults.ts";
 
 export type CompanionSelection = CompanionSelectionWire;
 export type CompanionEvent = CompanionEventWire;
-export type CompanionEventsResult = { protocolVersion: 2; events: CompanionEvent[]; paired: boolean; retentionGap: { throughSequence: number; firstAvailableSequence: number } | null };
-export type CompanionConnection = { tvCredential: string; pairingCode: string; pairingExpiresAt: number; expiresAt: number; sourceFingerprint: string };
-export type ActiveCompanionConnection = { expiresAt: number; sourceFingerprint: string };
+export type CompanionEventsResult = { protocolVersion: 3; events: CompanionEvent[]; paired: boolean; retentionGap: { throughSequence: number; firstAvailableSequence: number } | null };
+export type CompanionDeviceIdentity = { deviceId: string; deviceName: string };
+export type CompanionConnection = CompanionDeviceIdentity & { tvCredential: string; pairingCode: string; pairingExpiresAt: number; expiresAt: number; sourceFingerprint: string; paired: boolean };
+export type ActiveCompanionConnection = CompanionDeviceIdentity & { expiresAt: number; sourceFingerprint: string };
 export type BrowserCompanionConnection = ActiveCompanionConnection & { browserCredential: string };
 export type CompanionPlaybackSelection = Omit<CompanionSelection, "kind" | "seriesId"> & ({ kind: "movie" } | { kind: "episode"; seriesId: string });
 
@@ -30,6 +31,64 @@ export function companionServerUrl(): string {
   } catch { return ""; }
 }
 
+let volatileDeviceIdentity: CompanionDeviceIdentity | null = null;
+
+/** Stable opaque identity for this TV installation; it contains no account data. */
+export function companionDeviceIdentity(): CompanionDeviceIdentity {
+  try {
+    const stored = globalThis.localStorage?.getItem("substream.companion-device-identity");
+    if (stored) {
+      const value = JSON.parse(stored) as Partial<CompanionDeviceIdentity>;
+      if (/^[a-f0-9]{32}$/.test(value.deviceId || "") && typeof value.deviceName === "string" && value.deviceName.trim().length > 0 && value.deviceName.length <= 40) {
+        return { deviceId: value.deviceId!, deviceName: value.deviceName };
+      }
+    }
+  } catch { /* Storage denial falls back to an in-memory identity for this run. */ }
+  if (volatileDeviceIdentity) return volatileDeviceIdentity;
+  const bytes = new Uint8Array(16);
+  try { globalThis.crypto?.getRandomValues(bytes); } catch { /* Use the non-secret fallback below. */ }
+  if (!bytes.some(Boolean)) for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  const deviceId = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  volatileDeviceIdentity = { deviceId, deviceName: `TV-${deviceId.slice(-4).toUpperCase()}` };
+  try { globalThis.localStorage?.setItem("substream.companion-device-identity", JSON.stringify(volatileDeviceIdentity)); } catch { /* Identity remains usable for this run. */ }
+  return volatileDeviceIdentity;
+}
+
+function tvCredentialStorageKey(server: string): string {
+  return `substream.companion-tv-credential:${new URL(server).origin}`;
+}
+
+export function storedCompanionTvCredential(server: string): string {
+  try {
+    const value = globalThis.localStorage?.getItem(tvCredentialStorageKey(server)) || "";
+    return /^[a-f0-9]{64}$/i.test(value) ? value : "";
+  } catch { return ""; }
+}
+
+export function storeCompanionTvCredential(server: string, credential: string): void {
+  if (!/^[a-f0-9]{64}$/i.test(credential)) return;
+  try { globalThis.localStorage?.setItem(tvCredentialStorageKey(server), credential); } catch { /* Re-pairing remains available if storage is unavailable. */ }
+}
+
+export function saveCompanionDeviceLabel(deviceId: string, label: string): void {
+  if (!/^[a-f0-9]{32}$/.test(deviceId)) return;
+  const cleanLabel = label.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 40);
+  if (!cleanLabel) return;
+  try {
+    const current = JSON.parse(globalThis.localStorage?.getItem("substream.companion-device-labels") || "{}") as Record<string, unknown>;
+    globalThis.localStorage?.setItem("substream.companion-device-labels", JSON.stringify({ ...current, [deviceId]: cleanLabel }));
+  } catch { /* Labels are a convenience; TV-provided names remain available. */ }
+}
+
+export function companionDeviceLabel(deviceId: string, fallback: string): string {
+  if (!/^[a-f0-9]{32}$/.test(deviceId)) return fallback;
+  try {
+    const current = JSON.parse(globalThis.localStorage?.getItem("substream.companion-device-labels") || "{}") as Record<string, unknown>;
+    const saved = current[deviceId];
+    return typeof saved === "string" && saved.trim() ? saved.slice(0, 40) : fallback;
+  } catch { return fallback; }
+}
+
 /** Stores only a validated relay origin, never credentials or request paths. */
 export function saveCompanionServerUrl(value: string): string {
   const trimmed = value.trim();
@@ -45,19 +104,22 @@ export function saveCompanionServerUrl(value: string): string {
   return origin;
 }
 
-export async function connectCompanionService(server: string, sourceFingerprint: string, tvCredential?: string): Promise<CompanionConnection> {
+export async function connectCompanionService(server: string, sourceFingerprint: string, identity: CompanionDeviceIdentity, tvCredential?: string): Promise<CompanionConnection> {
   if (!/^vod_[a-z0-9]{1,8}$/.test(sourceFingerprint)) throw new Error("A valid Xtream source is required to connect this TV.");
+  const deviceName = identity.deviceName.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 40);
+  if (!/^[a-f0-9]{32}$/.test(identity.deviceId) || !deviceName) throw new Error("A valid TV identity is required to connect this TV.");
   let response: Response;
   let value: Partial<CompanionConnection> & { protocolVersion?: unknown };
   try {
     response = await fetch(server + "/api/connect", {
     method: "POST",
     headers: { "content-type": "application/json", ...(tvCredential ? { authorization: `Bearer ${tvCredential}` } : {}) },
-    body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, sourceFingerprint }),
+    body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, sourceFingerprint, deviceId: identity.deviceId, deviceName }),
     });
     value = await response.json() as typeof value;
   } catch { throw new Error("Companion service response was unavailable or invalid."); }
-  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{64}$/i.test(value.tvCredential || "") || !/^\d{8}$/.test(value.pairingCode || "")
+  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || value.deviceId !== identity.deviceId || value.deviceName !== deviceName || !/^[a-f0-9]{64}$/i.test(value.tvCredential || "")
+    || (value.paired !== true && !/^\d{8}$/.test(value.pairingCode || "")) || typeof value.paired !== "boolean"
     || !Number.isFinite(value.pairingExpiresAt) || !Number.isFinite(value.expiresAt) || value.sourceFingerprint !== sourceFingerprint) throw new Error("TV connection could not be established.");
   return value as CompanionConnection;
 }
@@ -71,7 +133,7 @@ export async function getCompanionConnection(server: string, browserCredential: 
   try { value = await response.json() as typeof value; }
   catch { throw new CompanionConnectionError("invalid"); }
   if (response.status === 404) throw new CompanionConnectionError("no-tv");
-  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint || "tvCredential" in value || "browserCredential" in value) throw new CompanionConnectionError("invalid");
+  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{32}$/.test(value.deviceId || "") || typeof value.deviceName !== "string" || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint || "tvCredential" in value || "browserCredential" in value) throw new CompanionConnectionError("invalid");
   return value as ActiveCompanionConnection;
 }
 
@@ -82,8 +144,24 @@ export async function redeemCompanionCode(server: string, code: string): Promise
     response = await fetch(server + "/api/pair/redeem", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, code: code.trim() }) });
     value = await response.json() as typeof value;
   } catch { throw new Error("Could not redeem the TV pairing code."); }
-  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{64}$/i.test(value.browserCredential || "") || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint) throw new Error("Pairing code is invalid or expired.");
+  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{64}$/i.test(value.browserCredential || "") || !/^[a-f0-9]{32}$/.test(value.deviceId || "") || typeof value.deviceName !== "string" || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint) throw new Error("Pairing code is invalid or expired.");
   return value as BrowserCompanionConnection;
+}
+
+export async function resetCompanionPairing(server: string, tvCredential: string): Promise<{ deviceId: string; pairingCode: string; pairingExpiresAt: number }> {
+  let response: Response;
+  let value: { deviceId?: unknown; pairingCode?: unknown; pairingExpiresAt?: unknown; protocolVersion?: unknown };
+  try {
+    response = await fetch(server + "/api/pair/reset", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${tvCredential}` },
+      body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION }),
+    });
+    value = await response.json() as typeof value;
+  } catch { throw new Error("Could not reset TV pairing."); }
+  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{32}$/.test(String(value.deviceId || ""))
+    || !/^\d{8}$/.test(String(value.pairingCode || "")) || !Number.isFinite(value.pairingExpiresAt)) throw new Error("Could not reset TV pairing.");
+  return { deviceId: String(value.deviceId), pairingCode: String(value.pairingCode), pairingExpiresAt: Number(value.pairingExpiresAt) };
 }
 
 export async function sendCompanionPlayback(server: string, browserCredential: string, selection: CompanionPlaybackSelection): Promise<void> {

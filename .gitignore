@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.companion-certs/
 .tizen-cli.local
 .tizen-devices.local
 node_modules/

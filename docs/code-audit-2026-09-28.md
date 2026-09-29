@@ -24,9 +24,9 @@ The TV remains the authority for its local playlist credentials and resolves the
 
 ### P0 — unauthenticated relay control plane
 
-At the time of this audit, the relay bound to `0.0.0.0` by default, used permissive CORS, and exposed session state and catalogue reads. Since then, loopback-by-default, explicit LAN opt-in, strict configured-origin checks, separate scoped TV/browser credentials, long polling, and event acknowledgements have been implemented. The remaining control plane uses scoped credentials for active-session checks, event reads, acknowledgements, and `pair/select` / `pair/play`; catalogue/search routes have since been removed. Pair redemption and loopback media work have rate limits. Durable device identities and TLS remain open concerns.
+At the time of this audit, the relay bound to `0.0.0.0` by default, used permissive CORS, and exposed session state and catalogue reads. Since then, loopback-by-default, explicit LAN opt-in, strict configured-origin checks, separate scoped TV/browser credentials, long polling, event acknowledgements, and multiple named TV identities have been implemented. The remaining control plane uses per-TV credentials for active-session checks, event reads, acknowledgements, and playback commands; catalogue/search routes have been removed. Pair redemption and loopback media work have rate limits. HTTPS can be enabled with a configured certificate/key, including a self-signed certificate; client certificate trust is still required.
 
-Impact at audit time: any party that could reach the relay could replace the TV session, obtain the active session identifier, enumerate provider metadata, or enqueue playback. The implemented controls reduce that exposure, though LAN mode still sends credentials over plain HTTP and the relay remains a development service.
+Impact at audit time: any party that could reach the relay could replace the TV session, obtain the active session identifier, enumerate provider metadata, or enqueue playback. The implemented controls reduce that exposure. LAN mode remains plain HTTP unless TLS certificate and key files are configured; the relay remains a development service.
 
 Plan:
 
@@ -40,12 +40,12 @@ Plan:
 
 The TV now derives its account-aware source fingerprint locally and sends only that safe identifier to `POST /api/connect`; the relay stores no playlist URL, provider username, password, or stream URL. The relay no longer resolves episode metadata against the provider. A paired browser sends identifiers and display metadata, and the TV verifies the fingerprint and derives the final stream URL locally.
 
-Residual risk: pairing and scoped session credentials still travel over plain HTTP in explicit LAN mode, so TLS is required before any non-development distribution. A source fingerprint matches an account/provider context but is not cryptographic proof of account ownership; paired browser commands are therefore still validated by the TV/provider at playback time.
+Residual risk: pairing and scoped session credentials travel over plain HTTP when TLS is not configured. HTTPS accepts self-signed server certificates, but clients must explicitly trust them; the application does not bypass certificate verification. A source fingerprint matches an account/provider context but is not cryptographic proof of account ownership; paired browser commands are therefore still validated by the TV/provider at playback time.
 
 Plan:
 
-1. Decide the supported threat model. If this remains a private development tool, hard-gate LAN mode and label it as credential-exposing development software.
-2. For a supported companion product, use TLS with certificate handling appropriate for Tizen, authenticated pairing, and encrypted-at-rest credential storage with a bounded lifetime.
+1. Decide the supported threat model. The current development relay keeps LAN mode opt-in and warns when it runs without TLS.
+2. For a supported companion product, provide certificate installation guidance appropriate for Tizen, retain authenticated pairing, and review encrypted-at-rest credential storage and revocation.
 3. Prefer a protocol where TV resolves provider IDs locally and the relay never needs playlist credentials. If server-side catalogue lookup is essential, use a narrowly scoped provider token rather than the full playlist URL.
 4. Avoid embedding personal defaults in distributable packages; keep the existing warning and add a build-time CI guard that rejects personal secrets in non-personal artifacts.
 
@@ -69,11 +69,11 @@ Plan:
 
 Plan: create a shared, platform-independent provider domain module with interfaces such as `ProviderTransport`, `ProviderConnection`, and `PlaybackResolver`. Browser and Node should inject fetch implementations. Keep credentials in platform adapters and return typed domain values from the shared module. Relay catalogue search is unsupported: the browser owns catalogue search and contacts its configured provider directly.
 
-### P2 — companion remains intentionally single-device and in-memory
+### Resolved — companion supports multiple named TVs
 
-The protocol now has a versioned schema, separate scoped browser/TV capabilities, bounded authenticated long polling, acknowledgement, and explicit queue-retention-gap reporting. Session state is still an in-memory `Map`, and one active session is deliberately supported. A relay restart loses pairing/session state; a TV app reload loses its in-memory TV credential and must wait for expiry or restart the relay before registering again. Delivery is at least once until acknowledgement, so a crash after local handling but before ACK commit can replay a command.
+Protocol v3 keys sessions, credentials, pairing codes, and event queues independently by stable opaque TV identity, with a 16-device ceiling. The TV stores its identity and relay-scoped renewal credential locally (not encrypted at rest). Renewal preserves a paired browser; the TV can explicitly reset pairing to issue a new one-time code. The browser can pair multiple TVs, assign local display names, and select a playback target. Session state remains in memory on the relay, and browser bearer credentials remain in page memory: after a relay restart the TVs reconnect under their stable identities but browsers must pair again; after a browser reload, use **Reset browser pairing** on the TV and pair again. Delivery is at least once until acknowledgement, so a crash after local handling but before ACK commit can replay a command.
 
-Remaining plan: either add durable device identities, persistence, and multi-device ownership, or make the one-TV/no-restart-recovery development constraint more explicit in UI and setup guidance.
+Remaining product work: persistent relay-side device recovery/revocation and target-device testing are not included in this development-scope implementation.
 
 ### P2 — layer boundaries are mostly good but application composition is concentrated
 
@@ -140,4 +140,4 @@ Decision: relay catalogue/search is unsupported. The unused `/api/search` and `/
 
 ### Phase 3 — scale UX reliability (P2)
 
-Implemented: authenticated bounded long polling and acknowledgements with explicit retention-gap reporting, plus synthetic packaged Tizen guide coverage with the companion omitted. Restart/reconnect state remains intentionally in-memory. Durable multi-device identity/recovery and a stronger single-device product contract require a product decision; browser catalogue indexing/search changes and real target-device performance benchmarks remain separate work.
+Implemented: authenticated bounded long polling and acknowledgements with explicit retention-gap reporting, multiple named TV targets, and synthetic packaged Tizen guide coverage with the companion omitted. Relay session recovery remains intentionally in-memory. Persistent device revocation/registry policy, browser catalogue indexing/search changes, and real target-device performance benchmarks remain separate work.

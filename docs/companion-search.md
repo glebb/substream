@@ -16,11 +16,13 @@ The normal app provides Search; there is no separate companion page. The optiona
 
 The relay serves the built web application at its root. It does not serve catalogue or search APIs: browser search connects directly to the provider configured in the web app. Relay APIs are limited to paired TV playback commands, the public Nordic guide CORS bridge, and the development-only browser MKV audio fallback. You do not need to open the app through the relay to search or play in the browser.
 
-1. Copy `.env.example` to the ignored `.env` file if needed. Set the relay's LAN address for the TV build:
+1. Copy `.env.example` to the ignored `.env` file if needed. Set the relay's LAN address for the TV build. Use `http://` for the simple trusted-LAN setup, or `https://` when TLS is enabled:
 
    ```sh
    COMPANION_SERVER_URL=http://192.168.1.50:8787
    ```
+
+   To create a self-signed certificate for a LAN IP or hostname, run `npm run companion:cert -- 192.168.1.50` (OpenSSL is required). Before starting the dev stack, set `COMPANION_TLS_CERT=.companion-certs/companion-cert.pem`, `COMPANION_TLS_KEY=.companion-certs/companion-key.pem`, and change `COMPANION_SERVER_URL` to the matching `https://` address. `NODE_EXTRA_CA_CERTS=.companion-certs/companion-cert.pem` lets Node-based Vite proxy requests trust that certificate. The certificate must also be trusted by the TV/browser; TLS errors are not bypassed by the app. The generated key is local-only and the `.companion-certs/` directory is ignored by Git.
 
 2. For personal web development, start the web app and relay together:
 
@@ -28,13 +30,13 @@ The relay serves the built web application at its root. It does not serve catalo
    npm run dev:personal
    ```
 
-   This development command opts into LAN mode and prints a warning because the relay uses plain HTTP. The standalone `npm run companion:dev` binds to `127.0.0.1` by default; pass `--lan` (`node scripts/companion-server.mjs --lan`) or set `COMPANION_LAN=1` to expose it on LAN interfaces. `COMPANION_PORT` changes the default port `8787`, and `COMPANION_HOST` can select the LAN bind address when LAN mode is enabled. `COMPANION_ALLOWED_ORIGINS` is a comma-separated exact-origin allow-list; it defaults to Vite's `http://localhost:5173` and `http://127.0.0.1:5173` origins.
+   This development command opts into LAN mode. Without TLS certificate/key settings, it prints a warning because credentials travel over plain HTTP. The standalone `npm run companion:dev` binds to `127.0.0.1` by default; pass `--lan` (`node scripts/companion-server.mjs --lan`) or set `COMPANION_LAN=1` to expose it on LAN interfaces. `COMPANION_PORT` changes the default port `8787`, and `COMPANION_HOST` can select the LAN bind address when LAN mode is enabled. `COMPANION_ALLOWED_ORIGINS` is a comma-separated exact-origin allow-list; it defaults to Vite's `http://localhost:5173` and `http://127.0.0.1:5173` origins.
 
 3. Rebuild and deploy the TV application after changing `COMPANION_SERVER_URL`. Ensure the TV and computer running the relay can reach each other on the LAN.
 
-4. The TV registers its active Xtream source when its playback listener starts and retries automatically if the relay is unavailable. **Settings → TV connection → Connect** remains available to connect manually. The TV shows an eight-digit one-time code that expires in five minutes; its current session credential is required to renew the session shortly before the 30-minute expiry or replace that TV's session.
+4. The TV registers its Xtream source under a stable random device identity when its playback listener starts and retries automatically if the relay is unavailable. Its renewal credential is stored locally per relay, so normal renewal preserves the current browser pairing. **Settings → TV connection** lets you name the TV, connect manually, or reset browser pairing to issue a fresh eight-digit one-time code. Codes expire in five minutes; TV sessions renew before their 30-minute idle expiry.
 
-5. In the browser app, open **Settings → TV connection**, enter the relay's LAN address (for example `http://192.168.1.50:8787`), save it, then enter the current code shown on the TV and choose **Pair browser**. The code can be redeemed once by one browser. **Check TV connection** then reports whether the paired TV is connected and its provider matches the browser playlist. During Vite development, leave the address empty to use the `/api` proxy to `localhost:8787`; setting `COMPANION_SERVER_URL` in `.env` makes the proxy target that address instead.
+5. In the browser app, open **Settings → TV connection**, enter the relay's LAN address, enter a display name and the current TV code, then choose **Pair browser**. Repeat for each TV. The **Playback target** selector chooses which named TV receives commands. Pairing credentials stay in page memory; after a browser reload, reset pairing from the TV and pair again. During Vite development, leave the address empty to use the `/api` proxy to `localhost:8787`; setting `COMPANION_SERVER_URL` in `.env` makes the proxy target that address instead.
 
 6. Configure the same Xtream provider in the browser app and TV. Open a title's details and choose **Play on TV**. The paired browser checks the active TV session and that its provider matches. If unavailable, Search and **Play here** continue to work.
 
@@ -44,12 +46,12 @@ TV playback requires a reachable relay, an active TV session, and a matching Xtr
 
 | Location | Data held |
 | --- | --- |
-| TV app | Playlist URL/provider credentials and final stream URLs; normal TV features remain local to the TV app |
-| LAN relay memory | TV's account-aware source fingerprint, scoped session credentials, and pending identifier-only playback commands |
+| TV app | Playlist URL/provider credentials, stable opaque TV identity, relay-scoped TV renewal credential, and final stream URLs; normal TV features remain local to the TV app |
+| LAN relay memory | Up to 16 named TV identities, scoped session credentials, and per-TV pending identifier-only playback queues; sessions are not persisted across relay restarts |
 | Web browser IndexedDB | Safe Xtream title metadata, content type, provider IDs, source fingerprint, extension/category metadata, and refresh timestamp; imported M3U catalogue data is held by the app's local catalogue store |
 | Browser provider connection | The playlist configured in that browser, used to refresh Xtream Search and resolve **Play here** |
 
-The TV derives an account-aware fingerprint locally from its Xtream playlist and registers only that fingerprint. The relay retains no provider username, password, playlist URL, or stream URL. Browser commands contain provider identifiers and display metadata; the TV validates the fingerprint and derives the final stream URL with its own saved credentials. Episode membership is no longer checked by the relay, so a paired browser can submit an episode ID and series ID together; the TV/provider remains responsible for resolving that combination during playback. A one-time pairing code grants one browser a separate scoped credential; the TV credential can renew or replace only its own active session. These session credentials are held in app memory. If the TV app reloads while the relay remains running, it loses its TV credential and cannot replace the still-live session; restart the relay to clear its in-memory session, or wait for the 30-minute session expiry. Restarting the relay also clears all sessions. This registration is only needed for the opt-in **Play on TV** feature; an unreachable or unconfigured relay does not affect normal TV use. The relay defaults to loopback and has an exact-origin CORS allow-list, but LAN mode still uses plain HTTP, so pairing codes and bearer credentials are unencrypted in transit. Keep LAN mode on a trusted network and do not expose it to the internet. Never print or commit `.env`, playlist URLs, OpenSubtitles credentials, tokens, or signed media URLs. Tests use synthetic fixtures only.
+The TV derives an account-aware fingerprint locally from its Xtream playlist and registers only that fingerprint. The relay retains no provider username, password, playlist URL, or stream URL. Browser commands contain provider identifiers and display metadata; the TV validates the fingerprint and derives the final stream URL with its own saved credentials. Episode membership is no longer checked by the relay, so a paired browser can submit an episode ID and series ID together; the TV/provider remains responsible for resolving that combination during playback. Each TV has its own scoped credentials and command queue; pairing one TV does not replace another. TV identity and renewal credentials are held in app local storage, which is not encrypted at rest; browser display labels are also local, while browser bearer tokens remain in page memory. Pairing/session state is held in relay memory, so a relay restart creates fresh sessions and requires browser re-pairing. TLS is optional for this development service. When configured with a certificate/key, the relay supports self-signed certificates, but clients must trust them; without TLS, pairing codes and bearer credentials are visible on the LAN. Keep the service on a trusted network and do not expose it to the internet. Never print or commit `.env`, private keys, playlist URLs, OpenSubtitles credentials, tokens, or signed media URLs. Tests use synthetic fixtures only.
 
 ## Troubleshooting
 

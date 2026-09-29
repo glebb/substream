@@ -1,4 +1,5 @@
-import { createServer } from "node:http";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { randomBytes, randomInt } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
@@ -17,7 +18,9 @@ const projectDir = fileURLToPath(new URL("../", import.meta.url));
 const publicDir = join(projectDir, "public");
 const distDir = join(projectDir, "dist");
 const sessions = new Map();
-let activeSessionId = "";
+const MAX_COMPANION_DEVICES = 16;
+const sessionIdsByCredential = new Map();
+const sessionIdsByPairingCode = new Map();
 const MAX_EVENT_WAIT_MS = 25_000;
 const MAX_QUEUED_EVENTS = 20;
 const SESSION_TTL_MS = 30 * 60 * 1000;
@@ -334,15 +337,39 @@ async function body(request) {
 function sessionFor(value) {
   const session = sessions.get(value);
   if (!session || Date.now() - session.createdAt > SESSION_TTL_MS) {
-    if (session) sessions.delete(value);
-    if (activeSessionId === value) activeSessionId = "";
+    if (session) deleteSession(value);
     return null;
   }
   return session;
 }
 
 function publicSession(session) {
-  return { expiresAt: session.createdAt + SESSION_TTL_MS, sourceFingerprint: session.sourceFingerprint };
+  return {
+    deviceId: session.deviceId,
+    deviceName: session.deviceName,
+    expiresAt: session.createdAt + SESSION_TTL_MS,
+    sourceFingerprint: session.sourceFingerprint,
+  };
+}
+
+function deleteSession(deviceId) {
+  const session = sessions.get(deviceId);
+  if (!session) return;
+  sessions.delete(deviceId);
+  sessionIdsByCredential.delete(session.tvCredential);
+  if (session.browserCredential) sessionIdsByCredential.delete(session.browserCredential);
+  if (session.pairingCode) sessionIdsByPairingCode.delete(session.pairingCode);
+  wakeEventWaiters(session);
+}
+
+function issuePairingCode(session) {
+  if (session.pairingCode) sessionIdsByPairingCode.delete(session.pairingCode);
+  let code = "";
+  do { code = String(randomInt(0, 100_000_000)).padStart(8, "0"); }
+  while (sessionIdsByPairingCode.has(code));
+  session.pairingCode = code;
+  session.pairingExpiresAt = Date.now() + PAIRING_TTL_MS;
+  sessionIdsByPairingCode.set(code, session.deviceId);
 }
 
 function wakeEventWaiters(session) {
@@ -386,9 +413,10 @@ function bearer(request) {
 function sessionForCredential(request, scope) {
   const credential = bearer(request);
   if (!credential) return null;
-  const session = sessions.get(activeSessionId);
-  if (!session || Date.now() >= session.createdAt + SESSION_TTL_MS) return null;
-  if (scope === "tv" ? session.tvCredential !== credential : session.browserCredential !== credential) return null;
+  const deviceId = sessionIdsByCredential.get(credential);
+  if (!deviceId) return null;
+  const session = sessionFor(deviceId);
+  if (!session || (scope === "tv" ? session.tvCredential !== credential : session.browserCredential !== credential)) return null;
   return session;
 }
 
@@ -405,27 +433,57 @@ export async function route(request, response, url) {
   if (url.pathname.startsWith("/api/media/")) { const handled = await mediaRoute(request, response, url); if (handled !== false) return; }
   if (request.method === "GET" && url.pathname === "/api/nordic-epg") return nordicEpg(response);
   if (request.method === "POST" && url.pathname === "/api/connect") {
-    // A live TV owns the single active slot. An app reload loses its in-memory
-    // credential, so replacing that session then requires an explicit relay restart.
-    const current = sessionFor(activeSessionId);
-    if (current && sessionForCredential(request, "tv") !== current) return json(response, 404, { error: "Companion connection could not be established." });
     try {
       const input = await body(request);
       if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Companion protocol version is unsupported." });
       const sourceFingerprint = String(input.sourceFingerprint || "");
+      const deviceId = String(input.deviceId || "").toLowerCase();
+      const deviceName = String(input.deviceName || "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 40);
       if (!/^vod_[a-z0-9]{1,8}$/.test(sourceFingerprint)) return json(response, 400, { error: "A valid Xtream source fingerprint is required." });
-      for (const oldSession of sessions.values()) wakeEventWaiters(oldSession);
-      const session = {
-        id: randomBytes(18).toString("hex"), createdAt: Date.now(), sourceFingerprint, events: [], nextEvent: 1,
-        acknowledgedSequence: 0, highestDeliveredSequence: 0, droppedThroughSequence: 0, reportedGapThroughSequence: 0, eventWaiters: new Set(),
-        tvCredential: randomBytes(32).toString("hex"), browserCredential: "",
-        pairingCode: String(randomInt(0, 100_000_000)).padStart(8, "0"),
-        pairingExpiresAt: Date.now() + PAIRING_TTL_MS, pairingRedeemed: false,
-      };
-      sessions.clear();
-      sessions.set(session.id, session);
-      activeSessionId = session.id;
-      return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, ...publicSession(session), tvCredential: session.tvCredential, pairingCode: session.pairingCode, pairingExpiresAt: session.pairingExpiresAt });
+      if (!/^[a-f0-9]{32}$/.test(deviceId) || !deviceName) return json(response, 400, { error: "TV device identity is invalid." });
+      let session = sessionFor(deviceId);
+      if (session && sessionForCredential(request, "tv") !== session) return json(response, 404, { error: "Companion connection could not be established." });
+      if (!session && sessions.size >= MAX_COMPANION_DEVICES) return json(response, 503, { error: "The relay has reached its TV connection limit." });
+      const now = Date.now();
+      if (session) {
+        const sourceChanged = session.sourceFingerprint !== sourceFingerprint;
+        session.createdAt = now;
+        session.deviceName = deviceName;
+        session.sourceFingerprint = sourceFingerprint;
+        if (sourceChanged) {
+          if (session.browserCredential) sessionIdsByCredential.delete(session.browserCredential);
+          session.browserCredential = "";
+          session.pairingRedeemed = false;
+          session.events = [];
+          session.nextEvent = 1;
+          session.acknowledgedSequence = 0;
+          session.highestDeliveredSequence = 0;
+          session.droppedThroughSequence = 0;
+          session.reportedGapThroughSequence = 0;
+          wakeEventWaiters(session);
+          issuePairingCode(session);
+        } else if (!session.pairingRedeemed && Date.now() >= session.pairingExpiresAt) {
+          issuePairingCode(session);
+        }
+      } else {
+        session = {
+          deviceId, deviceName, createdAt: now, sourceFingerprint, events: [], nextEvent: 1,
+          acknowledgedSequence: 0, highestDeliveredSequence: 0, droppedThroughSequence: 0, reportedGapThroughSequence: 0, eventWaiters: new Set(),
+          tvCredential: randomBytes(32).toString("hex"), browserCredential: "",
+          pairingCode: "", pairingExpiresAt: 0, pairingRedeemed: false,
+        };
+        issuePairingCode(session);
+        sessions.set(deviceId, session);
+        sessionIdsByCredential.set(session.tvCredential, deviceId);
+      }
+      return json(response, 200, {
+        protocolVersion: COMPANION_PROTOCOL_VERSION,
+        ...publicSession(session),
+        tvCredential: session.tvCredential,
+        pairingCode: session.pairingCode,
+        pairingExpiresAt: session.pairingExpiresAt,
+        paired: session.pairingRedeemed,
+      });
     } catch { return json(response, 400, { error: "Companion connection request was invalid." }); }
   }
   if (request.method === "POST" && url.pathname === "/api/pair/redeem") {
@@ -438,15 +496,43 @@ export async function route(request, response, url) {
     try {
       const input = await body(request);
       if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Pairing protocol version is unsupported." });
-      const session = sessions.get(activeSessionId);
+      const deviceId = sessionIdsByPairingCode.get(String(input.code || ""));
+      const session = deviceId ? sessionFor(deviceId) : null;
       if (!session || Date.now() >= session.createdAt + SESSION_TTL_MS || session.pairingRedeemed
         || Date.now() >= session.pairingExpiresAt || String(input.code || "") !== session.pairingCode) return json(response, 400, { error: "Pairing code is invalid or expired." });
       session.pairingRedeemed = true;
+      sessionIdsByPairingCode.delete(session.pairingCode);
       session.pairingCode = "";
       session.browserCredential = randomBytes(32).toString("hex");
+      sessionIdsByCredential.set(session.browserCredential, session.deviceId);
       wakeEventWaiters(session);
       return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, ...publicSession(session), browserCredential: session.browserCredential });
     } catch { return json(response, 400, { error: "Pairing request was invalid." }); }
+  }
+  if (request.method === "POST" && url.pathname === "/api/pair/reset") {
+    const session = sessionForCredential(request, "tv");
+    if (!session) return json(response, 404, { error: "Companion connection expired." });
+    try {
+      const input = await body(request);
+      if (!supportsCompanionProtocolVersion(input.protocolVersion)) return json(response, 400, { error: "Pairing protocol version is unsupported." });
+      if (session.browserCredential) sessionIdsByCredential.delete(session.browserCredential);
+      session.browserCredential = "";
+      session.pairingRedeemed = false;
+      session.events = [];
+      session.nextEvent = 1;
+      session.acknowledgedSequence = 0;
+      session.highestDeliveredSequence = 0;
+      session.droppedThroughSequence = 0;
+      session.reportedGapThroughSequence = 0;
+      issuePairingCode(session);
+      wakeEventWaiters(session);
+      return json(response, 200, {
+        protocolVersion: COMPANION_PROTOCOL_VERSION,
+        deviceId: session.deviceId,
+        pairingCode: session.pairingCode,
+        pairingExpiresAt: session.pairingExpiresAt,
+      });
+    } catch { return json(response, 400, { error: "Pairing reset request was invalid." }); }
   }
   if (request.method === "GET" && url.pathname === "/api/active") {
     const session = sessionForCredential(request, "browser");
@@ -564,11 +650,42 @@ async function serveStatic(pathname, response) {
   } catch { json(response, 404, { error: "Not found" }); }
 }
 
-const server = createServer((request, response) => {
+function handleRequest(request, response) {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   void route(request, response, url);
-});
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+}
+
+export function createCompanionServer(tlsMaterial) {
+  const hasCert = Boolean(tlsMaterial?.cert);
+  const hasKey = Boolean(tlsMaterial?.key);
+  if (hasCert !== hasKey) throw new Error("Companion TLS requires both certificate and private key.");
+  return hasCert
+    ? createHttpsServer({ cert: tlsMaterial.cert, key: tlsMaterial.key, minVersion: "TLSv1.2" }, handleRequest)
+    : createHttpServer(handleRequest);
+}
+
+async function startCompanionServer() {
+  const certificatePath = process.env.COMPANION_TLS_CERT?.trim() || "";
+  const privateKeyPath = process.env.COMPANION_TLS_KEY?.trim() || "";
+  if (Boolean(certificatePath) !== Boolean(privateKeyPath)) {
+    console.error("Companion TLS requires both COMPANION_TLS_CERT and COMPANION_TLS_KEY.");
+    process.exitCode = 1;
+    return;
+  }
+  let server;
+  if (certificatePath) {
+    try {
+      const [cert, key] = await Promise.all([readFile(certificatePath), readFile(privateKeyPath)]);
+      server = createCompanionServer({ cert, key });
+    } catch {
+      console.error("Companion TLS certificate could not be loaded. Check the configured certificate and private-key files.");
+      process.exitCode = 1;
+      return;
+    }
+  } else {
+    server = createCompanionServer();
+  }
+
   server.once("error", (error) => {
     const code = typeof error?.code === "string" && /^[A-Z0-9_]+$/.test(error.code) ? error.code : "UNKNOWN";
     const explanation = code === "EADDRINUSE" ? "the port is already in use"
@@ -577,11 +694,13 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     console.error(`Companion service could not listen on port ${port}: ${explanation} (${code}).`);
     process.exitCode = 1;
   });
-  if (lanEnabled) console.warn("WARNING: Companion LAN mode uses plain HTTP. Pairing codes and scoped credentials are unencrypted in transit; use only on a trusted network.");
+  const protocol = certificatePath ? "https" : "http";
+  if (lanEnabled && !certificatePath) console.warn("WARNING: Companion LAN mode uses plain HTTP. Pairing codes and scoped credentials are unencrypted in transit; use only on a trusted network.");
+  if (lanEnabled && certificatePath) console.warn("Companion TLS is enabled. Self-signed certificates are accepted by the server; clients must trust the certificate before making requests.");
   server.listen(port, host, () => {
     const address = server.address();
     const listeningPort = address && typeof address === "object" ? address.port : port;
-    console.log(`Companion service listening on http://${host}:${listeningPort}`);
+    console.log(`Companion service listening on ${protocol}://${host}:${listeningPort}`);
   });
 
   const mediaCleanup = setInterval(() => {
@@ -605,9 +724,10 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   });
 
   setInterval(() => {
-    for (const [id, session] of sessions) if (Date.now() - session.createdAt > SESSION_TTL_MS) {
-      sessions.delete(id);
-      if (activeSessionId === id) activeSessionId = "";
-    }
+    for (const [deviceId, session] of sessions) if (Date.now() - session.createdAt > SESSION_TTL_MS) deleteSession(deviceId);
   }, 60_000).unref();
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  void startCompanionServer();
 }

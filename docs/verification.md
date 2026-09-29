@@ -40,7 +40,7 @@ Choose the rows affected by a change; automated fixtures cover many of these bou
 | VOD playback | Loading/buffering/pause/end/error, resume, subtitle timing/size, fullscreen shortcuts and replacement-session cleanup |
 | Navigation | [Navigation contract](navigation.md), held keys, page edges, Resume/Remove pairs, red-key favourites, editing and conditional Settings controls |
 | Search | M3U local search and Xtream refresh/cache work without a TV; account caches stay isolated; results open details and Back restores Search |
-| LAN relay | TV auto-registers/reconnects and renews sessions; matching movie/episode commands work; mismatches/stale sessions fail; stopping `dev:personal` stops both services |
+| LAN relay | Multiple named TVs remain isolated; browser target selection reaches only the selected TV; reconnect preserves pairing; pairing reset and re-pair work; matching movie/episode commands work; TLS/self-signed trust succeeds on target hardware; stopping `dev:personal` stops both services |
 | Live TV | Cached categories/channels, missing EPG, current/next programme changes, rapid tuning, endpoint behavior, retry, live buffer when available, and return focus |
 
 Use alternate ports for relay tests when an existing development/TV session is active.

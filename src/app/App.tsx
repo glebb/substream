@@ -30,7 +30,7 @@ import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
 import { CompanionPanel } from "./CompanionPanel.tsx";
 import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../platform/companion/search-catalog.ts";
-import { companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionServerUrl, sendCompanionPlayback, type BrowserCompanionConnection, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
+import { companionDeviceLabel, companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, type BrowserCompanionConnection, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
 import { LiveTv } from "./LiveTv.tsx";
 
 type ScreenState = "loading" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
@@ -198,7 +198,10 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
   const [companionServerDraft, setCompanionServerDraft] = useState(companionServerUrl);
   const [webTvConnectionStatus, setWebTvConnectionStatus] = useState("");
   const [webTvPairingCode, setWebTvPairingCode] = useState("");
-  const [browserCompanion, setBrowserCompanion] = useState<BrowserCompanionConnection | null>(null);
+  const [webTvPairingName, setWebTvPairingName] = useState("");
+  const [browserCompanions, setBrowserCompanions] = useState<BrowserCompanionConnection[]>([]);
+  const [selectedTvDeviceId, setSelectedTvDeviceId] = useState("");
+  const browserCompanion = browserCompanions.find((connection) => connection.deviceId === selectedTvDeviceId) ?? null;
   const [showVideoInfo, setShowVideoInfo] = useState(false);
   const [showPlayerTools, setShowPlayerTools] = useState(false);
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
@@ -698,11 +701,15 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
     }
     try {
       const paired = await redeemCompanionCode(server, webTvPairingCode);
-      setBrowserCompanion(paired);
+      const deviceName = webTvPairingName.trim().slice(0, 40) || companionDeviceLabel(paired.deviceId, paired.deviceName);
+      const named = { ...paired, deviceName };
+      saveCompanionDeviceLabel(named.deviceId, named.deviceName);
+      setBrowserCompanions((current) => [...current.filter((connection) => connection.deviceId !== named.deviceId), named]);
+      setSelectedTvDeviceId(named.deviceId);
       setWebTvPairingCode("");
-      setWebTvConnectionStatus("Browser paired with this TV. You can now send playback from search results.");
+      setWebTvPairingName("");
+      setWebTvConnectionStatus(`Browser paired with ${named.deviceName}. You can choose it as the playback target.`);
     } catch {
-      setBrowserCompanion(null);
       setWebTvConnectionStatus("Pairing code is invalid or expired. Read the latest code shown in TV Settings.");
     }
   };
@@ -746,7 +753,7 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
       setTvPlaybackStatus("This title cannot be sent to the connected TV.");
       return;
     }
-    if (!browserCompanion || browserCompanion.expiresAt <= Date.now()) {
+    if (!browserCompanion) {
       setTvPlaybackStatus("Pair this browser with the TV in Settings using the one-time code shown on the TV.");
       return;
     }
@@ -768,7 +775,7 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
       setTvPlaybackStatus("TV is connected, but its provider does not match this title.");
       return;
     }
-    if (browserCompanion.expiresAt !== active.expiresAt || browserCompanion.sourceFingerprint !== active.sourceFingerprint) {
+    if (browserCompanion.deviceId !== active.deviceId || browserCompanion.sourceFingerprint !== active.sourceFingerprint) {
       setTvPlaybackStatus("Pair this browser with the TV in Settings using the one-time code shown on the TV.");
       return;
     }
@@ -2451,18 +2458,26 @@ function VodApp({ onMainMenu, onPlaylistSetup }: { onMainMenu(): void; onPlaylis
           </section>
           {!isTizen && <section className="settings-section">
             <h3>TV connection</h3>
-            <p className="hint">Enter the LAN relay address shown by the relay service, for example http://192.168.1.50:8787. On Vite development, an empty address uses the local /api proxy.</p>
+            <p className="hint">Pair each TV once, then choose the named target before sending playback. On Vite development, an empty relay address uses the local /api proxy.</p>
             <label htmlFor="web-tv-relay-url">LAN relay address</label>
             <input id="web-tv-relay-url" data-settings-focus="companion-url" className={settingsFocusClass("companion-url")} type="url" value={companionServerDraft} placeholder="http://192.168.1.50:8787" autoComplete="url" onChange={(event) => setCompanionServerDraft(event.target.value)} ref={(element) => registerSettingsControl("companion-url", element)} />
             <div className="settings-actions">
               <button className={settingsFocusClass("companion-start")} data-settings-focus="companion-start" type="button" ref={(element) => registerSettingsControl("companion-start", element)} onClick={saveWebTvRelay}>Save relay address</button>
               <button type="button" onClick={() => void checkWebTvConnection()}>Check TV connection</button>
             </div>
+            <label htmlFor="web-tv-pairing-name">Name this TV in the browser</label>
+            <input id="web-tv-pairing-name" type="text" maxLength={40} value={webTvPairingName} onChange={(event) => setWebTvPairingName(event.target.value.slice(0, 40))} placeholder="Living room" autoComplete="off" />
             <label htmlFor="web-tv-pairing-code">One-time code shown on the TV</label>
             <div className="settings-actions">
               <input id="web-tv-pairing-code" inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={webTvPairingCode} onChange={(event) => setWebTvPairingCode(event.target.value.replace(/\D/g, ""))} placeholder="8-digit code" />
               <button type="button" onClick={() => void pairBrowserWithTv()} disabled={webTvPairingCode.length !== 8}>Pair browser</button>
             </div>
+            {browserCompanions.length > 0 && <>
+              <label htmlFor="web-tv-target">Playback target</label>
+              <select id="web-tv-target" value={selectedTvDeviceId} onChange={(event) => setSelectedTvDeviceId(event.target.value)}>
+                {browserCompanions.map((connection) => <option key={connection.deviceId} value={connection.deviceId}>{connection.deviceName}</option>)}
+              </select>
+            </>}
             {webTvConnectionStatus && <p className="hint" role="status" aria-live="polite">{webTvConnectionStatus}</p>}
           </section>}
           <section className="settings-section">
