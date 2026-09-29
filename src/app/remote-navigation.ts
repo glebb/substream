@@ -256,12 +256,14 @@ export interface SubtitleFocusLayoutOptions {
   apiKeyConfigured: boolean;
   apiKeyEditorOpen: boolean;
   seriesSearch: boolean;
+  controlOffset?: number;
 }
 
 /** Keeps conditionally rendered player subtitle controls and result indexes aligned. */
 export function subtitleFocusLayout(options: SubtitleFocusLayoutOptions) {
-  const subtitleToggle = 5;
-  const timingStart = 11;
+  const offset = options.controlOffset ?? 0;
+  const subtitleToggle = 5 + offset;
+  const timingStart = 11 + offset;
   const keyActionStart = timingStart + (options.timingAvailable ? 4 : 0);
   const keyInput = !options.apiKeyConfigured && options.apiKeyEditorOpen ? keyActionStart : null;
   const saveKey = keyInput === null ? null : keyInput + 1;

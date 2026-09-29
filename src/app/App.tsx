@@ -171,6 +171,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const [isPlaybackBuffering, setIsPlaybackBuffering] = useState(false);
   const [isSkipFeedbackVisible, setIsSkipFeedbackVisible] = useState(false);
   const [selectedTitle, setSelectedTitle] = useState<VodCatalogItem | null>(null);
+  const [nextEpisode, setNextEpisode] = useState<VodCatalogItem | null>(null);
   const [detailsTitle, setDetailsTitle] = useState<VodCatalogItem | null>(null);
   const [detailsMetadata, setDetailsMetadata] = useState<TmdbMetadata | null>(null);
   const [detailsMetadataStatus, setDetailsMetadataStatus] = useState("");
@@ -185,7 +186,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const [episodePickerLevel, setEpisodePickerLevel] = useState<"seasons" | "episodes">("seasons");
   const [episodePickerSeason, setEpisodePickerSeason] = useState<number | undefined>(undefined);
   const [episodePickerFocusIndex, setEpisodePickerFocusIndex] = useState(0);
-  const [resumeChoice, setResumeChoice] = useState<{ title: VodCatalogItem; history: PlaybackHistoryItem } | null>(null);
+  const [resumeChoice, setResumeChoice] = useState<{ title: VodCatalogItem; history: PlaybackHistoryItem; nextEpisode: VodCatalogItem | null } | null>(null);
   const [continueHistory, setContinueHistory] = useState<PlaybackHistoryItem[]>(loadPlaybackHistory);
   const [pendingHistoryRemoval, setPendingHistoryRemoval] = useState<PlaybackHistoryItem | null>(null);
   const historyCancelRef = useRef<HTMLButtonElement | null>(null);
@@ -257,6 +258,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const playerBackButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerTogglePlaybackButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerRestartButtonRef = useRef<HTMLButtonElement | null>(null);
+  const playerNextEpisodeButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerFullscreenButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerAspectButtonRef = useRef<HTMLButtonElement | null>(null);
   const playerInfoButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -389,6 +391,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       playerStageRef.current,
       playerTogglePlaybackButtonRef.current,
       playerRestartButtonRef.current,
+      ...(nextEpisode ? [playerNextEpisodeButtonRef.current] : []),
       playerFullscreenButtonRef.current,
       subtitleToggleButtonRef.current,
       playerInfoButtonRef.current,
@@ -557,7 +560,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
   };
 
-  const startPlayback = (title: VodCatalogItem, resumeSeconds = 0) => {
+  const startPlayback = (title: VodCatalogItem, resumeSeconds = 0, followingEpisode: VodCatalogItem | null = null) => {
     browseRequestRef.current.invalidate();
     resumeStartSecondsRef.current = resumeSeconds;
     playbackProgressRef.current = null;
@@ -567,6 +570,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     setShowPlayerTools(false);
     setAudioTracks([]);
     setPlayerFocusIndex(0);
+    setNextEpisode(followingEpisode);
     setShowFullscreenControls(false);
     // Tizen uses the app's viewport presentation. On the web, ask the browser
     // for real fullscreen while this user action is still active.
@@ -868,12 +872,20 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     }).catch(() => undefined);
   }, [playlistUrl, searchProviderFingerprint, state]);
 
+  const followingEpisodeFor = (title: VodCatalogItem): VodCatalogItem | null => {
+    if (title.season === undefined) return null;
+    const episodesInSeason = detailsEpisodes.filter((episode) => episode.season === title.season);
+    const index = episodesInSeason.findIndex((episode) => episode.id === title.id);
+    return index >= 0 ? episodesInSeason[index + 1] ?? null : null;
+  };
+
   const playFromDetails = (title: VodCatalogItem) => {
     detailsRequestRef.current += 1;
     setDetailsTitle(null);
+    const followingEpisode = followingEpisodeFor(title);
     const saved = loadPlaybackHistory().find((item) => item.id === title.id);
-    if (saved) { setResumeChoice({ title, history: saved }); return; }
-    startPlayback(title);
+    if (saved) { setResumeChoice({ title, history: saved, nextEpisode: followingEpisode }); return; }
+    startPlayback(title, 0, followingEpisode);
   };
 
   const chooseSeriesEpisodes = async (title: VodCatalogItem) => {
@@ -993,11 +1005,11 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
 
   const chooseResumeAction = (resume: boolean) => {
     if (!resumeChoice) return;
-    if (resume) startPlayback(resumeChoice.title, resumeChoice.history.currentTimeSeconds);
+    if (resume) startPlayback(resumeChoice.title, resumeChoice.history.currentTimeSeconds, resumeChoice.nextEpisode);
     else {
       removePlaybackProgress(resumeChoice.history.id);
       setContinueHistory(loadPlaybackHistory());
-      startPlayback(resumeChoice.title);
+      startPlayback(resumeChoice.title, 0, resumeChoice.nextEpisode);
     }
   };
 
@@ -1653,7 +1665,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingCompanionServer, editingDetailsEpisode, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, page, pendingHistoryRemoval, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlayerTools, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
+  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingCompanionServer, editingDetailsEpisode, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, nextEpisode, page, pendingHistoryRemoval, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlayerTools, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
 
   useEffect(() => {
     const onKeyUp = (event: KeyboardEvent) => {
@@ -1794,7 +1806,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     const controls = playerControls();
     const control = controls[Math.min(playerFocusIndex, Math.max(0, controls.length - 1))];
     control?.focus();
-  }, [editingSubtitleEpisode, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, openSubtitlesApiKey, isSubtitleAttached, playerFocusIndex, playerFullscreen, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, showPlayerTools, subtitleResults.length, subtitleSearchType]);
+  }, [editingSubtitleEpisode, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, openSubtitlesApiKey, isSubtitleAttached, nextEpisode, playerFocusIndex, playerFullscreen, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, showPlayerTools, subtitleResults.length, subtitleSearchType]);
 
   useEffect(() => {
     if (selectedTitle) window.scrollTo(0, 0);
@@ -1870,6 +1882,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
         if (playbackState === "ended") {
           removePlaybackProgress(selectedTitle.id);
           setContinueHistory(loadPlaybackHistory());
+          if (nextEpisode) startPlayback(nextEpisode, 0, followingEpisodeFor(nextEpisode));
         }
       },
       onProgress: (value) => {
@@ -1899,7 +1912,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       player.setEventHandlers(null);
       player.destroy();
     };
-  }, [selectedTitle]);
+  }, [selectedTitle, nextEpisode]);
 
   const findSubtitles = async (automatic = false) => {
     const apiKey = openSubtitlesApiKeyRef.current
@@ -2323,19 +2336,22 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const videoAreaFocusIndex = 1;
   const playbackToggleFocusIndex = 2;
   const restartFocusIndex = 3;
-  const fullscreenFocusIndex = 4;
-  const subtitleToggleFocusIndex = 5;
-  const infoFocusIndex = 6;
-  const aspectFocusIndex = 7;
-  const audioTrackFocusIndex = 9;
-  const subtitleSmallerFocusIndex = 10;
-  const subtitleLargerFocusIndex = 11;
+  const playerNextEpisodeFocusIndex = 4;
+  const playerControlOffset = nextEpisode ? 1 : 0;
+  const fullscreenFocusIndex = 4 + playerControlOffset;
+  const subtitleToggleFocusIndex = 5 + playerControlOffset;
+  const infoFocusIndex = 6 + playerControlOffset;
+  const aspectFocusIndex = 7 + playerControlOffset;
+  const audioTrackFocusIndex = 9 + playerControlOffset;
+  const subtitleSmallerFocusIndex = 10 + playerControlOffset;
+  const subtitleLargerFocusIndex = 11 + playerControlOffset;
   const subtitleFocus = subtitleFocusLayout({
     subtitleAttached: isSubtitleAttached,
     timingAvailable: subtitleTimingAvailable,
     apiKeyConfigured: hasSubtitleKey,
     apiKeyEditorOpen: showPlayerApiKeyEditor,
     seriesSearch: subtitleSearchType === "series",
+    controlOffset: playerControlOffset,
   });
   const subtitleTimingStartFocusIndex = subtitleFocus.timingStart;
   const subtitleSettingsFocusIndex = subtitleFocus.setupKey ?? subtitleFocus.saveKey ?? subtitleFocus.search;
@@ -2592,12 +2608,13 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
         <div className="player-controls" aria-label="Playback controls">
           <button className={playerFocusIndex === playbackToggleFocusIndex ? "remote-focused" : ""} type="button" onClick={togglePlayback} aria-label={isPlaybackPaused ? "Play video" : "Pause video"} aria-pressed={!isPlaybackPaused} ref={playerTogglePlaybackButtonRef}>{isPlaybackPaused ? "Play" : "Pause"}</button>
           <button className={playerFocusIndex === restartFocusIndex ? "remote-focused" : ""} type="button" onClick={restartVideo} ref={playerRestartButtonRef}>Restart</button>
+          {nextEpisode && <button className={playerFocusIndex === playerNextEpisodeFocusIndex ? "remote-focused" : ""} type="button" onClick={() => startPlayback(nextEpisode, 0, followingEpisodeFor(nextEpisode))} ref={playerNextEpisodeButtonRef}>Play next episode</button>}
           <button className={playerFocusIndex === fullscreenFocusIndex ? "remote-focused" : ""} type="button" onClick={toggleFullscreen} ref={playerFullscreenButtonRef}>{playerFullscreen ? "Exit full screen" : "Full screen"}</button>
           <button className={playerFocusIndex === subtitleToggleFocusIndex ? "remote-focused" : ""} type="button" onClick={isSubtitleAttached ? toggleSubtitles : () => { setShowPlayerTools(true); setPlayerFocusIndex(infoFocusIndex); window.requestAnimationFrame(() => playerInfoButtonRef.current?.focus()); }} aria-label={isSubtitleAttached ? "Subtitles" : "Find subtitles"} aria-pressed={isSubtitleAttached ? isSubtitleEnabled : undefined} ref={subtitleToggleButtonRef}>{isSubtitleAttached ? `Subtitles: ${isSubtitleEnabled ? "On" : "Off"}` : "Find subtitles"}</button>
           <button className={playerFocusIndex === infoFocusIndex ? "remote-focused" : ""} type="button" onClick={() => setShowPlayerTools((visible) => !visible)} aria-expanded={showPlayerTools} ref={playerInfoButtonRef}>Subtitles &amp; more</button>
           {showPlayerTools && <>
             <button className={playerFocusIndex === aspectFocusIndex ? "remote-focused" : ""} type="button" onClick={cycleVideoDisplayMode} ref={playerAspectButtonRef}>Aspect: {videoDisplayMode === "auto" ? "Auto" : videoDisplayMode === "fit" ? "Fit" : "Fill"}</button>
-            <button className={playerFocusIndex === 8 ? "remote-focused" : ""} type="button" onClick={() => setShowVideoInfo((visible) => !visible)} ref={playerTechnicalInfoButtonRef}>Info</button>
+            <button className={playerFocusIndex === 8 + playerControlOffset ? "remote-focused" : ""} type="button" onClick={() => setShowVideoInfo((visible) => !visible)} ref={playerTechnicalInfoButtonRef}>Info</button>
             <button className={playerFocusIndex === audioTrackFocusIndex ? "remote-focused" : ""} type="button" onClick={selectNextAudioTrack} ref={playerAudioTrackButtonRef}>{audioTracks.length === 0 ? "Audio: unavailable" : `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}`}</button>
             <button className={playerFocusIndex === subtitleSmallerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(-.2)} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
             <button className={playerFocusIndex === subtitleLargerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(.2)} ref={subtitleLargerButtonRef}>Subtitle A+</button>

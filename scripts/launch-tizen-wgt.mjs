@@ -50,7 +50,22 @@ function run(arguments_, { allowFailure = false } = {}) {
 const packageName = packagePath.split("/").at(-1);
 const installedAppId = appId();
 
-run(["connect", serial]);
+// Reuse a connection opened by the Tizen extension instead of asking SDB to
+// connect to the same TV again. Some SDB builds report this as "already
+// connected" but then fail to open the sync channel for the package push.
+const devices = spawnSync(sdbPath, ["devices"], {
+  cwd: repositoryRoot,
+  encoding: "utf8",
+});
+if (devices.error) throw devices.error;
+const alreadyConnected = devices.status === 0 && devices.stdout
+  .split(/\r?\n/)
+  .some((line) => {
+    const [deviceSerial, state] = line.trim().split(/\s+/);
+    return deviceSerial === serial && state === "device";
+  });
+if (!alreadyConnected) run(["connect", serial]);
+else console.log(`Using existing SDB connection to ${serial}.`);
 run(["-s", serial, "push", packagePath, remoteDirectory]);
 // A first installation has nothing to remove. In all other cases, replacing
 // the app preserves the extension's normal launch behaviour.

@@ -192,11 +192,12 @@ export class XtreamClient {
   async episodes(seriesId: number, seriesName: string, signal?: AbortSignal): Promise<VodCatalogItem[]> {
     const payload = await this.get<XtreamSeriesInfoResponse>("get_series_info", { series_id: String(seriesId) }, signal);
     const episodes = Object.keys(payload.episodes ?? {}).sort((left, right) => Number(left) - Number(right))
-      .flatMap((season) => payload.episodes?.[season] ?? []);
-    return episodes.flatMap((record) => {
+      .flatMap((season) => (payload.episodes?.[season] ?? []).map((record) => ({ record, season })));
+    return episodes.flatMap(({ record, season }) => {
       const id = String(record.id ?? "");
       if (!id) return [];
       const episodeNumber = numberOrNull(record.episode_num);
+      const seasonNumber = numberOrNull(season);
       const title = record.title?.trim() || seriesName + (episodeNumber === null ? "" : " E" + episodeNumber);
       const normalized = normalizeTitle(title);
       return [{
@@ -205,7 +206,7 @@ export class XtreamClient {
         searchTitle: normalized.searchTitle,
         searchTerms: searchTerms(normalized.searchTitle),
         year: normalized.year,
-        ...(normalized.season !== undefined ? { season: normalized.season } : {}),
+        ...(seasonNumber !== null ? { season: seasonNumber } : normalized.season !== undefined ? { season: normalized.season } : {}),
         ...(normalized.episode !== undefined ? { episode: normalized.episode } : episodeNumber === null ? {} : { episode: episodeNumber }),
         group: seriesName,
         contentType: "series" as const,
