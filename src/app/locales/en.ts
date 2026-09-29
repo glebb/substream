@@ -263,6 +263,7 @@ export const en = {
   "Save relay address": "Save relay address",
   "Save settings": "Save settings",
   "Save TMDb settings": "Save TMDb settings",
+  "SUBSTREAM · VIDEO-ON-DEMAND": "SUBSTREAM · VIDEO-ON-DEMAND",
   "Saved": "Saved",
   "Saved at": "Saved at",
   "Saved categories are available, but the provider refresh failed.": "Saved categories are available, but the provider refresh failed.",

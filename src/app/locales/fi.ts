@@ -265,6 +265,7 @@ export const fi: Record<keyof typeof en, string> = {
   "Save relay address": "Tallenna välityspalvelimen osoite",
   "Save settings": "Tallenna asetukset",
   "Save TMDb settings": "Tallenna TMDb-asetukset",
+  "SUBSTREAM · VIDEO-ON-DEMAND": "SUBSTREAM - kirjasto",
   "Saved": "Tallennettu",
   "Saved at": "Tallennettu kohtaan",
   "Saved categories are available, but the provider refresh failed.": "Tallennetut kategoriat ovat käytettävissä, mutta palveluntarjoajan päivitys epäonnistui.",
