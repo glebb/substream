@@ -1,9 +1,9 @@
 import { createServer } from "node:http";
 import { randomBytes, randomInt } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFile as readMediaFile } from "node:fs/promises";
 import { randomBytes as randomToken } from "node:crypto";
 import { prepareMedia } from "./media-compat.mjs";
 import { COMPANION_PROTOCOL_VERSION, parseCompanionSelection, supportsCompanionProtocolVersion } from "../src/core/companion-protocol.mjs";
@@ -25,10 +25,60 @@ const PAIRING_TTL_MS = 5 * 60 * 1000;
 const pairingAttempts = new Map();
 const mediaJobs = new Map();
 const MAX_ACTIVE_MEDIA_JOBS = 2;
+const MAX_ACTIVE_MEDIA_JOBS_PER_CLIENT = 1;
+const MEDIA_REQUEST_WINDOW_MS = 60_000;
+const MAX_MEDIA_REQUESTS_PER_WINDOW = 120;
+const MAX_MEDIA_CONVERSIONS_PER_WINDOW = 12;
+const MAX_MEDIA_CLIENTS = 128;
+const mediaClients = new Map();
 let activeMediaJobs = 0;
 const NORDIC_EPG_URL = "https://epgshare01.online/epgshare01/epg_ripper_SE1.xml.gz";
 const NORDIC_EPG_MAX_BYTES = 8 * 1024 * 1024;
 const MAX_REQUEST_BODY_BYTES = 128 * 1024;
+const NORDIC_EPG_TTL_MS = 5 * 60 * 1000;
+let nordicEpgCache = null;
+let nordicEpgPending = null;
+const metricCounts = new Map();
+
+function metric(name) {
+  metricCounts.set(name, (metricCounts.get(name) || 0) + 1);
+}
+
+export function getRelayMetrics() {
+  return Object.fromEntries(metricCounts);
+}
+
+function clientKey(request) {
+  const address = String(request.socket?.remoteAddress || "unknown").toLowerCase();
+  const origin = allowedOrigin(request.headers?.origin) ? request.headers.origin : "same-origin";
+  return `${address}|${origin}`;
+}
+
+function clientUsage(key, now = Date.now()) {
+  let usage = mediaClients.get(key);
+  if (!usage) {
+    if (mediaClients.size >= MAX_MEDIA_CLIENTS) {
+      for (const [oldKey, oldUsage] of mediaClients) {
+        if (oldUsage.activeJobs === 0 && now - oldUsage.lastSeenAt > MEDIA_REQUEST_WINDOW_MS) mediaClients.delete(oldKey);
+      }
+      if (mediaClients.size >= MAX_MEDIA_CLIENTS) {
+        const reclaim = [...mediaClients].find(([, candidate]) => candidate.activeJobs === 0)?.[0];
+        if (reclaim) mediaClients.delete(reclaim);
+      }
+    }
+    if (mediaClients.size >= MAX_MEDIA_CLIENTS) return null;
+    usage = { startedAt: now, requests: 0, conversions: 0, activeJobs: 0, lastSeenAt: now };
+    mediaClients.set(key, usage);
+  } else if (now - usage.startedAt >= MEDIA_REQUEST_WINDOW_MS) {
+    usage.startedAt = now;
+    usage.requests = 0;
+    usage.conversions = 0;
+  }
+  if (usage) {
+    usage.lastSeenAt = now;
+  }
+  return usage;
+}
 
 function mediaDebug(event, fields = {}) {
   if (process.env.MEDIA_COMPAT_DEBUG !== "1") return;
@@ -65,7 +115,7 @@ function allowedOrigin(origin) {
 
 async function readPlaylistWithRetry(filename, attempts = 5) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try { return await readMediaFile(filename); }
+    try { return await readFile(filename); }
     catch { if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 40)); }
   }
   return null;
@@ -73,12 +123,29 @@ async function readPlaylistWithRetry(filename, attempts = 5) {
 
 async function mediaRoute(request, response, url) {
   const routeKind = url.pathname.endsWith("/prepare") ? "prepare" : url.pathname.endsWith(".m3u8") ? "playlist" : url.pathname.endsWith(".ts") ? "segment" : "cleanup";
+  if (!loopbackPeer(request)) return json(response, 403, { error: "Media compatibility request was rejected." });
+  const usage = clientUsage(clientKey(request));
+  if (!usage) return json(response, 503, { error: "Media compatibility service is busy." });
+  usage.requests += 1;
+  if (usage.requests > MAX_MEDIA_REQUESTS_PER_WINDOW) {
+    metric("media_rate_limited");
+    return json(response, 429, { error: "Media requests are temporarily limited." });
+  }
+  metric(`media_${routeKind}_request`);
   mediaDebug("request", { method: request.method, kind: routeKind });
   response.once?.("close", () => { if (!response.writableFinished) mediaDebug("client_closed_early", { method: request.method, kind: routeKind }); });
-  if (!loopbackPeer(request)) return json(response, 403, { error: "Media compatibility request was rejected." });
   if (request.method === "POST" && url.pathname === "/api/media/prepare") {
     if (!sameOriginRequest(request)) return json(response, 403, { error: "Media compatibility request was rejected." });
-    if (activeMediaJobs >= MAX_ACTIVE_MEDIA_JOBS) return json(response, 503, { error: "Media conversion is busy. Try again shortly." });
+    if (usage.conversions >= MAX_MEDIA_CONVERSIONS_PER_WINDOW) {
+      metric("media_conversion_quota_limited");
+      return json(response, 429, { error: "Media conversions are temporarily limited." });
+    }
+    if (usage.activeJobs >= MAX_ACTIVE_MEDIA_JOBS_PER_CLIENT || activeMediaJobs >= MAX_ACTIVE_MEDIA_JOBS) {
+      metric("media_conversion_busy");
+      return json(response, 503, { error: "Media conversion is busy. Try again shortly." });
+    }
+    usage.conversions += 1;
+    usage.activeJobs += 1;
     activeMediaJobs += 1;
     let slotTransferred = false;
     try {
@@ -92,6 +159,7 @@ async function mediaRoute(request, response, url) {
         if (slotReleased) return;
         slotReleased = true;
         activeMediaJobs = Math.max(0, activeMediaJobs - 1);
+        usage.activeJobs = Math.max(0, usage.activeJobs - 1);
       };
       const record = { ...job, id, createdAt: Date.now(), lastPlaylist: await readPlaylistWithRetry(job.playlist) };
       const jobCleanup = record.cleanup;
@@ -109,8 +177,14 @@ async function mediaRoute(request, response, url) {
       const durationSeconds = Number.isFinite(job.plan.duration) && job.plan.duration > 0 ? job.plan.duration : null;
       return json(response, 200, { url: `/api/media/${id}/index.m3u8`, audioConverted: job.plan.convertAudio, durationSeconds, startSeconds: job.startSeconds || 0 });
     } catch {
+      metric("media_conversion_failed");
       return json(response, 422, { error: "Media could not be prepared for browser playback." });
-    } finally { if (!slotTransferred) activeMediaJobs = Math.max(0, activeMediaJobs - 1); }
+    } finally {
+      if (!slotTransferred) {
+        activeMediaJobs = Math.max(0, activeMediaJobs - 1);
+        usage.activeJobs = Math.max(0, usage.activeJobs - 1);
+      }
+    }
   }
   const remove = url.pathname.match(/^\/api\/media\/([a-f0-9]{36})$/);
   if (request.method === "DELETE" && remove) {
@@ -131,8 +205,25 @@ async function mediaRoute(request, response, url) {
   if (!job) return json(response, 404, { error: "Media playback expired." });
   const isPlaylist = match[2] === "index.m3u8";
   const filename = isPlaylist ? job.playlist : join(job.directory, match[2]);
+  if (!isPlaylist) {
+    try {
+      const info = await stat(filename);
+      if (!info.isFile()) throw new Error("Not a media segment");
+      response.writeHead(200, { "content-type": "video/mp2t", "content-length": info.size, "cache-control": "no-store", ...(allowedOrigin(request.headers.origin) ? { "access-control-allow-origin": request.headers.origin, vary: "Origin" } : {}) });
+      metric("media_segment_served");
+      mediaDebug("served", { kind: routeKind, status: 200, bytes: info.size });
+      const stream = createReadStream(filename);
+      stream.once("error", () => { if (!response.writableEnded) response.destroy?.(); });
+      stream.pipe(response);
+    } catch {
+      metric("media_segment_unavailable");
+      response.writeHead(503, { "retry-after": "2", "cache-control": "no-store", "content-type": "text/plain" });
+      response.end("Preparing media");
+    }
+    return true;
+  }
   try {
-    const data = isPlaylist ? await readPlaylistWithRetry(filename) : await readMediaFile(filename);
+    const data = await readPlaylistWithRetry(filename);
     if (!data) throw new Error("Playlist is being updated.");
     if (isPlaylist) job.lastPlaylist = data;
     response.writeHead(200, { "content-type": isPlaylist ? "application/vnd.apple.mpegurl" : "video/mp2t", "content-length": data.byteLength, "cache-control": "no-store", ...(allowedOrigin(request.headers.origin) ? { "access-control-allow-origin": request.headers.origin, vary: "Origin" } : {}) });
@@ -164,21 +255,57 @@ function json(response, status, value) {
 /** Browser-only CORS bridge for a public guide; TV clients fetch it directly. */
 async function nordicEpg(response) {
   try {
-    const upstream = await fetch(NORDIC_EPG_URL, { signal: AbortSignal.timeout(30_000) });
-    const declaredLength = Number(upstream.headers.get("content-length"));
-    if (!upstream.ok || (Number.isFinite(declaredLength) && declaredLength > NORDIC_EPG_MAX_BYTES)) throw new Error("Nordic EPG unavailable");
-    const payload = Buffer.from(await upstream.arrayBuffer());
-    if (payload.byteLength > NORDIC_EPG_MAX_BYTES) throw new Error("Nordic EPG too large");
-    response.writeHead(200, {
-      "content-type": "application/gzip",
-      "content-length": payload.byteLength,
-      "cache-control": "public, max-age=300",
-      ...(response.corsOrigin ? { "access-control-allow-origin": response.corsOrigin, vary: "Origin" } : {}),
-    });
-    response.end(payload);
+    if (nordicEpgCache && nordicEpgCache.expiresAt > Date.now()) {
+      metric("epg_cache_hit");
+      return sendNordicEpg(response, nordicEpgCache.payload);
+    }
+    if (!nordicEpgPending) {
+      metric("epg_cache_miss");
+      nordicEpgPending = fetchNordicEpg().then((payload) => {
+        nordicEpgCache = { payload, expiresAt: Date.now() + NORDIC_EPG_TTL_MS };
+        return payload;
+      }).finally(() => { nordicEpgPending = null; });
+    } else metric("epg_singleflight_waiter");
+    const payload = await nordicEpgPending;
+    sendNordicEpg(response, payload);
   } catch {
+    metric("epg_upstream_failure");
     json(response, 502, { error: "Nordic EPG is unavailable." });
   }
+}
+
+async function fetchNordicEpg() {
+  const upstream = await fetch(NORDIC_EPG_URL, { signal: AbortSignal.timeout(30_000) });
+  const declaredLength = Number(upstream.headers.get("content-length"));
+  if (!upstream.ok || (Number.isFinite(declaredLength) && declaredLength > NORDIC_EPG_MAX_BYTES)) throw new Error("Nordic EPG unavailable");
+  if (!upstream.body) throw new Error("Nordic EPG unavailable");
+  const reader = upstream.body.getReader();
+  const chunks = [];
+  let byteLength = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > NORDIC_EPG_MAX_BYTES) throw new Error("Nordic EPG too large");
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  }
+  return Buffer.concat(chunks, byteLength);
+}
+
+function sendNordicEpg(response, payload) {
+  metric("epg_served");
+  response.writeHead(200, {
+    "content-type": "application/gzip",
+    "content-length": payload.byteLength,
+    "cache-control": "public, max-age=300",
+    ...(response.corsOrigin ? { "access-control-allow-origin": response.corsOrigin, vary: "Origin" } : {}),
+  });
+  response.end(payload);
 }
 
 async function body(request) {
@@ -464,8 +591,13 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     }
   }, 60_000);
   mediaCleanup.unref();
+  const metricsInterval = process.env.COMPANION_METRICS === "1" ? setInterval(() => {
+    console.info(`[companion:metrics] ${JSON.stringify({ activeMediaJobs, counters: getRelayMetrics() })}`);
+  }, 60_000) : null;
+  metricsInterval?.unref();
   for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {
     clearInterval(mediaCleanup);
+    if (metricsInterval) clearInterval(metricsInterval);
     void Promise.allSettled([...mediaJobs.values()].map((job) => job.cleanup())).finally(() => {
       mediaJobs.clear();
       server.close(() => process.exit(0));

@@ -24,7 +24,7 @@ The TV remains the authority for its local playlist credentials and resolves the
 
 ### P0 — unauthenticated relay control plane
 
-At the time of this audit, the relay bound to `0.0.0.0` by default, used permissive CORS, and exposed session state and catalogue reads. Since then, loopback-by-default, explicit LAN opt-in, strict configured-origin checks, separate scoped TV/browser credentials, long polling, and event acknowledgements have been implemented. The remaining control plane uses scoped credentials for active-session checks, event reads, acknowledgements, and `pair/select` / `pair/play`; catalogue/search routes have since been removed. Per-endpoint rate limits, durable device identities, and TLS remain open concerns.
+At the time of this audit, the relay bound to `0.0.0.0` by default, used permissive CORS, and exposed session state and catalogue reads. Since then, loopback-by-default, explicit LAN opt-in, strict configured-origin checks, separate scoped TV/browser credentials, long polling, and event acknowledgements have been implemented. The remaining control plane uses scoped credentials for active-session checks, event reads, acknowledgements, and `pair/select` / `pair/play`; catalogue/search routes have since been removed. Pair redemption and loopback media work have rate limits. Durable device identities and TLS remain open concerns.
 
 Impact at audit time: any party that could reach the relay could replace the TV session, obtain the active session identifier, enumerate provider metadata, or enqueue playback. The implemented controls reduce that exposure, though LAN mode still sends credentials over plain HTTP and the relay remains a development service.
 
@@ -33,7 +33,7 @@ Plan:
 1. Immediately bind to loopback by default; require an explicit `--lan`/environment opt-in and print a high-visibility warning when enabled.
 2. Remove wildcard/reflected CORS. Allow only configured browser origins, and reject unsafe Origins on every state-changing endpoint.
 3. Require a short-lived, one-time pairing code displayed on the TV, then issue separate scoped credentials for TV and browser. Do not expose the TV credential via `/api/active`.
-4. Authenticate every command, add expiry/rotation, request rate limits and audit-safe security events. Add adversarial route tests for cross-origin reads/writes, session replacement, replay, and multiple clients.
+4. Authenticate every command, add expiry/rotation and audit-safe security events. Pair redemption and media compatibility have bounded attempts; add broader route limits only if deployment beyond the current development scope is approved. Add adversarial route tests for cross-origin reads/writes, session replacement, replay, and multiple clients.
 5. For any non-development distribution, terminate TLS and bind the authorization model to a real user/device identity.
 
 ### Resolved P0 — registration no longer transmits playlist credentials
@@ -51,7 +51,7 @@ Plan:
 
 ### P1 — resource exhaustion and SSRF-adjacent media conversion surface
 
-The media endpoint is restricted to loopback peers and now uses a global FFmpeg job cap, request-size limits, a 2 GiB output cap, bounded job/probe/source-transfer durations, DNS-pinned egress, and special-use IP rejection. Per-client conversion quotas, metrics, and broader route-level observability remain open work.
+The media endpoint is restricted to loopback peers and now uses global and per-client FFmpeg job caps, a per-client request/conversion window, request-size limits, a 2 GiB output cap, bounded job/probe/source-transfer durations, DNS-pinned egress, and special-use IP rejection. Aggregate counters record fixed event names without client addresses or media URLs. Per-job byte/latency dashboards and broader route-level observability remain open work.
 
 Plan:
 
@@ -59,7 +59,7 @@ Plan:
 2. Add AbortSignal deadlines and bounded retries to provider, EPG, media-probe, and conversion work.
 3. Enforce a small global job semaphore plus per-job duration, disk, segment, and cleanup limits; expose saturation as 429/503.
 4. Resolve and connect using validated addresses (or use a vetted egress proxy) to close the DNS re-resolution gap; retain redirect revalidation.
-5. Add load/timeout/redirect/rebinding tests and metrics for job count, temp bytes, upstream failures, and request latency.
+5. Keep synthetic load/timeout/redirect/rebinding coverage; consider job-count, temp-byte, and latency reporting if this service gains a production deployment.
 
 ## Architectural findings
 
@@ -103,11 +103,13 @@ Plan: keep catalogue search in the browser, add incremental/indexed storage, can
 
 Plan: store records individually with indexes by source fingerprint and normalized tokens; debounce search input; keep a compact in-memory token index after a controlled initial load; sort once or maintain stable sort keys. Establish a performance budget (for example: 50k records, <100 ms query on target browser/TV) and add benchmark fixtures that contain no real playlist data.
 
-### P2 — media transfer and guide bridge still amplify steady-state load
+### Resolved — relay media and guide work is bounded and observable
 
-TV event delivery now uses authenticated 25-second long polling with failure backoff, so idle polling no longer generates a request every 1.5 seconds. HLS segment handling still reads complete segment files into memory before responding; concurrent clients can multiply that allocation. The EPG relay still downloads and buffers the compressed response on each cache miss.
+TV event delivery uses authenticated 25-second long polling with failure backoff. HLS `.ts` segments stream from disk with response backpressure; playlist reads remain buffered so the last complete manifest can be served during FFmpeg's atomic rewrite. The optional browser EPG bridge bounds upstream reads to 8 MiB, applies a 30-second deadline, coalesces concurrent refreshes, and caches the compressed feed for five minutes.
 
-Remaining plan: stream files with backpressure; cache EPG payloads in memory with single-flight fetches and conditional refresh; and add limits and metrics around active streams and response bytes.
+Media requests are loopback-only and have per-client request and conversion windows plus active-job caps, alongside the global conversion cap. With `COMPANION_METRICS=1`, the running relay writes active-job count and aggregate counters for fixed event names to stdout every 60 seconds; metrics contain no client addresses, media URLs, or credentials and are not exposed over HTTP. No conditional ETag refresh is implemented; the short TTL is sufficient for this public feed.
+
+Synthetic coverage exercises segment streaming, playlist replacement fallback, quota enforcement, metric sanitization, EPG single-flight/cache/size limits, and the packaged Tizen guide client using no companion configuration. The guide coverage verifies the direct feed and guide mapping; full device playback still requires target-device testing.
 
 ## TV ↔ computer dependency map
 
@@ -130,7 +132,7 @@ Implemented: the live-TV EPG relay dependency is removed; the relay is loopback-
 
 ### Phase 1 — make the service bounded (P1)
 
-Implemented: body limits, abort propagation and deadlines, browser/provider request deadlines, conversion concurrency/output/duration limits, DNS-pinned media egress, and synthetic slow/large/redirecting tests. Remaining Phase 1 work is structured metrics, per-client quotas, and guide/media streaming/cache observability.
+Implemented: body limits, abort propagation and deadlines, browser/provider request deadlines, conversion concurrency/output/duration limits, per-client request/conversion quotas, HLS segment streaming, bounded single-flight EPG caching, aggregate sanitized metrics, DNS-pinned media egress, and synthetic slow/large/redirecting tests. Larger browser catalogue indexing/storage changes remain a separate performance project.
 
 ### Phase 2 — consolidate domains and protocol (P1/P2)
 
@@ -138,4 +140,4 @@ Decision: relay catalogue/search is unsupported. The unused `/api/search` and `/
 
 ### Phase 3 — scale UX reliability (P2)
 
-Implemented: authenticated bounded long polling and acknowledgements with explicit retention-gap reporting. Remaining work is to model multiple devices or explicitly tighten the single-device contract, move catalogue indexing/search off the UI thread, and add target-device performance benchmarks. Restart/reconnect state remains intentionally in-memory.
+Implemented: authenticated bounded long polling and acknowledgements with explicit retention-gap reporting, plus synthetic packaged Tizen guide coverage with the companion omitted. Restart/reconnect state remains intentionally in-memory. Durable multi-device identity/recovery and a stronger single-device product contract require a product decision; browser catalogue indexing/search changes and real target-device performance benchmarks remain separate work.

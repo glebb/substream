@@ -1,14 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const { prepareMedia } = vi.hoisted(() => ({ prepareMedia: vi.fn() }));
 vi.mock("./media-compat.mjs", () => ({ prepareMedia }));
-const { route } = await import("./companion-server.mjs");
+const { route, getRelayMetrics } = await import("./companion-server.mjs");
 
 function responseStub() {
-  return { status: 0, headers: {}, body: "", writeHead(status, headers = {}) { this.status = status; this.headers = headers; }, end(body = "") { this.body = String(body); } };
+  const response = Object.assign(new EventEmitter(), {
+    status: 0, headers: {}, body: "", writableEnded: false,
+    writeHead(status, headers = {}) { this.status = status; this.headers = headers; },
+    write(chunk) { this.body += Buffer.from(chunk).toString(); return true; },
+    end(body = "") { if (body?.length) this.body += Buffer.from(body).toString(); this.writableEnded = true; this.emit("finish"); this.emit("close"); },
+  });
+  return response;
 }
 
 function request(method, payload, headers = {}, remoteAddress = "127.0.0.1") {
@@ -58,7 +65,7 @@ describe("companion media compatibility route", () => {
     const first = responseStub();
     const second = responseStub();
     const firstRoute = route(request("POST", { streamUrl: "https://media.example.invalid/one.mkv" }), first, new URL("http://localhost:8787/api/media/prepare"));
-    const secondRoute = route(request("POST", { streamUrl: "https://media.example.invalid/two.mkv" }), second, new URL("http://localhost:8787/api/media/prepare"));
+    const secondRoute = route(request("POST", { streamUrl: "https://media.example.invalid/two.mkv" }, {}, "::1"), second, new URL("http://localhost:8787/api/media/prepare"));
     await vi.waitFor(() => expect(prepareMedia).toHaveBeenCalledTimes(2));
 
     const saturated = responseStub();
@@ -155,5 +162,45 @@ describe("companion media compatibility route", () => {
     await route(request("DELETE", {}, { origin: "http://localhost:5173" }), removed, new URL(`http://localhost:8787/api/media/${token}`));
     expect(removed.status).toBe(204);
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("streams synthetic HLS segment bytes and records only aggregate sanitized metrics", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "substream-stream-test-"));
+    const playlist = join(directory, "index.m3u8");
+    const segment = join(directory, "segment00000.ts");
+    await writeFile(playlist, "#EXTM3U\n#EXTINF:4,\nsegment00000.ts\n");
+    await writeFile(segment, Buffer.alloc(256 * 1024, 0x5a));
+    const cleanup = vi.fn(async () => rm(directory, { recursive: true, force: true }));
+    prepareMedia.mockResolvedValue({ directory, playlist, plan: { convertAudio: true }, process: { once: vi.fn() }, cleanup });
+    const created = responseStub();
+    await route(request("POST", { streamUrl: "https://media.example.invalid/fixture.mkv" }), created, new URL("http://localhost:8787/api/media/prepare"));
+    const token = JSON.parse(created.body).url.split("/")[3];
+    const response = responseStub();
+    const streamPath = `/api/media/${token}/segment00000.ts`;
+    await route({ method: "GET", headers: { host: "localhost:8787", "sec-fetch-site": "same-origin" }, socket: { remoteAddress: "127.0.0.1" } }, response, new URL(`http://localhost:8787${streamPath}`));
+    await vi.waitFor(() => expect(response.writableEnded).toBe(true));
+    expect(response.status).toBe(200);
+    expect(response.headers["content-length"]).toBe(256 * 1024);
+    expect(response.body).toHaveLength(256 * 1024);
+    expect(response.body).not.toContain("media.example.invalid");
+    expect(getRelayMetrics().media_segment_served).toBeGreaterThan(0);
+    expect(JSON.stringify(getRelayMetrics())).not.toMatch(/127\.0\.0\.1|media\.example/);
+    const removed = responseStub();
+    await route(request("DELETE", {}), removed, new URL(`http://localhost:8787/api/media/${token}`));
+  });
+
+  it("enforces the per-client conversion quota and exposes no client identifiers in metrics", async () => {
+    prepareMedia.mockResolvedValue({ direct: true, plan: { convertAudio: false } });
+    for (let index = 0; index < 12; index += 1) {
+      const response = responseStub();
+      await route(request("POST", { streamUrl: "https://media.example.invalid/fixture.mkv" }, { origin: "http://127.0.0.1:5173" }, "::1"), response, new URL("http://localhost:8787/api/media/prepare"));
+      expect(response.status).toBe(200);
+    }
+    const limited = responseStub();
+    await route(request("POST", { streamUrl: "https://media.example.invalid/fixture.mkv" }, { origin: "http://127.0.0.1:5173" }, "::1"), limited, new URL("http://localhost:8787/api/media/prepare"));
+    expect(limited.status).toBe(429);
+    expect(limited.body).not.toMatch(/media\.example|::1/);
+    expect(getRelayMetrics().media_conversion_quota_limited).toBeGreaterThan(0);
+    expect(JSON.stringify(getRelayMetrics())).not.toMatch(/media\.example|::1/);
   });
 });

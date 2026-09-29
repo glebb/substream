@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 const SOURCE_FINGERPRINT = "vod_syn";
 
-const { route } = await import("./companion-server.mjs");
+const { route, getRelayMetrics } = await import("./companion-server.mjs");
 let previousTvCredential = "";
 
 function request(method, value) {
@@ -67,6 +67,48 @@ async function pairedBrowser() {
 }
 
 describe("LAN relay playback route", () => {
+  it("coalesces concurrent EPG fetches and serves the cached bounded payload", async () => {
+    const originalFetch = globalThis.fetch;
+    let resolveFetch;
+    const fixture = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00]);
+    const fetchMock = vi.fn(() => new Promise((resolve) => { resolveFetch = resolve; }));
+    globalThis.fetch = fetchMock;
+    try {
+      const firstPromise = callRoute("GET", "/api/nordic-epg", undefined, "http://localhost:5173");
+      const secondPromise = callRoute("GET", "/api/nordic-epg", undefined, "http://localhost:5173");
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      resolveFetch(new Response(fixture, { status: 200, headers: { "content-type": "application/gzip" } }));
+      const [first, second] = await Promise.all([firstPromise, secondPromise]);
+      expect(first.status).toBe(200);
+      expect(first.body).toBe(fixture.toString());
+      expect(second.body).toBe(first.body);
+      expect(first.headers["cache-control"]).toContain("max-age=300");
+      const cached = await callRoute("GET", "/api/nordic-epg", undefined, "http://localhost:5173");
+      expect(cached.body).toBe(first.body);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(getRelayMetrics().epg_singleflight_waiter).toBeGreaterThan(0);
+      expect(getRelayMetrics().epg_cache_hit).toBeGreaterThan(0);
+      expect(JSON.stringify(getRelayMetrics())).not.toMatch(/localhost|epgshare|https?:/i);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  it("rejects oversized EPG payloads with a credential-safe error", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalNow = Date.now;
+    Date.now = () => originalNow() + 6 * 60 * 1000;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      headers: { get: () => String(8 * 1024 * 1024 + 1) },
+      body: new Response("").body,
+    }));
+    try {
+      const response = await callRoute("GET", "/api/nordic-epg", undefined, "http://localhost:5173");
+      expect(response.status).toBe(502);
+      expect(response.json()).toEqual({ error: "Nordic EPG is unavailable." });
+      expect(response.body).not.toMatch(/epgshare|token|password/i);
+    } finally { globalThis.fetch = originalFetch; Date.now = originalNow; }
+  });
+
   it("long-polls until an authenticated browser command is queued", async () => {
     const authorization = await pairedBrowser();
     const current = await callRoute("GET", "/api/active", undefined, undefined, authorization);
@@ -282,7 +324,6 @@ describe("LAN relay playback route", () => {
       const result = await callRoute("GET", "/api/nordic-epg", undefined, "http://localhost:5173");
       expect(result.status).toBe(200);
       expect(result.headers).toMatchObject({ "content-type": "application/gzip", "access-control-allow-origin": "http://localhost:5173" });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
     }

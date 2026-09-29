@@ -15,6 +15,23 @@ describe("NordicSkyShowtimeEpgClient", () => {
     expect(nordicGuideSourceUrl({ isTizen: false, relayUrl: "http://192.0.2.44:8787", development: false })).toBe("http://192.0.2.44:8787/api/nordic-epg");
   });
 
+  it("loads the packaged Tizen guide directly with no companion configured", async () => {
+    const source = nordicGuideSourceUrl({ isTizen: true, development: false });
+    const requested: string[] = [];
+    const client = new NordicSkyShowtimeEpgClient(async (url) => {
+      requested.push(url);
+      const bytes = gzipSync(new TextEncoder().encode(fixture));
+      return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    }, source);
+
+    const schedule = await client.schedule("[SKYS1SV].SkyShowtime.1.se", "synthetic-provider-channel");
+    expect(schedule.map(({ channelId, title }) => ({ channelId, title }))).toEqual([{
+      channelId: "synthetic-provider-channel", title: "Song Sung Blue",
+    }]);
+    expect(requested).toEqual([NORDIC_SKYSHOWTIME_EPG_URL]);
+    expect(requested.join(" ")).not.toContain("/api/nordic-epg");
+  });
+
   it("maps only the Finnish provider IDs", () => {
     expect(skyShowtimeNordicXmltvId({ country: "finland", epgId: "skyshowtime1.se", name: "FI: Sky Showtime 1 FHD" })).toBe("[SKYS1SV].SkyShowtime.1.se");
     expect(skyShowtimeNordicXmltvId({ country: "finland", epgId: "SkyShowtime 2.se", name: "FI: Sky Showtime 2 FHD" })).toBe("[SKYS2SV].SkyShowtime.2.se");
