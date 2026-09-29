@@ -67,6 +67,7 @@ function localizeNode(node: ReactNode, language: UiLanguage): ReactNode {
     if (typeof child === "string") return translate(child, language);
     if (!isValidElement<Record<string, unknown>>(child)) return child;
     const props = { ...child.props };
+    if (props.translate === "no") return child;
     for (const key of ["aria-label", "aria-description", "title", "placeholder", "label"]) {
       if (typeof props[key] === "string") props[key] = translate(props[key] as string, language);
     }

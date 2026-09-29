@@ -33,7 +33,7 @@ import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type Sa
 import { companionDeviceLabel, companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, type BrowserCompanionConnection, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
 import { LiveTv } from "./LiveTv.tsx";
 import { createAbortController } from "../platform/abort-controller.ts";
-import { LanguageContext, Localized, loadUiLanguage, saveUiLanguage, type UiLanguage } from "./language.tsx";
+import { LanguageContext, Localized, loadUiLanguage, saveUiLanguage, translate, type UiLanguage } from "./language.tsx";
 
 type ScreenState = "loading" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 16;
@@ -924,7 +924,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     } else {
       window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus());
     }
-    setEpisodeStatus(episodes.length.toLocaleString() + " episodes ready. Choose an episode, then Play.");
+    setEpisodeStatus(translate("{{count}} episodes ready. Choose an episode, then Play.", language).replace("{{count}}", episodes.length.toLocaleString()));
   };
 
   const playSelectedSeriesEpisode = () => {
@@ -2530,7 +2530,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
           </div>
           <div className="details-copy">
             <p className="eyebrow">{detailsTitle.contentType === "series" ? "SERIES" : "MOVIE"}</p>
-            <h2 id="title-details-heading">{detailsTitle.title}</h2>
+            <h2 id="title-details-heading"><span translate="no">{detailsTitle.title}</span></h2>
             <p className="details-facts">{details.year ?? "Year unavailable"}{details.runtimeMinutes ? ` · ${formatRuntime(details.runtimeMinutes)}` : ""}{details.rating !== undefined ? ` · ★ ${details.rating.toFixed(1)}/10` : ""}</p>
             {details.genres.length > 0 && <p className="details-genres">{details.genres.join(" · ")}</p>}
             <p className="details-synopsis">{details.synopsis ?? (detailsMetadataStatus === "Loading title details…" ? "Loading details…" : "Synopsis unavailable for this title.")}</p>
@@ -2542,8 +2542,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
         </div>
         {episodePickerOpen && isTizen && <div className="episode-picker-backdrop" role="presentation">
           <section className="episode-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="episode-picker-heading">
-            <h3 id="episode-picker-heading">{episodePickerLevel === "seasons" ? "Choose a season" : `Choose an episode (Season ${episodePickerSeason ?? "—"})`}</h3>
-            <p className="hint">Use arrows to move, Action to select, Back to {episodePickerLevel === "seasons" ? "cancel" : pickerSeasons.length > 1 ? "return to seasons" : "close"}.</p>
+            <h3 id="episode-picker-heading">{episodePickerLevel === "seasons" ? "Choose a season" : translate("Choose an episode (Season {{season}})", language).replace("{{season}}", String(episodePickerSeason ?? "—"))}</h3>
+            <p className="hint">{episodePickerLevel === "seasons" ? translate("Use arrows to move, Action to select, Back to close.", language) : translate("Use arrows to move, Action to select, Back to", language) + ` ${pickerSeasons.length > 1 ? translate("return to seasons", language) : translate("close", language)}.`}</p>
             <div className="episode-picker-options" role="listbox" aria-label={episodePickerLevel === "seasons" ? "Seasons" : "Episodes"}>
               {pickerOptions.map((option, index) => <button
                 key={typeof option === "number" ? `season-${option}` : option.id}
