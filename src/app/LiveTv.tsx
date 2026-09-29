@@ -12,6 +12,7 @@ import { DnaGuideClient } from "../platform/dna/client.ts";
 import { NordicSkyShowtimeEpgClient, nordicGuideSourceUrl, skyShowtimeNordicXmltvId } from "../platform/nordic/skyshowtime-epg.ts";
 import { companionServerUrl } from "../platform/companion/client.ts";
 import { focusTitleListItem } from "./title-list-focus.ts";
+import { loadSubtitlePreferences } from "../platform/browser/subtitle-preferences.ts";
 
 type Props = { onMainMenu(): void };
 type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCategory: Record<string, LiveChannel[]> };
@@ -145,7 +146,7 @@ export function LiveTv({ onMainMenu }: Props) {
     }
     let remaining = [...tracks];
     while (remaining.length) {
-      const preferred = preferredEmbeddedSubtitleTrack(remaining);
+      const preferred = preferredEmbeddedSubtitleTrack(remaining, loadSubtitlePreferences().languagePreference);
       if (!preferred) break;
       if (player.selectEmbeddedSubtitleTrack?.(preferred.id)) {
         const language = (preferred.language ?? preferred.label).trim().toLocaleLowerCase();
