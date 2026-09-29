@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { XtreamClient } from "./client.ts";
 
 describe("XtreamClient", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("loads live categories and streams without exposing credentials in records", async () => {
     const urls: string[] = [];
     const client = XtreamClient.fromPlaylistUrl("https://tv.example/get.php?username=user&password=secret", async (url) => {
@@ -93,6 +95,17 @@ describe("XtreamClient", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError", message: "Provider request was cancelled" });
     expect(request.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     await expect(pending).rejects.not.toThrow("secret");
+  });
+
+  it("loads provider data on Chromium 47 when AbortController is unavailable", async () => {
+    vi.stubGlobal("AbortController", undefined);
+    const request = vi.fn(async (_url: string, init?: { signal?: AbortSignal }) => {
+      expect(init).toEqual({});
+      return { ok: true, status: 200, json: async () => [{ category_id: "7", category_name: "Legacy" }] };
+    });
+    const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=pass", request);
+
+    await expect(client?.liveCategories()).resolves.toEqual([{ id: "7", name: "Legacy" }]);
   });
 
   it("detects a get.php playlist and lazily maps a movie category", async () => {

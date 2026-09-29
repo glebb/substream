@@ -32,6 +32,7 @@ import { CompanionPanel } from "./CompanionPanel.tsx";
 import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../platform/companion/search-catalog.ts";
 import { companionDeviceLabel, companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, type BrowserCompanionConnection, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
 import { LiveTv } from "./LiveTv.tsx";
+import { createAbortController } from "../platform/abort-controller.ts";
 import { LanguageContext, Localized, loadUiLanguage, saveUiLanguage, type UiLanguage } from "./language.tsx";
 
 type ScreenState = "loading" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
@@ -837,14 +838,14 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       return;
     }
     searchRefreshControllerRef.current?.abort();
-    const controller = new AbortController();
-    searchRefreshControllerRef.current = controller;
+    const controller = createAbortController();
+    searchRefreshControllerRef.current = controller ?? null;
     const request = ++searchRefreshRequestRef.current;
     setSearchRefreshLoading(true);
     setSearchStatus("Loading the provider catalogue…");
     try {
       const result = await createBrowserSearchClient({ playlistUrl }).refresh({
-        signal: controller.signal,
+        ...(controller ? { signal: controller.signal } : {}),
         onProgress: ({ completed, total }) => {
           if (request === searchRefreshRequestRef.current && latestPlaylistUrlRef.current === playlistUrl) setSearchStatus(`Loading ${completed} of ${total} categories…`);
         },

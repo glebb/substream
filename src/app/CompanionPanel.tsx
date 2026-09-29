@@ -5,6 +5,7 @@ import type { VodCatalogItem } from "../core/catalog/index.ts";
 import type { SettingsControlKey } from "./remote-navigation.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
 import { LanguageContext, Localized } from "./language.tsx";
+import { createAbortController } from "../platform/abort-controller.ts";
 
 export function companionRetryDelay(attempt: number): number {
   return Math.min(2_000 * 2 ** Math.max(0, attempt), 30_000);
@@ -44,7 +45,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
   useEffect(() => {
     if (!connection) return;
     let cancelled = false;
-    const controller = new AbortController();
+    const controller = createAbortController();
     let retryTimer: number | undefined;
     let resolveRetry: (() => void) | undefined;
     let failures = 0;
@@ -67,7 +68,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
             if (!cancelled) await pause(2_000);
             continue;
           }
-          const response = await companionEvents(server, connection.tvCredential, sequence.current, { signal: controller.signal });
+          const response = await companionEvents(server, connection.tvCredential, sequence.current, controller ? { signal: controller.signal } : {});
           failures = 0;
           setPaired(response.paired);
           if (response.retentionGap) {
@@ -104,7 +105,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
             setStatus(`Relay queue gap: commands through sequence ${response.retentionGap.throughSequence} expired; replay resumed at ${response.retentionGap.firstAvailableSequence}.`);
           }
         } catch (cause) {
-          if (cancelled || controller.signal.aborted) break;
+          if (cancelled || controller?.signal.aborted) break;
           failures += 1;
           const message = cause instanceof Error && cause.message === "Companion connection expired."
             ? cause.message
@@ -124,7 +125,7 @@ export function CompanionPanel({ playlistUrl, onSelected, onPlay, editingServer,
     void poll();
     return () => {
       cancelled = true;
-      controller.abort();
+      controller?.abort();
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       resolveRetry?.();
     };

@@ -1,8 +1,9 @@
 import { providerRequestUrl } from "../provider-request.ts";
+import { createAbortController } from "../abort-controller.ts";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
-type Request = (url: string, init: { cache: "no-store"; signal: AbortSignal }) => Promise<Response>;
+type Request = (url: string, init: { cache: "no-store"; signal?: AbortSignal }) => Promise<Response>;
 
 export class ProviderFetchError extends Error {
   constructor(readonly status?: number) {
@@ -28,13 +29,13 @@ export async function fetchProviderPlaylist(
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("Invalid playlist request timeout");
   if (options.signal?.aborted) throw new ProviderFetchAbortedError();
 
-  const controller = new AbortController();
+  const controller = createAbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let removeAbortListener = () => {};
   const cancelled = new Promise<never>((_resolve, reject) => {
     if (!options.signal) return;
     const onAbort = () => {
-      controller.abort();
+      controller?.abort();
       reject(new ProviderFetchAbortedError());
     };
     options.signal.addEventListener("abort", onAbort, { once: true });
@@ -42,13 +43,13 @@ export async function fetchProviderPlaylist(
   });
   const deadline = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
-      controller.abort();
+      controller?.abort();
       reject(new ProviderFetchError());
     }, timeoutMs);
   });
   try {
     return await Promise.race([
-      request(providerRequestUrl(url), { cache: "no-store", signal: controller.signal }),
+      request(providerRequestUrl(url), { cache: "no-store", ...(controller ? { signal: controller.signal } : {}) }),
       cancelled,
       deadline,
     ]);

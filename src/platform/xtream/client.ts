@@ -2,6 +2,7 @@ import { normalizeTitle, searchTerms, type VodCatalogItem } from "../../core/cat
 import { xtreamConnectionMetadata } from "../../core/provider/xtream.ts";
 import { providerRequestUrl } from "../provider-request.ts";
 import type { EpgProgramme, LiveCategory, ProviderLiveStream } from "../../core/live/index.ts";
+import { createAbortController } from "../abort-controller.ts";
 
 type Request = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 export type XtreamClientOptions = { timeoutMs?: number };
@@ -244,13 +245,13 @@ export class XtreamClient {
     url.searchParams.set("password", this.connection.password);
     url.searchParams.set("action", action);
     for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
-    const controller = new AbortController();
+    const controller = createAbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let removeAbortListener = () => {};
     const cancelled = new Promise<never>((_resolve, reject) => {
       if (!signal || signal.aborted) return;
       const onAbort = () => {
-        controller.abort();
+        controller?.abort();
         reject(new XtreamRequestAbortedError());
       };
       if (signal.aborted) onAbort();
@@ -261,14 +262,14 @@ export class XtreamClient {
     });
     const timedOut = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
-        controller.abort();
+        controller?.abort();
         reject(new XtreamRequestError());
       }, this.timeoutMs);
     });
     try {
       if (signal?.aborted) throw new XtreamRequestAbortedError();
       const operation = async (): Promise<T> => {
-        const response = await this.request(url.toString(), { signal: controller.signal });
+        const response = await this.request(url.toString(), controller ? { signal: controller.signal } : {});
         if (!response.ok) throw new XtreamRequestError(response.status);
         return await response.json() as T;
       };
