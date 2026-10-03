@@ -259,13 +259,15 @@ export interface SubtitleFocusLayoutOptions {
   apiKeyEditorOpen: boolean;
   seriesSearch: boolean;
   controlOffset?: number;
+  localSubtitleAvailable?: boolean;
 }
 
 /** Keeps conditionally rendered player subtitle controls and result indexes aligned. */
 export function subtitleFocusLayout(options: SubtitleFocusLayoutOptions) {
   const offset = options.controlOffset ?? 0;
   const subtitleToggle = 5 + offset;
-  const timingStart = 11 + offset;
+  const localSubtitle = options.localSubtitleAvailable ? 12 + offset : null;
+  const timingStart = 12 + offset + (options.localSubtitleAvailable ? 1 : 0);
   const keyActionStart = timingStart + (options.timingAvailable ? 4 : 0);
   const keyInput = !options.apiKeyConfigured && options.apiKeyEditorOpen ? keyActionStart : null;
   const saveKey = keyInput === null ? null : keyInput + 1;
@@ -277,6 +279,7 @@ export function subtitleFocusLayout(options: SubtitleFocusLayoutOptions) {
   const find = searchType + 1 + (options.seriesSearch ? 2 : 0);
   return {
     subtitleToggle,
+    localSubtitle,
     timingStart,
     keyInput,
     saveKey,

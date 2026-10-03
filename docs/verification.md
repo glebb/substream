@@ -21,6 +21,12 @@ Start Docker Desktop, then use `npm run preview:chromium47` for a standard previ
 
 1. Give the noVNC canvas keyboard focus once, then use only arrows, Enter and Escape/Back for the app.
 2. Open VOD from Home. Visit Recent, Movies, Series, Search and Settings; test a populated list, page changes, details, episode selection and Back.
+   On the web app, pair a TV from Settings, return Home, open a local video,
+   and verify the in-memory TV selection survives route changes and file
+   replacement. Local details must appear before playback; test computer
+   playback, subtitle replacement/on-off/offset, TV staging/preparation progress and cancellation,
+   automatic preferred-language subtitles for a release-style episode filename,
+   seek/restart, remote stop, and ended-session restart with generated media.
 3. Check visible focus, poster/fallback alignment, loading/empty/error states, and focus restoration. The TV title list should be one bounded column with fixed surrounding controls.
 4. Check 1280×720 and 1920×1080. Chromium 47 needs static-color/flexbox fallbacks and margin/padding spacing; flex `gap` cannot be the only spacing rule.
 5. Exercise the changed behavior, then stop and remove the temporary build with `npm run preview:chromium47 -- stop`.

@@ -20,7 +20,7 @@ Channel rows show the current programme, progress, remaining minutes, and the ne
 
 Finnish SkyShowtime 1 and 2 prefer the public EPGShare Swedish (`SE1`) XMLTV feed, falling back to provider short EPG when it is unavailable. Packaged Tizen fetches that public feed directly; a browser can use the configured trusted-LAN companion service only as a CORS bridge. This browser-only bridge carries public guide data, not provider credentials. When a channel has a verified DNA mapping and guide data is incomplete, the app can also fill missing slots from the DNA guide. Guide failures never prevent browsing or tuning.
 
-The trusted-LAN companion service is not required by the TV. It is an optional VOD-control transport: a web app can send a safe provider selection to a paired TV, and the TV derives the final stream URL from its own locally stored credentials. A relay outage cannot affect TV startup, browsing, subtitles, or playback; a failed direct Nordic-guide request falls back to the provider guide.
+The trusted-LAN companion service is not required by the TV. It carries provider VOD selections and can stage a browser-selected local video for a paired TV without requiring an IPTV playlist. Provider commands remain fingerprint-checked; local media uses a separate capability, short-lived ticket, range streaming, and TV playback-state lease. Release-style episode filenames trigger preferred-language OpenSubtitles matching. External local subtitles, enabled state, and timing offset follow that session. Incompatible local files are prepared on the computer as bounded-bitrate H.264 MP4 with supported audio preserved before TV playback; this requires ffmpeg/ffprobe and can delay startup. A relay outage cannot affect TV startup or provider browsing; a failed direct Nordic-guide request falls back to the provider guide.
 
 Playback uses browser HLS/native video or Tizen AVPlay with provider TS output. It starts fullscreen. Up/Down changes channels without wrapping; Back returns to the list. Browser adapters expose Rewind 30 seconds and Go live when a usable live buffer exists. This is limited to the available buffer, not recording or provider catch-up. Live playback does not create VOD resume records.
 
@@ -42,7 +42,7 @@ Settings holds playlist and API configuration. If local storage is denied, confi
 | `src/core/live`, `src/core/subtitles` | Live selection/EPG and subtitle rules |
 | `src/platform/xtream`, `tmdb`, `opensubtitles` | External service adapters |
 | `src/platform/browser`, `web`, `tizen` | Playback, device storage, network and remote integration |
-| `src/platform/companion` | Optional web-to-TV VOD command client and browser-owned Xtream search/cache adapter |
+| `src/platform/companion` | Optional web-to-TV command client, local media staging/streaming, and browser-owned Xtream search/cache adapter |
 | `src/app/App.tsx`, `LiveTv.tsx` | VOD/application shell and live UI |
 | `src/app/remote-navigation.ts`, `remote-editable.tsx` | Focus decisions and deliberate TV text editing |
 | `scripts/`, `vite.config.ts`, `tizen/` | Development services, build targets, packaging and deployment |

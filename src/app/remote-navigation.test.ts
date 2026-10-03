@@ -175,6 +175,30 @@ describe("remote dashboard navigation", () => {
     expect(configured.firstResult).toBe(configured.search + 3);
   });
 
+  it("orders local subtitle controls before timing and keeps series search contiguous", () => {
+    for (const controlOffset of [0, 1]) {
+      for (const timingAvailable of [false, true]) {
+        for (const localSubtitleAvailable of [false, true]) {
+          for (const keyState of ["configured", "setup", "editing"]) {
+            const layout = subtitleFocusLayout({ subtitleAttached: true, timingAvailable, localSubtitleAvailable, controlOffset, apiKeyConfigured: keyState === "configured", apiKeyEditorOpen: keyState === "editing", seriesSearch: true });
+            const firstSubtitleControl = 12 + controlOffset;
+            expect(layout.localSubtitle).toBe(localSubtitleAvailable ? firstSubtitleControl : null);
+            expect(layout.timingStart).toBe(firstSubtitleControl + (localSubtitleAvailable ? 1 : 0));
+            const keyStart = layout.timingStart + (timingAvailable ? 4 : 0);
+            expect(layout.setupKey).toBe(keyState === "setup" ? keyStart : null);
+            expect(layout.keyInput).toBe(keyState === "editing" ? keyStart : null);
+            expect(layout.saveKey).toBe(keyState === "editing" ? keyStart + 1 : null);
+            expect(layout.search).toBe(keyStart + (keyState === "configured" ? 0 : keyState === "editing" ? 2 : 1));
+            expect(layout.season).toBe(layout.searchType + 1);
+            expect(layout.episode).toBe(layout.season + 1);
+            expect(layout.find).toBe(layout.episode + 1);
+            expect(layout.firstResult).toBe(layout.find + 1);
+          }
+        }
+      }
+    }
+  });
+
   it("resolves Back from the topmost open screen first", () => {
     const context = {
       settingsConfirmationOpen: true,

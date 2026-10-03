@@ -181,7 +181,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
         });
       }
       this.paused = false;
-      this.configureBuffering(player);
+      this.configureBuffering(player, /\/api\/local-media\/[a-f0-9]{32}(?:[?]|$)/.test(streamUrl));
       this.setDisplayRect(player);
       this.applyDisplayMode(player);
       player.setListener?.({
@@ -497,14 +497,16 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     player.setDisplayMethod(modeByName[this.displayMode]);
   }
 
-  private configureBuffering(player: AvPlayApi): void {
+  private configureBuffering(player: AvPlayApi, localMedia = false): void {
     if (!player.setBufferingParam) return;
     // AVPlay accepts these settings only in IDLE, after open() and before prepareAsync().
-    // Use the same small threshold for initial playback and rebuffering. A much
+    // Local progressive files get ten seconds of headroom for Wi-Fi jitter.
+    const seconds = localMedia ? 10 : 5;
+    // Use the same threshold for initial playback and rebuffering. A much
     // larger resume threshold makes AVPlay wait for a different amount of media
     // after a stall, which can amplify timestamp discontinuities on older TVs.
-    try { player.setBufferingParam("PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 5); } catch { /* Older AVPlay versions may not support this setting. */ }
-    try { player.setBufferingParam("PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 5); } catch { /* Buffer tuning must not prevent playback. */ }
+    try { player.setBufferingParam("PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", seconds); } catch { /* Older AVPlay versions may not support this setting. */ }
+    try { player.setBufferingParam("PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", seconds); } catch { /* Buffer tuning must not prevent playback. */ }
   }
 
   async setSubtitle(subtitleText: string, _label: string, _language: string): Promise<SubtitleAttachment> {

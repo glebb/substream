@@ -1,15 +1,52 @@
 import { normalizeTitle, searchTerms, type VodCatalogItem } from "../../core/catalog/index.ts";
 import { COMPANION_PROTOCOL_VERSION, parseCompanionEventsPayload, parseCompanionSelection, supportsCompanionProtocolVersion, type CompanionEventWire, type CompanionSelectionWire } from "../../core/companion-protocol.mjs";
 import { packageDefaults } from "../package-defaults.ts";
+import { createAbortController } from "../abort-controller.ts";
+
+export const COMPANION_REQUEST_TIMEOUT_MS = 10_000;
+
+async function companionJsonRequest<T>(url: string, init: RequestInit, unavailableMessage: string): Promise<{ response: Response; value: T }> {
+  const controller = createAbortController();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new Error("timeout"));
+      controller?.abort();
+    }, COMPANION_REQUEST_TIMEOUT_MS);
+  });
+  try {
+    // Race the complete response, including JSON, even on Tizen 3 where
+    // AbortController is unavailable and fetch cannot be physically cancelled.
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
+        const value = await response.json() as T;
+        return { response, value };
+      })(),
+      deadline,
+    ]);
+  } catch {
+    throw new Error(timedOut
+      ? "Companion service did not respond within 10 seconds. Check the LAN address and service, then try again."
+      : unavailableMessage);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export type CompanionSelection = CompanionSelectionWire;
 export type CompanionEvent = CompanionEventWire;
-export type CompanionEventsResult = { protocolVersion: 3; events: CompanionEvent[]; paired: boolean; retentionGap: { throughSequence: number; firstAvailableSequence: number } | null };
+export type CompanionEventsResult = { protocolVersion: 4; events: CompanionEvent[]; paired: boolean; retentionGap: { throughSequence: number; firstAvailableSequence: number } | null };
 export type CompanionDeviceIdentity = { deviceId: string; deviceName: string };
-export type CompanionConnection = CompanionDeviceIdentity & { tvCredential: string; pairingCode: string; pairingExpiresAt: number; expiresAt: number; sourceFingerprint: string; paired: boolean };
-export type ActiveCompanionConnection = CompanionDeviceIdentity & { expiresAt: number; sourceFingerprint: string };
+export type CompanionCapabilities = { localMedia: boolean };
+export type CompanionConnection = CompanionDeviceIdentity & { tvCredential: string; pairingCode: string; pairingExpiresAt: number; expiresAt: number; sourceFingerprint: string; capabilities: CompanionCapabilities; paired: boolean };
+export type ActiveCompanionConnection = CompanionDeviceIdentity & { expiresAt: number; sourceFingerprint: string; capabilities: CompanionCapabilities };
 export type BrowserCompanionConnection = ActiveCompanionConnection & { browserCredential: string };
 export type CompanionPlaybackSelection = Omit<CompanionSelection, "kind" | "seriesId"> & ({ kind: "movie" } | { kind: "episode"; seriesId: string });
+export type CompanionLocalPlayback = { sessionId: string; ticket: string; title: string; searchTitle: string; year: number | null; season: number | null; episode: number | null; contentType: "movie" | "series" | "unknown"; mediaType: string; size: number };
+export type CompanionLocalSubtitle = { version: number; text: string; label: string; language: string; enabled: boolean; offsetSeconds: number };
 
 export type CompanionConnectionErrorKind = "unreachable" | "no-tv" | "invalid";
 export class CompanionConnectionError extends Error {
@@ -29,6 +66,16 @@ export function companionServerUrl(): string {
     if (url.protocol !== "http:" && url.protocol !== "https:") return "";
     return url.origin;
   } catch { return ""; }
+}
+
+export function isLanCompanionAddress(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:")
+      && !url.username && !url.password
+      && !/^(localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)$/i.test(url.hostname)
+      && !/^169\.254\./.test(url.hostname);
+  } catch { return false; }
 }
 
 let volatileDeviceIdentity: CompanionDeviceIdentity | null = null;
@@ -105,22 +152,29 @@ export function saveCompanionServerUrl(value: string): string {
 }
 
 export async function connectCompanionService(server: string, sourceFingerprint: string, identity: CompanionDeviceIdentity, tvCredential?: string): Promise<CompanionConnection> {
-  if (!/^vod_[a-z0-9]{1,8}$/.test(sourceFingerprint)) throw new Error("A valid Xtream source is required to connect this TV.");
+  if (sourceFingerprint && !/^vod_[a-z0-9]{1,8}$/.test(sourceFingerprint)) throw new Error("Provider source identity is invalid.");
   const deviceName = identity.deviceName.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 40);
   if (!/^[a-f0-9]{32}$/.test(identity.deviceId) || !deviceName) throw new Error("A valid TV identity is required to connect this TV.");
-  let response: Response;
-  let value: Partial<CompanionConnection> & { protocolVersion?: unknown };
-  try {
-    response = await fetch(server + "/api/connect", {
+  const { response, value } = await companionJsonRequest<Partial<CompanionConnection> & { protocolVersion?: unknown; error?: unknown }>(server + "/api/connect", {
     method: "POST",
     headers: { "content-type": "application/json", ...(tvCredential ? { authorization: `Bearer ${tvCredential}` } : {}) },
-    body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, sourceFingerprint, deviceId: identity.deviceId, deviceName }),
-    });
-    value = await response.json() as typeof value;
-  } catch { throw new Error("Companion service response was unavailable or invalid."); }
-  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || value.deviceId !== identity.deviceId || value.deviceName !== deviceName || !/^[a-f0-9]{64}$/i.test(value.tvCredential || "")
+      body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, sourceFingerprint, capabilities: { localMedia: true }, deviceId: identity.deviceId, deviceName }),
+    }, "Companion service response was unavailable or invalid.");
+  // Translate only known relay errors; never expose arbitrary network response text.
+  if (!response.ok) {
+    if (value?.error === "Companion protocol version is unsupported." || value?.error === "Local media capability negotiation is required.") {
+      throw new Error("TV app and LAN service versions do not match. Restart the LAN service and install the latest TV app.");
+    }
+    if (response.status === 404 && value?.error === "Companion connection could not be established.") {
+      throw new Error("The LAN service rejected this TV's saved pairing. Restart the LAN service, then connect and pair this TV again.");
+    }
+    if (value?.error === "Request origin is not allowed.") throw new Error("The LAN service rejected this app's origin. Check the relay's allowed origins.");
+    if (value?.error === "The relay has reached its TV connection limit.") throw new Error("The LAN service has reached its TV connection limit. Disconnect unused TVs or restart the LAN service.");
+    throw new Error("TV connection could not be established.");
+  }
+  if (!value || !supportsCompanionProtocolVersion(value.protocolVersion) || value.deviceId !== identity.deviceId || value.deviceName !== deviceName || !/^[a-f0-9]{64}$/i.test(value.tvCredential || "")
     || (value.paired !== true && !/^\d{8}$/.test(value.pairingCode || "")) || typeof value.paired !== "boolean"
-    || !Number.isFinite(value.pairingExpiresAt) || !Number.isFinite(value.expiresAt) || value.sourceFingerprint !== sourceFingerprint) throw new Error("TV connection could not be established.");
+    || !Number.isFinite(value.pairingExpiresAt) || !Number.isFinite(value.expiresAt) || value.sourceFingerprint !== sourceFingerprint || value.capabilities?.localMedia !== true) throw new Error("TV connection could not be established.");
   return value as CompanionConnection;
 }
 
@@ -133,7 +187,7 @@ export async function getCompanionConnection(server: string, browserCredential: 
   try { value = await response.json() as typeof value; }
   catch { throw new CompanionConnectionError("invalid"); }
   if (response.status === 404) throw new CompanionConnectionError("no-tv");
-  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{32}$/.test(value.deviceId || "") || typeof value.deviceName !== "string" || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint || "tvCredential" in value || "browserCredential" in value) throw new CompanionConnectionError("invalid");
+  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{32}$/.test(value.deviceId || "") || typeof value.deviceName !== "string" || !Number.isFinite(value.expiresAt) || typeof value.sourceFingerprint !== "string" || value.capabilities?.localMedia !== true || "tvCredential" in value || "browserCredential" in value) throw new CompanionConnectionError("invalid");
   return value as ActiveCompanionConnection;
 }
 
@@ -144,22 +198,17 @@ export async function redeemCompanionCode(server: string, code: string): Promise
     response = await fetch(server + "/api/pair/redeem", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, code: code.trim() }) });
     value = await response.json() as typeof value;
   } catch { throw new Error("Could not redeem the TV pairing code."); }
-  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{64}$/i.test(value.browserCredential || "") || !/^[a-f0-9]{32}$/.test(value.deviceId || "") || typeof value.deviceName !== "string" || !Number.isFinite(value.expiresAt) || !value.sourceFingerprint) throw new Error("Pairing code is invalid or expired.");
+  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{64}$/i.test(value.browserCredential || "") || !/^[a-f0-9]{32}$/.test(value.deviceId || "") || typeof value.deviceName !== "string" || !Number.isFinite(value.expiresAt) || typeof value.sourceFingerprint !== "string" || value.capabilities?.localMedia !== true) throw new Error("Pairing code is invalid or expired.");
   return value as BrowserCompanionConnection;
 }
 
 export async function resetCompanionPairing(server: string, tvCredential: string): Promise<{ deviceId: string; pairingCode: string; pairingExpiresAt: number }> {
-  let response: Response;
-  let value: { deviceId?: unknown; pairingCode?: unknown; pairingExpiresAt?: unknown; protocolVersion?: unknown };
-  try {
-    response = await fetch(server + "/api/pair/reset", {
+  const { response, value } = await companionJsonRequest<{ deviceId?: unknown; pairingCode?: unknown; pairingExpiresAt?: unknown; protocolVersion?: unknown }>(server + "/api/pair/reset", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${tvCredential}` },
       body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION }),
-    });
-    value = await response.json() as typeof value;
-  } catch { throw new Error("Could not reset TV pairing."); }
-  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{32}$/.test(String(value.deviceId || ""))
+    }, "Could not reset TV pairing.");
+  if (!response.ok || !value || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{32}$/.test(String(value.deviceId || ""))
     || !/^\d{8}$/.test(String(value.pairingCode || "")) || !Number.isFinite(value.pairingExpiresAt)) throw new Error("Could not reset TV pairing.");
   return { deviceId: String(value.deviceId), pairingCode: String(value.pairingCode), pairingExpiresAt: Number(value.pairingExpiresAt) };
 }
@@ -178,6 +227,164 @@ export async function sendCompanionPlayback(server: string, browserCredential: s
     value = await response.json() as typeof value;
   } catch { throw new Error("Could not send playback to the TV."); }
   if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || value.accepted !== true) throw new Error("Could not send playback to the TV.");
+}
+
+export type LocalMediaUploadStatus = { sessionId: string; state: "uploading" | "ready"; playbackState?: string; expectedSize: number; uploadOffset: number; expiresAt: number; chunkBytes?: number };
+
+function readLocalMediaStatus(value: unknown): LocalMediaUploadStatus {
+  if (!value || typeof value !== "object") throw new Error("Companion media response was invalid.");
+  const status = value as Partial<LocalMediaUploadStatus>;
+  if (!/^[a-f0-9]{32}$/.test(status.sessionId || "") || !["uploading", "ready"].includes(status.state || "")
+    || !Number.isSafeInteger(status.expectedSize) || !Number.isSafeInteger(status.uploadOffset) || !Number.isFinite(status.expiresAt)) throw new Error("Companion media response was invalid.");
+  return status as LocalMediaUploadStatus;
+}
+
+export async function stageLocalMedia(
+  server: string,
+  browserCredential: string,
+  file: File,
+  onProgress: (sentBytes: number, totalBytes: number) => void,
+  signal?: AbortSignal,
+): Promise<LocalMediaUploadStatus> {
+  let response: Response;
+  try {
+    response = await fetch(server + "/api/local-media/sessions", {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${browserCredential}` },
+      body: JSON.stringify({ expectedSize: file.size, name: file.name }), ...(signal ? { signal } : {}),
+    });
+  } catch { throw new Error("Could not prepare the local media session."); }
+  const created = await response.json() as unknown;
+  if (!response.ok) throw new Error("The companion service could not prepare this video.");
+  const status = readLocalMediaStatus(created);
+  const chunkBytes = Number((created as { chunkBytes?: unknown }).chunkBytes);
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1 || chunkBytes > 4 * 1024 * 1024) throw new Error("Companion upload settings were invalid.");
+  let offset = status.uploadOffset;
+  onProgress(offset, file.size);
+  try {
+    while (offset < file.size) {
+      if (signal?.aborted) throw new DOMException("Upload cancelled", "AbortError");
+      let attempts = 0;
+      let uploaded = false;
+      while (!uploaded) {
+        const chunkStart = offset;
+        const chunk = file.slice(chunkStart, Math.min(file.size, chunkStart + chunkBytes));
+        let retryFromStatus = false;
+        try {
+          const chunkResponse = await fetch(server + `/api/local-media/sessions/${status.sessionId}/chunks?offset=${chunkStart}`, {
+            method: "PUT", headers: { authorization: `Bearer ${browserCredential}`, "content-type": "application/octet-stream" }, body: chunk, ...(signal ? { signal } : {}),
+          });
+          if (chunkResponse.ok) {
+            const result = await chunkResponse.json() as { uploadOffset?: unknown };
+            if (result.uploadOffset !== chunkStart + chunk.size) throw new Error("Companion upload offset changed.");
+            offset = Number(result.uploadOffset); onProgress(offset, file.size); uploaded = true; continue;
+          }
+          if (chunkResponse.status !== 409 && chunkResponse.status < 500) throw new Error("Could not upload local media.");
+          retryFromStatus = true;
+        } catch (cause) {
+          if (signal?.aborted || (cause instanceof Error && cause.message === "Could not upload local media.")) throw cause;
+          retryFromStatus = true;
+        }
+        if (!retryFromStatus) continue;
+        attempts += 1;
+        if (attempts > 3) throw new Error("Local media upload stopped. Retry from the current offset.");
+        const check = await fetch(server + `/api/local-media/sessions/${status.sessionId}/status`, { headers: { authorization: `Bearer ${browserCredential}` }, cache: "no-store", ...(signal ? { signal } : {}) });
+        if (!check.ok) throw new Error("Could not resume the local media upload.");
+        const actual = readLocalMediaStatus(await check.json());
+        if (actual.sessionId !== status.sessionId || actual.expectedSize !== file.size || actual.uploadOffset > file.size) throw new Error("Companion upload status did not match the selected file.");
+        const advancedByCurrentChunk = actual.uploadOffset === chunkStart + chunk.size;
+        offset = actual.uploadOffset; onProgress(offset, file.size);
+        if (advancedByCurrentChunk) uploaded = true;
+      }
+    }
+    const finalized = await fetch(server + `/api/local-media/sessions/${status.sessionId}/finalize`, {
+      method: "POST", headers: { authorization: `Bearer ${browserCredential}`, "content-type": "application/json" }, body: JSON.stringify({ tvCompatibility: true }), ...(signal ? { signal } : {}),
+    });
+    if (!finalized.ok) throw new Error("The companion service could not prepare TV playback. Check that ffmpeg and ffprobe are installed on the computer.");
+    return readLocalMediaStatus(await finalized.json());
+  } catch (cause) {
+    await stopLocalMedia(server, browserCredential, status.sessionId).catch(() => undefined);
+    throw cause;
+  }
+}
+
+export async function stopLocalMedia(server: string, browserCredential: string, sessionId: string): Promise<void> {
+  if (!/^[a-f0-9]{32}$/.test(sessionId)) return;
+  try {
+    const response = await fetch(server + `/api/local-media/sessions/${sessionId}/status`, { method: "DELETE", headers: { authorization: `Bearer ${browserCredential}` } });
+    if (!response.ok) throw new Error("Could not stop the hosted local media session.");
+  } catch { throw new Error("Could not stop the hosted local media session."); }
+}
+
+export async function sendLocalCompanionPlayback(server: string, browserCredential: string, sessionId: string, metadata: Omit<CompanionLocalPlayback, "sessionId" | "ticket" | "mediaType" | "size">): Promise<void> {
+  if (!/^[a-f0-9]{32}$/.test(sessionId) || !metadata.title.trim()) throw new Error("Could not send local playback to the TV.");
+  let response: Response;
+  let value: { accepted?: unknown; protocolVersion?: unknown };
+  try {
+    response = await fetch(server + "/api/pair/play-local", {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${browserCredential}` },
+      body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, sessionId, metadata }),
+    });
+    value = await response.json() as typeof value;
+  } catch { throw new Error("Could not send local playback to the TV."); }
+  if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || value.accepted !== true) throw new Error("Could not send local playback to the TV.");
+}
+
+export async function sendStopLocalCompanionPlayback(server: string, browserCredential: string, sessionId: string): Promise<void> {
+  if (!/^[a-f0-9]{32}$/.test(sessionId)) throw new Error("Could not stop local TV playback.");
+  try {
+    const response = await fetch(server + "/api/pair/stop-local", {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${browserCredential}` },
+      body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, sessionId }),
+    });
+    const value = await response.json() as { protocolVersion?: unknown; accepted?: unknown };
+    if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || value.accepted !== true) throw new Error();
+  } catch { throw new Error("Could not stop local TV playback."); }
+}
+
+export function companionLocalMediaUrl(server: string, media: Pick<CompanionLocalPlayback, "sessionId" | "ticket">): string {
+  if (!/^[a-f0-9]{32}$/.test(media.sessionId) || !/^[a-f0-9]{64}$/.test(media.ticket)) throw new Error("Local playback ticket was invalid.");
+  return `${server}/api/local-media/${media.sessionId}?ticket=${media.ticket}`;
+}
+
+export async function publishLocalMediaSubtitle(server: string, browserCredential: string, sessionId: string, subtitle: Omit<CompanionLocalSubtitle, "version">): Promise<void> {
+  if (!/^[a-f0-9]{32}$/.test(sessionId) || subtitle.text.length > 1_900_000 || !Number.isFinite(subtitle.offsetSeconds)) throw new Error("Local subtitle data is invalid.");
+  const response = await fetch(server + `/api/local-media/sessions/${sessionId}/subtitle`, {
+    method: "PUT", headers: { "content-type": "application/json", authorization: `Bearer ${browserCredential}` },
+    body: JSON.stringify(subtitle),
+  }).catch(() => null);
+  if (!response?.ok) throw new Error("Local subtitle could not be sent to the TV.");
+}
+
+export async function getLocalMediaSubtitle(server: string, media: Pick<CompanionLocalPlayback, "sessionId" | "ticket">): Promise<CompanionLocalSubtitle> {
+  let response: Response;
+  try { response = await fetch(`${server}/api/local-media/${media.sessionId}/subtitle?ticket=${media.ticket}`, { cache: "no-store" }); }
+  catch { throw new Error("Local TV subtitle status is unavailable."); }
+  if (!response.ok) throw new Error("Local TV subtitle status is unavailable.");
+  const value = await response.json() as Partial<CompanionLocalSubtitle> & { protocolVersion?: unknown };
+  if (!supportsCompanionProtocolVersion(value.protocolVersion) || !Number.isSafeInteger(value.version) || typeof value.text !== "string" || value.text.length > 1_900_000
+    || typeof value.label !== "string" || typeof value.language !== "string" || typeof value.enabled !== "boolean" || !Number.isFinite(value.offsetSeconds)) throw new Error("Local TV subtitle response was invalid.");
+  return { version: value.version!, text: value.text, label: value.label, language: value.language, enabled: value.enabled, offsetSeconds: value.offsetSeconds! };
+}
+
+export async function renewLocalMediaLease(server: string, tvCredential: string, sessionId: string): Promise<void> {
+  const response = await fetch(server + `/api/local-media/sessions/${sessionId}/lease`, {
+    method: "POST", headers: { authorization: `Bearer ${tvCredential}` },
+  }).catch(() => null);
+  if (!response?.ok) throw new Error("Local TV playback lease expired.");
+}
+
+export async function reportLocalMediaState(server: string, tvCredential: string, sessionId: string, state: "preparing" | "playing" | "paused" | "ended" | "failed" | "stopped"): Promise<void> {
+  const response = await fetch(server + `/api/local-media/sessions/${sessionId}/state`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${tvCredential}` },
+    body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, state }),
+  }).catch(() => null);
+  if (!response?.ok) throw new Error("Local TV playback state could not be reported.");
+}
+
+export async function getLocalMediaUploadStatus(server: string, browserCredential: string, sessionId: string): Promise<LocalMediaUploadStatus> {
+  const response = await fetch(server + `/api/local-media/sessions/${sessionId}/status`, { cache: "no-store", headers: { authorization: `Bearer ${browserCredential}` } }).catch(() => null);
+  if (!response?.ok) throw new Error("Local TV playback status is unavailable.");
+  return readLocalMediaStatus(await response.json());
 }
 
 export async function companionEvents(server: string, tvCredential: string, after: number, options: { waitMs?: number; signal?: AbortSignal } = {}): Promise<CompanionEventsResult> {

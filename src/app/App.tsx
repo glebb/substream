@@ -1,4 +1,4 @@
-import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type FormEvent } from "react";
+import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FocusEvent, type FormEvent, type SetStateAction } from "react";
 import { importM3uChunks, normalizeTitle, type VodCatalogItem } from "../core/catalog/index.ts";
 import { DEFAULT_MAX_WHOLE_RESPONSE_BYTES, responseTextChunks, validateWholeResponseFallback, WholeResponseFallbackError } from "../platform/browser/fetch-chunks.ts";
 import { clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl } from "../platform/browser/playlist-config.ts";
@@ -30,15 +30,19 @@ import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
 import { CompanionPanel } from "./CompanionPanel.tsx";
 import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../platform/companion/search-catalog.ts";
-import { companionDeviceLabel, companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, type BrowserCompanionConnection, type CompanionPlaybackSelection } from "../platform/companion/client.ts";
+import { companionDeviceLabel, companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, stageLocalMedia, sendLocalCompanionPlayback, sendStopLocalCompanionPlayback, stopLocalMedia, getLocalMediaUploadStatus, getLocalMediaSubtitle, publishLocalMediaSubtitle, companionLocalMediaUrl, renewLocalMediaLease, reportLocalMediaState, isLanCompanionAddress, type BrowserCompanionConnection, type CompanionPlaybackSelection, type CompanionLocalPlayback, type CompanionLocalSubtitle, type LocalMediaUploadStatus } from "../platform/companion/client.ts";
 import { LiveTv } from "./LiveTv.tsx";
 import { createAbortController } from "../platform/abort-controller.ts";
 import { LanguageContext, Localized, loadUiLanguage, saveUiLanguage, translate, type UiLanguage } from "./language.tsx";
+import { LocalMediaSource, classifyLocalFilename, localDisplayTitle, localSubtitleQuery } from "../platform/browser/local-media-source.ts";
+import { readLocalSubtitleFile } from "../platform/browser/local-subtitle-file.ts";
+import { loadPreferredLocalSubtitle, type LocalSubtitleSnapshot } from "../platform/browser/local-subtitle-match.ts";
 
 type ScreenState = "loading" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 16;
 const OPEN_SUBTITLES_BASE_URL = import.meta.env.DEV ? "/opensubtitles-api/api/v1" : undefined;
 const PLAYBACK_UNAVAILABLE_MESSAGE = "The provider or network did not return playable media for this title. Try another title or retry later.";
+const LOCAL_PLAYBACK_ERROR_MESSAGE = "This browser could not decode the local video. Try another file or Play on TV.";
 type BrowseMode = "local" | "provider" | "episodes";
 type SettingsConfirmation = "clear-catalog" | "clear-subtitles" | "reset-all";
 type SettingsFocusKey = SettingsControlKey;
@@ -84,6 +88,12 @@ function formatSubtitleTimingOffset(seconds: number): string {
   return `${seconds > 0 ? "+" : ""}${seconds.toFixed(1)} s (${seconds > 0 ? "later" : "earlier"})`;
 }
 
+function subtitleApiKeyTag(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  return value.length + ":" + (hash >>> 0).toString(36);
+}
+
 function positiveInteger(value: string): number | undefined {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
@@ -103,14 +113,14 @@ function artworkLookupKey(title: Pick<BrowseArtworkTarget, "title" | "searchTitl
   return `${title.contentType === "series" ? "tv" : "movie"}:${query.toLocaleLowerCase()}:${title.year ?? ""}`;
 }
 
-function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMainMenu(): void; onPlaylistSetup(): void; settingsOnOpen?: boolean }) {
+function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSource = null, onChooseLocalFile, browserCompanions, setBrowserCompanions, selectedTvDeviceId, setSelectedTvDeviceId }: { onMainMenu(): void; onPlaylistSetup(): void; settingsOnOpen?: boolean; localSource?: LocalMediaSource | null; onChooseLocalFile?(): void; browserCompanions: BrowserCompanionConnection[]; setBrowserCompanions: Dispatch<SetStateAction<BrowserCompanionConnection[]>>; selectedTvDeviceId: string; setSelectedTvDeviceId: Dispatch<SetStateAction<string>> }) {
   const { language, setLanguage } = useContext(LanguageContext);
   const subtitleTimingAvailable = true;
   // The Chromium 47 preview exercises the TV layout and remote flow without
   // claiming that Tizen media APIs are present in the browser container.
   const isTizen = isTizenRuntime() || __SUBSTREAM_TV_UI_PREVIEW__;
   const sectionOrder = isTizen ? APP_SECTION_ORDER.filter((section) => section !== "search") : APP_SECTION_ORDER;
-  const [state, setState] = useState<ScreenState>(settingsOnOpen ? "ready" : "loading");
+  const [state, setState] = useState<ScreenState>(settingsOnOpen || localSource ? "ready" : "loading");
   const [startupStatus, setStartupStatus] = useState("Opening catalogue…");
   const [playlistUrl, setPlaylistUrl] = useState(loadPlaylistUrl);
   const latestPlaylistUrlRef = useRef(playlistUrl);
@@ -128,9 +138,16 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const [localSearchSourceUrl, setLocalSearchSourceUrl] = useState("");
   const [searchStatus, setSearchStatus] = useState("");
   const [searchRefreshLoading, setSearchRefreshLoading] = useState(false);
-  const [detailsOrigin, setDetailsOrigin] = useState<{ kind: "browse" | "search"; focusIndex: number } | null>(null);
+  const [detailsOrigin, setDetailsOrigin] = useState<{ kind: "browse" | "search" | "local"; focusIndex: number } | null>(null);
   const [detailsSearchRecord, setDetailsSearchRecord] = useState<SafeSearchRecord | null>(null);
   const [tvPlaybackStatus, setTvPlaybackStatus] = useState("");
+  const [localUpload, setLocalUpload] = useState<{ session: LocalMediaUploadStatus | null; sentBytes: number; totalBytes: number; state: "idle" | "uploading" | "preparing" | "ready" }>({ session: null, sentBytes: 0, totalBytes: 0, state: "idle" });
+  const localUploadControllerRef = useRef<AbortController | null>(null);
+  const localComputerStartPendingRef = useRef(false);
+  type ActiveLocalTvSession = { media: CompanionLocalPlayback; server: string; tvCredential: string; playbackState: "preparing" | "playing" | "paused" | "ended" | "failed" | "stopped" };
+  const remoteLocalMediaRef = useRef<ActiveLocalTvSession | null>(null);
+  const pendingRemoteLocalStopsRef = useRef(new Map<string, ActiveLocalTvSession>());
+  const [activeRemoteLocalMedia, setActiveRemoteLocalMedia] = useState<ActiveLocalTvSession | null>(null);
   const searchRefreshRequestRef = useRef(0);
   const searchRefreshControllerRef = useRef<AbortController | null>(null);
   const [favouriteGroupIds, setFavouriteGroupIds] = useState<string[]>(loadFavouriteGroupIds);
@@ -174,8 +191,10 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const [isPlaybackBuffering, setIsPlaybackBuffering] = useState(false);
   const [isSkipFeedbackVisible, setIsSkipFeedbackVisible] = useState(false);
   const [selectedTitle, setSelectedTitle] = useState<VodCatalogItem | null>(null);
+  const [selectedTitleSource, setSelectedTitleSource] = useState<"catalogue" | "local">("catalogue");
   const [nextEpisode, setNextEpisode] = useState<VodCatalogItem | null>(null);
   const [detailsTitle, setDetailsTitle] = useState<VodCatalogItem | null>(null);
+  const [localDetailsSearchTitle, setLocalDetailsSearchTitle] = useState("");
   const [detailsMetadata, setDetailsMetadata] = useState<TmdbMetadata | null>(null);
   const [detailsMetadataStatus, setDetailsMetadataStatus] = useState("");
   const [detailsSubtitleLanguages, setDetailsSubtitleLanguages] = useState<string[]>([]);
@@ -202,8 +221,6 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const [webTvConnectionStatus, setWebTvConnectionStatus] = useState("");
   const [webTvPairingCode, setWebTvPairingCode] = useState("");
   const [webTvPairingName, setWebTvPairingName] = useState("");
-  const [browserCompanions, setBrowserCompanions] = useState<BrowserCompanionConnection[]>([]);
-  const [selectedTvDeviceId, setSelectedTvDeviceId] = useState("");
   const browserCompanion = browserCompanions.find((connection) => connection.deviceId === selectedTvDeviceId) ?? null;
   const [showVideoInfo, setShowVideoInfo] = useState(false);
   const [showPlayerTools, setShowPlayerTools] = useState(false);
@@ -278,6 +295,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const subtitleKeyControlRef = useRef<HTMLElement | null>(null);
   const subtitleSetupButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const localSubtitleInputRef = useRef<HTMLInputElement | null>(null);
   const subtitleSearchTypeRef = useRef<HTMLSelectElement | null>(null);
   const subtitleSearchSeasonRef = useRef<HTMLInputElement | null>(null);
   const subtitleSearchEpisodeRef = useRef<HTMLInputElement | null>(null);
@@ -286,6 +304,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const subtitleSearchSeasonControlRef = useRef<HTMLElement | null>(null);
   const subtitleSearchEpisodeControlRef = useRef<HTMLElement | null>(null);
   const findSubtitlesButtonRef = useRef<HTMLButtonElement | null>(null);
+  const openLocalSubtitleButtonRef = useRef<HTMLButtonElement | null>(null);
   const subtitleSaveButtonRef = useRef<HTMLButtonElement | null>(null);
   const settingsApiKeyInputRef = useRef<HTMLInputElement | null>(null);
   const subtitleLanguageControlRef = useRef<HTMLElement | null>(null);
@@ -294,6 +313,11 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   const subtitleButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const subtitleRequestRef = useRef(0);
+  const localSubtitleSnapshotRef = useRef<Omit<CompanionLocalSubtitle, "version"> | null>(null);
+  const localSubtitlePreparationRef = useRef<{ sourceUrl: string; query: string; preference: SubtitleLanguage; apiKeyTag: string; promise: Promise<LocalSubtitleSnapshot | null>; cancel: () => void } | null>(null);
+  const localAutomaticSubtitleRef = useRef<{ sourceUrl: string; query: string; preference: SubtitleLanguage; apiKeyTag: string } | null>(null);
+  const localSubtitlePublishQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const remoteSubtitleVersionRef = useRef<{ sessionId: string; version: number } | null>(null);
   const browseRequestRef = useRef(new BrowseRequestGate());
   const remoteBrowseRef = useRef<{ key: string; items: VodCatalogItem[] } | null>(null);
   const playerRef = useRef<MediaPlayer | null>(null);
@@ -407,6 +431,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       playerAudioTrackButtonRef.current,
       subtitleSmallerButtonRef.current,
       subtitleLargerButtonRef.current,
+      ...(selectedTitleSource === "local" ? [openLocalSubtitleButtonRef.current] : []),
       ...(subtitleTimingAvailable ? [
         subtitleTimingMinusTwoButtonRef.current,
         subtitleTimingMinusHalfButtonRef.current,
@@ -463,8 +488,62 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
 
   useEffect(() => {
     registerTizenPlaybackKeys();
+    if (localSource) return;
     void refreshCatalog();
   }, []);
+
+  useEffect(() => {
+    if (!localSource) return;
+    const subtitleQuery = localSubtitleQuery(localSource.name);
+    const titleText = subtitleQuery || localDisplayTitle(localSource.name);
+    const normalized = normalizeTitle(titleText);
+    const filenameClass = classifyLocalFilename(localSource.name);
+    setLocalDetailsSearchTitle(subtitleQuery || normalized.searchTitle);
+    localSubtitlePreparationRef.current?.cancel();
+    localSubtitleSnapshotRef.current = null;
+    localAutomaticSubtitleRef.current = null;
+    remoteSubtitleVersionRef.current = null;
+    const title: VodCatalogItem = {
+      id: `temporary-local-title-${Date.now().toString(36)}`,
+      title: titleText,
+      searchTitle: localSubtitleQuery(localSource.name) || normalized.searchTitle,
+      searchTerms: normalized.searchTitle ? [normalized.searchTitle] : [],
+      year: normalized.year,
+      group: "Local file",
+      contentType: filenameClass.contentType,
+      ...(filenameClass.season !== undefined ? { season: filenameClass.season } : {}),
+      ...(filenameClass.episode !== undefined ? { episode: filenameClass.episode } : {}),
+      classification: { kind: filenameClass.contentType === "series" ? "vod" : "unknown", confidence: filenameClass.contentType === "series" ? "high" : "low", evidence: filenameClass.evidence },
+      addedAt: Date.now(),
+      streamUrl: localSource.url || "",
+      sourceLine: 0,
+    };
+    setSelectedTitle(null);
+    void openTitle(title, { kind: "local", focusIndex: 0 });
+    const apiKey = openSubtitlesApiKey.trim();
+    if (apiKey && title.searchTitle) {
+      const sourceUrl = localSource.url ?? "";
+      const requestController = createAbortController();
+      const client = new OpenSubtitlesClient(apiKey, (url, init) => fetch(url, { ...init, signal: requestController?.signal ?? init.signal ?? null }), OPEN_SUBTITLES_BASE_URL);
+      const promise = loadPreferredLocalSubtitle(
+        client,
+        { title: title.searchTitle, year: title.year, contentType: filenameClass.contentType === "series" ? "series" : "movie", ...(filenameClass.season !== undefined ? { season: filenameClass.season } : {}), ...(filenameClass.episode !== undefined ? { episode: filenameClass.episode } : {}) },
+        subtitleLanguagePreference,
+        { ...(requestController?.signal ? { signal: requestController.signal } : {}), abortRequest: () => requestController?.abort(), timeoutMs: 15_000 },
+      ).catch(() => null);
+      const preparation = { sourceUrl, query: title.searchTitle, preference: subtitleLanguagePreference, apiKeyTag: subtitleApiKeyTag(apiKey), promise, cancel: () => requestController?.abort() };
+      localSubtitlePreparationRef.current = preparation;
+      void promise.then((prepared) => {
+        if (!prepared || localSubtitlePreparationRef.current !== preparation || localSubtitleSnapshotRef.current !== null) return;
+        const { text, label, language, enabled, offsetSeconds } = prepared;
+        localSubtitleSnapshotRef.current = { text, label, language, enabled, offsetSeconds };
+        localAutomaticSubtitleRef.current = { sourceUrl, query: title.searchTitle, preference: subtitleLanguagePreference, apiKeyTag: preparation.apiKeyTag };
+      });
+    } else {
+      localSubtitlePreparationRef.current = null;
+    }
+    setTvPlaybackStatus("");
+  }, [localSource]);
 
   useEffect(() => {
     if (browseCollection !== "search" || state !== "ready" || searchQuery.trim().length < 2) {
@@ -563,7 +642,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
   };
 
-  const startPlayback = (title: VodCatalogItem, resumeSeconds = 0, followingEpisode: VodCatalogItem | null = null) => {
+  const startPlayback = (title: VodCatalogItem, resumeSeconds = 0, followingEpisode: VodCatalogItem | null = null, source: "catalogue" | "local" = "catalogue") => {
     browseRequestRef.current.invalidate();
     resumeStartSecondsRef.current = resumeSeconds;
     playbackProgressRef.current = null;
@@ -588,10 +667,10 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     setVisibleSubtitle("");
     setIsSubtitleAttached(false);
     setIsSubtitleEnabled(false);
-    setSubtitleTimingOffsetSeconds(loadSubtitleTimingOffset(title.id));
+    setSubtitleTimingOffsetSeconds(source === "local" ? 0 : loadSubtitleTimingOffset(title.id));
     setSubtitleFontSize(loadSubtitlePreferences().fontSize);
     const titleForSearch = normalizeTitle(title.title);
-    setSubtitleSearchQuery(titleForSearch.searchTitle || title.searchTitle);
+    setSubtitleSearchQuery(source === "local" ? localDetailsSearchTitle || title.searchTitle : titleForSearch.searchTitle || title.searchTitle);
     setSubtitleSearchType(title.contentType === "series" ? "series" : "movie");
     setSubtitleSearchSeason(String(title.season ?? titleForSearch.season ?? ""));
     setSubtitleSearchEpisode(String(title.episode ?? titleForSearch.episode ?? ""));
@@ -600,10 +679,11 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     setEditingSubtitleSeason(false);
     setEditingSubtitleEpisode(false);
     setShowPlayerApiKeyEditor(false);
+    setSelectedTitleSource(source);
     setSelectedTitle(title);
   };
 
-  const openTitle = async (title: VodCatalogItem, origin: { kind: "browse" | "search"; focusIndex: number } | null = null, searchRecord: SafeSearchRecord | null = null) => {
+  const openTitle = async (title: VodCatalogItem, origin: { kind: "browse" | "search" | "local"; focusIndex: number } | null = null, searchRecord: SafeSearchRecord | null = null) => {
     const request = ++detailsRequestRef.current;
     setDetailsOrigin(origin);
     setDetailsSearchRecord(searchRecord);
@@ -621,7 +701,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       const mediaType = title.contentType === "series" ? "tv" : "movie";
       try {
       const normalized = normalizeTitle(title.title);
-      const resolved = await client.resolve(normalized.searchTitle || title.searchTitle || title.title, mediaType, title.year);
+      const resolved = await client.resolve(origin?.kind === "local" ? (localDetailsSearchTitle || title.searchTitle || title.title) : normalized.searchTitle || title.searchTitle || title.title, mediaType, title.year);
       if (resolved.kind !== "match") {
         if (request === detailsRequestRef.current) setDetailsMetadataStatus(resolved.kind === "ambiguous"
           ? "Multiple metadata matches found. Artwork and synopsis are unavailable."
@@ -666,9 +746,176 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     catch { return !isTizen && import.meta.env.DEV ? window.location.origin : ""; }
   };
 
+  const publishLocalSubtitleSnapshot = (snapshot: Omit<CompanionLocalSubtitle, "version">) => {
+    localSubtitleSnapshotRef.current = snapshot;
+    localAutomaticSubtitleRef.current = null;
+    const session = localUpload.session;
+    const browser = browserCompanion;
+    if (!session || session.state !== "ready" || !browser) return;
+    const origin = companionOrigin();
+    localSubtitlePublishQueueRef.current = localSubtitlePublishQueueRef.current
+      .catch(() => undefined)
+      .then(() => publishLocalMediaSubtitle(origin, browser.browserCredential, session.sessionId, snapshot))
+      .catch(() => setTvPlaybackStatus("The local subtitle is ready on this computer but could not be sent to the TV."));
+  };
+
+  const ensureLocalSubtitlePrepared = async (signal?: AbortSignal) => {
+    const sourceUrl = localSource?.url ?? "";
+    const title = detailsTitle;
+    const query = (localDetailsSearchTitle || title?.searchTitle || "").trim();
+    if (!sourceUrl || !title || !query) return;
+    const existing = localSubtitlePreparationRef.current;
+    let promise: Promise<LocalSubtitleSnapshot | null>;
+    const apiKey = openSubtitlesApiKey.trim();
+    const keyTag = subtitleApiKeyTag(apiKey);
+    const cachedAuto = localAutomaticSubtitleRef.current;
+    if (localSubtitleSnapshotRef.current && !cachedAuto) return;
+    const snapshotMatches = cachedAuto?.sourceUrl === sourceUrl && cachedAuto.query === query && cachedAuto.preference === subtitleLanguagePreference && cachedAuto.apiKeyTag === keyTag;
+    if (snapshotMatches) return;
+    if (cachedAuto && !snapshotMatches) {
+      localSubtitleSnapshotRef.current = null;
+      localAutomaticSubtitleRef.current = null;
+    }
+    let preparation = existing;
+    if (existing?.sourceUrl === sourceUrl && existing.query === query && existing.preference === subtitleLanguagePreference && existing.apiKeyTag === keyTag) {
+      promise = existing.promise;
+    } else {
+      if (!apiKey) {
+        localSubtitlePreparationRef.current = null;
+        return;
+      }
+      existing?.cancel();
+      const requestController = createAbortController();
+      const client = new OpenSubtitlesClient(apiKey, (url, init) => fetch(url, { ...init, signal: requestController?.signal ?? init.signal ?? null }), OPEN_SUBTITLES_BASE_URL);
+      promise = loadPreferredLocalSubtitle(
+        client,
+        {
+          title: query,
+          year: title.year,
+          contentType: title.contentType === "series" ? "series" : "movie",
+          ...(title.season !== undefined ? { season: title.season } : {}),
+          ...(title.episode !== undefined ? { episode: title.episode } : {}),
+        },
+        subtitleLanguagePreference,
+        { ...(requestController?.signal ? { signal: requestController.signal } : {}), abortRequest: () => requestController?.abort(), timeoutMs: 15_000 },
+      ).catch(() => null);
+      preparation = { sourceUrl, query, preference: subtitleLanguagePreference, apiKeyTag: keyTag, promise, cancel: () => requestController?.abort() };
+      localSubtitlePreparationRef.current = preparation;
+    }
+    const onAbort = () => {
+      preparation?.cancel();
+      if (localSubtitlePreparationRef.current === preparation) localSubtitlePreparationRef.current = null;
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+    const prepared = await promise;
+    signal?.removeEventListener("abort", onAbort);
+    if (!prepared) {
+      if (localSubtitlePreparationRef.current?.promise === promise) localSubtitlePreparationRef.current = null;
+      return;
+    }
+    if (localSource?.url !== sourceUrl || localSubtitlePreparationRef.current?.promise !== promise || localSubtitleSnapshotRef.current !== null) return;
+    const { text, label, language, enabled, offsetSeconds } = prepared;
+    localSubtitleSnapshotRef.current = { text, label, language, enabled, offsetSeconds };
+    localAutomaticSubtitleRef.current = { sourceUrl, query, preference: subtitleLanguagePreference, apiKeyTag: keyTag };
+  };
+
+  const playLocalOnTv = async () => {
+    if (!localSource?.file) { setTvPlaybackStatus("Choose the video file again before sending it to TV."); return; }
+    const sourceUrl = localSource.url;
+    const target = browserCompanion;
+    if (!target?.capabilities.localMedia) { setTvPlaybackStatus("Pair this browser with a TV that supports local media in Settings."); return; }
+    const server = companionOrigin();
+    if (!isLanCompanionAddress(server)) { setTvPlaybackStatus("Set the companion service to a LAN address reachable by the TV in Settings."); return; }
+    const controller = createAbortController();
+    localUploadControllerRef.current = controller ?? null;
+    setTvPlaybackStatus("Checking the paired TV…");
+    let stagedSession: LocalMediaUploadStatus | null = null;
+    try {
+      const active = await getCompanionConnection(server, target.browserCredential);
+      if (active.deviceId !== target.deviceId || !active.capabilities.localMedia) throw new Error("The paired TV is unavailable or does not support local media.");
+      let uploaded = localUpload.session;
+      if (!uploaded || uploaded.state !== "ready" || uploaded.expectedSize !== localSource.file.size) {
+        setLocalUpload({ session: null, sentBytes: 0, totalBytes: localSource.file.size, state: "uploading" });
+        setTvPlaybackStatus("Sending the video to the companion service…");
+        uploaded = await stageLocalMedia(server, target.browserCredential, localSource.file, (sentBytes, totalBytes) => {
+          const state = sentBytes >= totalBytes ? "preparing" : "uploading";
+          setLocalUpload((current) => ({ ...current, sentBytes, totalBytes, state }));
+          if (state === "preparing") setTvPlaybackStatus("Preparing a TV-compatible video…");
+        }, controller?.signal);
+        stagedSession = uploaded;
+        setLocalUpload({ session: uploaded, sentBytes: uploaded.expectedSize, totalBytes: uploaded.expectedSize, state: "preparing" });
+      }
+      stagedSession = uploaded;
+      setLocalUpload({ session: uploaded, sentBytes: uploaded.expectedSize, totalBytes: uploaded.expectedSize, state: "preparing" });
+      await ensureLocalSubtitlePrepared(controller?.signal);
+      if (localSource?.url !== sourceUrl) throw new Error("Choose the video file again before sending it to TV.");
+      if (controller?.signal.aborted) throw new DOMException("Local TV upload cancelled.", "AbortError");
+      if (localSubtitleSnapshotRef.current) {
+        await localSubtitlePublishQueueRef.current.catch(() => undefined);
+        if (controller?.signal.aborted) throw new DOMException("Local TV upload cancelled.", "AbortError");
+        await publishLocalMediaSubtitle(server, target.browserCredential, uploaded.sessionId, localSubtitleSnapshotRef.current);
+      }
+      if (controller?.signal.aborted) throw new DOMException("Local TV upload cancelled.", "AbortError");
+      if (!detailsTitle) throw new Error("Local video details are unavailable.");
+      await sendLocalCompanionPlayback(server, target.browserCredential, uploaded.sessionId, {
+        title: detailsTitle.title,
+        searchTitle: localDetailsSearchTitle || detailsTitle.searchTitle,
+        year: detailsTitle.year,
+        season: detailsTitle.season ?? null,
+        episode: detailsTitle.episode ?? null,
+        contentType: detailsTitle.contentType === "other" ? "unknown" : detailsTitle.contentType,
+      });
+      if (controller?.signal.aborted) throw new DOMException("Local TV upload cancelled.", "AbortError");
+      setLocalUpload({ session: uploaded, sentBytes: uploaded.expectedSize, totalBytes: uploaded.expectedSize, state: "ready" });
+      setTvPlaybackStatus("TV command accepted. Waiting for the TV to prepare playback…");
+    } catch (cause) {
+      // A cancellation can race the command acknowledgement; stop that session on the TV too.
+      if (stagedSession && controller?.signal.aborted) await sendStopLocalCompanionPlayback(server, target.browserCredential, stagedSession.sessionId).catch(() => undefined);
+      if (stagedSession) await stopLocalMedia(server, target.browserCredential, stagedSession.sessionId).catch(() => undefined);
+      if (controller?.signal.aborted) setTvPlaybackStatus("Local TV upload cancelled.");
+      else setTvPlaybackStatus(cause instanceof Error ? cause.message : "Local TV playback could not be started.");
+      setLocalUpload((current) => current.state === "uploading" || current.state === "preparing" ? { session: null, sentBytes: 0, totalBytes: current.totalBytes, state: "idle" } : current);
+    } finally {
+      if (localUploadControllerRef.current === controller) localUploadControllerRef.current = null;
+    }
+  };
+
+  const cancelLocalUpload = () => localUploadControllerRef.current?.abort();
+
+  const stopLocalTvPlayback = async () => {
+    const target = browserCompanion;
+    const server = companionOrigin();
+    const sessionId = localUpload.session?.sessionId;
+    if (!target || !sessionId) return;
+    setTvPlaybackStatus("Stopping local TV playback…");
+    try {
+      await sendStopLocalCompanionPlayback(server, target.browserCredential, sessionId);
+      const deadline = Date.now() + 5_000;
+      let stopped = false;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        try {
+          const status = await getLocalMediaUploadStatus(server, target.browserCredential, sessionId);
+          if (status.playbackState === "stopped") { stopped = true; break; }
+        } catch { stopped = true; break; }
+      }
+      if (!stopped) await stopLocalMedia(server, target.browserCredential, sessionId);
+      setLocalUpload({ session: null, sentBytes: 0, totalBytes: 0, state: "idle" });
+      setTvPlaybackStatus("Local TV media session stopped.");
+    } catch {
+      setTvPlaybackStatus("Could not stop the local TV media session. Check the companion connection.");
+    }
+  };
+
   const saveWebTvRelay = () => {
     try {
+      const previousOrigin = companionOrigin();
       const origin = saveCompanionServerUrl(companionServerDraft);
+      if (origin !== previousOrigin) {
+        setBrowserCompanions([]);
+        setSelectedTvDeviceId("");
+      }
       setCompanionServerDraft(origin);
       setWebTvConnectionStatus(origin ? `Relay address saved: ${origin}` : "Relay address cleared. Configure a relay to send playback to TV.");
     } catch (error) {
@@ -690,6 +937,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       const active = await getCompanionConnection(server, browserCompanion.browserCredential);
       const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
       if (active.expiresAt <= Date.now()) setWebTvConnectionStatus("TV connection has expired. Reconnect Substream on the TV.");
+      else if (!active.sourceFingerprint && active.capabilities.localMedia) setWebTvConnectionStatus("TV is connected and ready for local file playback.");
       else if (!provider || active.sourceFingerprint !== provider.pairingFingerprint()) setWebTvConnectionStatus("TV is connected, but its provider does not match this browser playlist.");
       else setWebTvConnectionStatus("TV is connected and the provider matches.");
     } catch (error) {
@@ -821,6 +1069,10 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     detailsRequestRef.current += 1;
     setDetailsTitle(null);
     setTvPlaybackStatus("");
+    if (detailsOrigin?.kind === "local") {
+      onMainMenu();
+      return;
+    }
     window.requestAnimationFrame(() => {
       if (detailsOrigin?.kind === "search") {
         const index = detailsOrigin.focusIndex;
@@ -883,9 +1135,25 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   };
 
   const playFromDetails = (title: VodCatalogItem) => {
+    if (detailsOrigin?.kind === "local" && localComputerStartPendingRef.current) return;
     detailsRequestRef.current += 1;
-    setDetailsTitle(null);
     const followingEpisode = followingEpisodeFor(title);
+    if (detailsOrigin?.kind === "local") {
+      localComputerStartPendingRef.current = true;
+      const sourceUrl = localSource?.url;
+      const request = detailsRequestRef.current;
+      setTvPlaybackStatus(openSubtitlesApiKey.trim() ? "Loading preferred subtitles…" : "");
+      void ensureLocalSubtitlePrepared().catch(() => undefined).then(() => {
+        if (localSource?.url !== sourceUrl || detailsRequestRef.current !== request) return;
+        setDetailsTitle(null);
+        setTvPlaybackStatus("");
+        startPlayback(title, 0, null, "local");
+      }).finally(() => {
+        localComputerStartPendingRef.current = false;
+      });
+      return;
+    }
+    setDetailsTitle(null);
     const saved = loadPlaybackHistory().find((item) => item.id === title.id);
     if (saved) { setResumeChoice({ title, history: saved, nextEpisode: followingEpisode }); return; }
     startPlayback(title, 0, followingEpisode);
@@ -1299,7 +1567,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
           }
           return;
         }
-        const controls = [detailsControlsRef.current[0], ...(detailsTitle.providerSeriesId && detailsEpisodes.length ? [detailsEpisodeControlRef.current] : []), detailsControlsRef.current[2] ?? detailsControlsRef.current[1], detailsControlsRef.current[3]].filter((control): control is HTMLElement => Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled));
+        const controls = [detailsControlsRef.current[0], ...(detailsTitle.providerSeriesId && detailsEpisodes.length ? [detailsEpisodeControlRef.current] : []), detailsControlsRef.current[2] ?? detailsControlsRef.current[1], detailsControlsRef.current[3], ...(detailsOrigin?.kind === "local" ? [detailsControlsRef.current[4], detailsControlsRef.current[5]] : [])].filter((control): control is HTMLElement => Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled));
         if (controls.length === 0) return;
         const activeIndex = controls.indexOf(document.activeElement as HTMLElement);
         const currentIndex = activeIndex >= 0 ? activeIndex : detailsFocusIndex;
@@ -1849,7 +2117,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       window.clearTimeout(subtitleOffsetTimerRef.current);
       subtitleOffsetTimerRef.current = null;
     }
-    const initialSubtitleOffset = loadSubtitleTimingOffset(selectedTitle.id);
+    const initialSubtitleOffset = selectedTitleSource === "local" ? 0 : loadSubtitleTimingOffset(selectedTitle.id);
     setSubtitleTimingOffsetSeconds(initialSubtitleOffset);
     const player = isTizenAvPlayAvailable() && avPlayContainerRef.current
       ? new TizenAvPlayPlayer(avPlayContainerRef.current, setVisibleSubtitle)
@@ -1858,7 +2126,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     playerRef.current = player;
     player.setSubtitleTimingOffset?.(initialSubtitleOffset);
     const persistCurrentProgress = (value: PlaybackProgress | null) => {
-      if (!value || value.currentTimeSeconds <= 0 || value.durationSeconds <= 0) return;
+      if (selectedTitleSource === "local" || !value || value.currentTimeSeconds <= 0 || value.durationSeconds <= 0) return;
       const providerSourceId = selectedTitle.id.startsWith("xtream:")
         ? XtreamClient.fromPlaylistUrl(playlistUrl)?.sourceFingerprint()
         : undefined;
@@ -1874,17 +2142,30 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
           playing: "Playing",
           paused: "Paused",
           ended: "Ended",
-          error: PLAYBACK_UNAVAILABLE_MESSAGE,
+          error: selectedTitleSource === "local" ? LOCAL_PLAYBACK_ERROR_MESSAGE : PLAYBACK_UNAVAILABLE_MESSAGE,
         };
         setPlaybackStatus(status[playbackState]);
+        const remoteMedia = remoteLocalMediaRef.current;
+        if (remoteMedia && selectedTitle.id === `companion-local-${remoteMedia.media.sessionId}`) {
+          const remoteState = playbackState === "playing" ? "playing"
+            : playbackState === "paused" ? "paused"
+              : playbackState === "ended" ? "ended"
+                : playbackState === "error" ? "failed" : "preparing";
+          const nextRemote = { ...remoteMedia, playbackState: remoteState as ActiveLocalTvSession["playbackState"] };
+          remoteLocalMediaRef.current = nextRemote;
+          setActiveRemoteLocalMedia(nextRemote);
+          void reportLocalMediaState(remoteMedia.server, remoteMedia.tvCredential, remoteMedia.media.sessionId, remoteState).catch(() => undefined);
+        }
         if (playbackState === "playing") setAudioTracks(player.getAudioTracks?.() ?? []);
         setIsPlaybackBuffering(playbackState === "buffering");
         setIsPlaybackPaused(playbackState === "paused" || playbackState === "ended" || playbackState === "error");
         if (playbackState === "error") setShowFullscreenControls(true);
         if (playbackState === "paused") persistCurrentProgress(playbackProgressRef.current);
         if (playbackState === "ended") {
-          removePlaybackProgress(selectedTitle.id);
-          setContinueHistory(loadPlaybackHistory());
+          if (selectedTitleSource !== "local") {
+            removePlaybackProgress(selectedTitle.id);
+            setContinueHistory(loadPlaybackHistory());
+          }
           if (nextEpisode) startPlayback(nextEpisode, 0, followingEpisodeFor(nextEpisode));
         }
       },
@@ -1902,9 +2183,25 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     const persistOnPageHide = () => persistCurrentProgress(playbackProgressRef.current);
     window.addEventListener("pagehide", persistOnPageHide);
     player.load(selectedTitle.streamUrl);
+    if (selectedTitleSource === "local" && localSubtitleSnapshotRef.current) {
+      const snapshot = localSubtitleSnapshotRef.current;
+      void player.setSubtitle(snapshot.text, snapshot.label, snapshot.language).then((attachment) => {
+        if (playerRef.current !== player || selectedTitleSource !== "local") return;
+        if (!attachment.enabled) {
+          setSubtitleStatus("The preferred subtitle could not be attached. " + (attachment.reason ?? "Try another subtitle file."));
+          return;
+        }
+        player.setSubtitleTimingOffset?.(snapshot.offsetSeconds);
+        player.setSubtitleEnabled(snapshot.enabled);
+        setIsSubtitleAttached(true);
+        setIsSubtitleEnabled(snapshot.enabled);
+        setSubtitleStatus("Subtitle enabled: " + snapshot.language.toUpperCase());
+      }).catch(() => setSubtitleStatus("The preferred subtitle could not be attached. Try another subtitle file."));
+    }
     if (resumeStartSecondsRef.current > 0) player.seekTo?.(resumeStartSecondsRef.current);
     resumeStartSecondsRef.current = 0;
-    if (openSubtitlesApiKey.trim()) void findSubtitles(true);
+    if (selectedTitleSource === "local") setSubtitleStatus("Search subtitles when you choose, or open an SRT/WebVTT subtitle file.");
+    else if (openSubtitlesApiKey.trim()) void findSubtitles(true);
     else setSubtitleStatus("Add an OpenSubtitles API key below to search automatically.");
     return () => {
       subtitleRequestRef.current += 1;
@@ -1921,8 +2218,99 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       playerRef.current = null;
       player.setEventHandlers(null);
       player.destroy();
+      if (selectedTitleSource === "local" && selectedTitle.id.startsWith("companion-local-")) {
+        const sessionId = selectedTitle.id.slice("companion-local-".length);
+        const previous = pendingRemoteLocalStopsRef.current.get(sessionId)
+          ?? (remoteLocalMediaRef.current?.media.sessionId === sessionId ? remoteLocalMediaRef.current : null);
+        if (previous) {
+          void reportLocalMediaState(previous.server, previous.tvCredential, sessionId, "stopped").catch(() => undefined);
+          pendingRemoteLocalStopsRef.current.delete(sessionId);
+          if (remoteLocalMediaRef.current?.media.sessionId === sessionId) {
+            remoteLocalMediaRef.current = null;
+            setActiveRemoteLocalMedia(null);
+          }
+        }
+      }
     };
-  }, [selectedTitle, nextEpisode]);
+  }, [selectedTitle, selectedTitleSource, nextEpisode]);
+
+  // Delayed release survives React StrictMode's development-only effect replay.
+  // The player lifecycle effect above detaches media before this reference is released.
+  useEffect(() => localSource?.retain(), [localSource]);
+
+  useEffect(() => {
+    if (!activeRemoteLocalMedia || selectedTitleSource !== "local" || ["ended", "failed", "stopped"].includes(activeRemoteLocalMedia.playbackState)) return;
+    let cancelled = false;
+    const renew = () => {
+      void renewLocalMediaLease(activeRemoteLocalMedia.server, activeRemoteLocalMedia.tvCredential, activeRemoteLocalMedia.media.sessionId)
+        .catch(() => { if (!cancelled) setPlaybackStatus("Local TV stream lease expired. Return to the browser preview and send it again."); });
+    };
+    renew();
+    const timer = window.setInterval(renew, 60_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [activeRemoteLocalMedia, selectedTitleSource]);
+
+  useEffect(() => {
+    if (!activeRemoteLocalMedia || selectedTitleSource !== "local") return;
+    let cancelled = false;
+    let refreshing = false;
+    const refreshSubtitle = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const subtitle = await getLocalMediaSubtitle(activeRemoteLocalMedia.server, activeRemoteLocalMedia.media);
+        const existing = remoteSubtitleVersionRef.current;
+        if (cancelled || remoteLocalMediaRef.current?.media.sessionId !== activeRemoteLocalMedia.media.sessionId
+          || (existing?.sessionId === activeRemoteLocalMedia.media.sessionId && subtitle.version <= existing.version)) return;
+        const player = playerRef.current;
+        if (!player) return;
+        if (subtitle.text) {
+          const attachment = await player.setSubtitle(subtitle.text, subtitle.label, subtitle.language);
+          if (cancelled || playerRef.current !== player || remoteLocalMediaRef.current?.media.sessionId !== activeRemoteLocalMedia.media.sessionId || !attachment.enabled) return;
+          player.setSubtitleTimingOffset?.(subtitle.offsetSeconds);
+          player.setSubtitleEnabled(subtitle.enabled);
+          setIsSubtitleAttached(true);
+          setIsSubtitleEnabled(subtitle.enabled);
+        } else {
+          player.setSubtitleEnabled(false);
+          setIsSubtitleAttached(false);
+          setIsSubtitleEnabled(false);
+        }
+        remoteSubtitleVersionRef.current = { sessionId: activeRemoteLocalMedia.media.sessionId, version: subtitle.version };
+      } catch { /* A missing subtitle snapshot should not interrupt TV playback. */ }
+      finally { refreshing = false; }
+    };
+    void refreshSubtitle();
+    const timer = window.setInterval(() => { void refreshSubtitle(); }, 2_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [activeRemoteLocalMedia, selectedTitleSource]);
+
+  useEffect(() => {
+    if (!localSource || !localUpload.session || localUpload.state !== "ready" || !browserCompanion) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const status = await getLocalMediaUploadStatus(companionOrigin(), browserCompanion.browserCredential, localUpload.session!.sessionId);
+        if (cancelled) return;
+        const messages: Record<string, string> = {
+          accepted: "TV command accepted. Waiting for the TV to prepare playback…",
+          preparing: "TV is preparing local playback…",
+          playing: "Local video is playing on TV.",
+          paused: "Local video is paused on TV.",
+          ended: "Local TV playback ended. The video remains available to restart.",
+          failed: "The TV could not play this file. Check the TV codec support and try again.",
+          stopped: "Local TV playback stopped.",
+        };
+        setLocalUpload((current) => ({ ...current, session: status }));
+        setTvPlaybackStatus(messages[status.playbackState ?? "accepted"] || "Local TV session is active.");
+      } catch {
+        if (!cancelled) setTvPlaybackStatus("TV playback status is unavailable. The companion service may have restarted.");
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 3_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [browserCompanion, localSource, localUpload.session, localUpload.state]);
 
   const findSubtitles = async (automatic = false) => {
     const apiKey = openSubtitlesApiKeyRef.current
@@ -2037,6 +2425,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
         : "Subtitle downloaded, but the TV could not attach it. " + (attachment.reason ?? "Try another subtitle."));
       setIsSubtitleAttached(attachment.enabled);
       setIsSubtitleEnabled(attachment.enabled);
+      if (attachment.enabled && selectedTitleSource === "local") publishLocalSubtitleSnapshot({ text, label: subtitle.language.toUpperCase(), language: subtitle.language, enabled: true, offsetSeconds: subtitleTimingOffsetSeconds });
       saveLastSubtitleLanguage(subtitle.language);
       if (attachment.enabled) {
         showSubtitleOffset();
@@ -2046,6 +2435,34 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     } catch {
       if (requestId !== subtitleRequestRef.current) return;
       setSubtitleStatus("Subtitle download is unavailable. Check the API key and network connection, then try again.");
+    }
+  };
+
+  const attachLocalSubtitle = async (event: FormEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || selectedTitleSource !== "local") return;
+    const player = playerRef.current;
+    if (!player) { setSubtitleStatus("Start local playback before opening a subtitle file."); return; }
+    const requestId = ++subtitleRequestRef.current;
+    setSubtitleStatus("Reading subtitle file…");
+    try {
+      const subtitle = await readLocalSubtitleFile(file);
+      if (requestId !== subtitleRequestRef.current || playerRef.current !== player) return;
+      const attachment = await player.setSubtitle(subtitle.text, subtitle.label, subtitle.language);
+      if (requestId !== subtitleRequestRef.current || playerRef.current !== player) return;
+      if (!attachment.enabled) {
+        setSubtitleStatus("The subtitle could not be attached. The current subtitle was kept. " + (attachment.reason ?? "Try another file."));
+        return;
+      }
+      setIsSubtitleAttached(true);
+      setIsSubtitleEnabled(true);
+      publishLocalSubtitleSnapshot({ text: subtitle.text, label: subtitle.label, language: subtitle.language, enabled: true, offsetSeconds: subtitleTimingOffsetSeconds });
+      setSubtitleStatus("Subtitle enabled: " + subtitle.label);
+    } catch (cause) {
+      if (requestId !== subtitleRequestRef.current || playerRef.current !== player) return;
+      setSubtitleStatus(cause instanceof Error ? cause.message : "Subtitle file could not be read.");
     }
   };
 
@@ -2067,6 +2484,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     const enabled = !isSubtitleEnabled;
     playerRef.current?.setSubtitleEnabled(enabled);
     setIsSubtitleEnabled(enabled);
+    const subtitle = localSubtitleSnapshotRef.current;
+    if (selectedTitleSource === "local" && subtitle) publishLocalSubtitleSnapshot({ ...subtitle, enabled });
     setSubtitleStatus(enabled ? "Subtitles enabled." : "Subtitles disabled.");
   };
 
@@ -2083,7 +2502,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   };
 
   const restartVideo = () => {
-    if (selectedTitle) {
+    if (selectedTitle && selectedTitleSource !== "local") {
       removePlaybackProgress(selectedTitle.id);
       setContinueHistory(loadPlaybackHistory());
       playbackProgressRef.current = null;
@@ -2105,13 +2524,13 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
 
   const adjustSubtitleTiming = (deltaSeconds: number) => {
     if (!selectedTitle) return;
-    const offset = saveSubtitleTimingOffset(
-      selectedTitle.id,
-      adjustSubtitleOffsetSeconds(subtitleTimingOffsetSeconds, deltaSeconds),
-    );
+    const nextOffset = adjustSubtitleOffsetSeconds(subtitleTimingOffsetSeconds, deltaSeconds);
+    const offset = selectedTitleSource === "local" ? nextOffset : saveSubtitleTimingOffset(selectedTitle.id, nextOffset);
     setSubtitleTimingOffsetSeconds(offset);
     showSubtitleOffset();
     playerRef.current?.setSubtitleTimingOffset?.(offset);
+    const subtitle = localSubtitleSnapshotRef.current;
+    if (selectedTitleSource === "local" && subtitle) publishLocalSubtitleSnapshot({ ...subtitle, offsetSeconds: offset });
   };
 
   const adjustSubtitleFontSize = (delta: number) => {
@@ -2363,9 +2782,10 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     apiKeyEditorOpen: showPlayerApiKeyEditor,
     seriesSearch: subtitleSearchType === "series",
     controlOffset: playerControlOffset,
+    localSubtitleAvailable: selectedTitleSource === "local",
   });
   const subtitleTimingStartFocusIndex = subtitleFocus.timingStart;
-  const subtitleSettingsFocusIndex = subtitleFocus.setupKey ?? subtitleFocus.saveKey ?? subtitleFocus.search;
+  const subtitleSettingsFocusIndex = subtitleFocus.setupKey ?? subtitleFocus.keyInput ?? subtitleFocus.search;
   const subtitleSearchFocusIndex = subtitleFocus.search;
   const subtitleSearchTypeFocusIndex = subtitleFocus.searchType;
   const subtitleSeasonFocusIndex = subtitleFocus.season;
@@ -2399,7 +2819,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   if (state === "importing" || state === "auto-import") return <Localized language={language}><main className="screen"><h1>Importing library</h1><p role="status" aria-live="polite">{progress}</p></main></Localized>;
 
   const isTvTitleBrowse = state === "ready" && isTizen && Boolean(activeGroup) && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice;
-  const openCompanionTitle = (title: VodCatalogItem) => {
+  const openCompanionTitle = (title: VodCatalogItem, source: "catalogue" | "local" = "catalogue") => {
     // A paired companion is a global input source. Its selection must win over
     // whatever transient TV screen is open, including the player.
     setSettingsConfirmation(null);
@@ -2411,7 +2831,41 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
     setDetailsTitle(null);
     setDetailsSearchRecord(null);
     setDetailsOrigin(null);
-    startPlayback(title);
+    startPlayback(title, 0, null, source);
+  };
+  const openCompanionLocalMedia = (media: CompanionLocalPlayback, server: string, tvCredential: string) => {
+    let streamUrl = "";
+    try { streamUrl = companionLocalMediaUrl(server, media); }
+    catch { setTvPlaybackStatus("The TV received an invalid local media session. Update the app and try again."); return; }
+    const normalized = normalizeTitle(media.title);
+    const title: VodCatalogItem = {
+      id: `companion-local-${media.sessionId}`,
+      title: media.title,
+      searchTitle: media.searchTitle || normalized.searchTitle,
+      searchTerms: [],
+      year: media.year,
+      ...(media.season ? { season: media.season } : {}),
+      ...(media.episode ? { episode: media.episode } : {}),
+      group: "Local companion media",
+      contentType: media.contentType === "series" ? "series" : media.contentType === "movie" ? "movie" : "other",
+      addedAt: Date.now(),
+      streamUrl,
+      sourceLine: 0,
+    };
+    const previous = remoteLocalMediaRef.current;
+    if (previous && previous.media.sessionId !== media.sessionId) pendingRemoteLocalStopsRef.current.set(previous.media.sessionId, previous);
+    const active: ActiveLocalTvSession = { media, server, tvCredential, playbackState: "preparing" };
+    remoteLocalMediaRef.current = active;
+    setActiveRemoteLocalMedia(active);
+    void reportLocalMediaState(server, tvCredential, media.sessionId, "preparing").catch(() => undefined);
+    openCompanionTitle(title, "local");
+  };
+  const stopCompanionLocalMedia = (sessionId: string) => {
+    if (remoteLocalMediaRef.current?.media.sessionId !== sessionId) return;
+    setSelectedTitle(null);
+    setPlayerFullscreen(false);
+    setShowFullscreenControls(false);
+    setPlaybackStatus("");
   };
   return <Localized language={language}><main className={"screen" + (isTizen ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen" : "")}>
     <header className="app-header"><div><p className="eyebrow">{settingsOnOpen ? "SUBSTREAM · SETTINGS" : "SUBSTREAM · VIDEO-ON-DEMAND"}</p><h1>{settingsOnOpen ? "Settings" : state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
@@ -2443,7 +2897,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
           <div className="settings-actions settings-primary-actions">
               <button className={settingsFocusClass("back")} data-settings-focus="back" type="button" ref={(element) => registerSettingsControl("back", element)} onClick={() => { setEditingCompanionServer(false); if (settingsOnOpen) onMainMenu(); else setShowSettings(false); }}>{settingsOnOpen ? "Back to main menu" : "Back to library"}</button>
           </div>
-          {isTizen && <CompanionPanel playlistUrl={playlistUrl} onPlay={openCompanionTitle} editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTizen} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
+          {isTizen && <CompanionPanel playlistUrl={playlistUrl} onPlay={openCompanionTitle} onLocalPlay={openCompanionLocalMedia} onLocalStop={stopCompanionLocalMedia} editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTizen} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
           <section className="settings-section">
             <h3>{language === "fi" ? "Käyttöliittymän kieli" : "Interface language"}</h3>
             <label htmlFor="ui-language">{language === "fi" ? "Kieli" : "Language"}</label>
@@ -2525,9 +2979,16 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       </section>
       {!showSettings && (detailsTitle && details ? <section className="title-details" aria-labelledby="title-details-heading">
         <div className="details-actions">
-          <button className={`secondary-button ${detailsFocusIndex === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { detailsControlsRef.current[0] = element; }} onFocus={() => setDetailsFocusIndex(0)} onClick={closeDetails}>{detailsOrigin?.kind === "search" ? "Back to search" : "Back to titles"}</button>
-          <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} disabled={Boolean(detailsTitle.providerSeriesId && detailsEpisodes.length && !detailsEpisodeId)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : "Play here"}</button>
-          {!isTizen && (detailsSearchRecord || /^xtream:(movie|series):\d{1,20}$/.test(detailsTitle.id)) && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(3)} disabled={Boolean(detailsTitle.providerSeriesId && (!detailsEpisodes.length || !detailsEpisodeId))} onClick={() => void playSearchResultOnTv(detailsTitle.providerSeriesId ? (detailsEpisodes.find((episode) => episode.id === detailsEpisodeId) ?? detailsTitle) : detailsTitle)}>Play on TV</button>}
+          <button className={`secondary-button ${detailsFocusIndex === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { detailsControlsRef.current[0] = element; }} onFocus={() => setDetailsFocusIndex(0)} onClick={closeDetails}>{detailsOrigin?.kind === "search" ? "Back to search" : detailsOrigin?.kind === "local" ? "Back to home" : "Back to titles"}</button>
+          <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} disabled={Boolean(detailsTitle.providerSeriesId && detailsEpisodes.length && !detailsEpisodeId)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsOrigin?.kind === "local" ? "Play on this computer" : detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : "Play here"}</button>
+          {detailsOrigin?.kind === "local" && !isTizen && <button className={detailsFocusIndex === 2 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(2)} onClick={() => {
+            if (localUpload.state === "uploading" || localUpload.state === "preparing") cancelLocalUpload();
+            else if (localUpload.session && ["playing", "paused", "preparing", "accepted"].includes(localUpload.session.playbackState ?? "")) void stopLocalTvPlayback();
+            else void playLocalOnTv();
+          }}>{localUpload.state === "preparing" ? "Cancel TV preparation" : localUpload.state === "uploading" ? `Cancel upload (${Math.floor(localUpload.sentBytes * 100 / Math.max(1, localUpload.totalBytes))}%)` : localUpload.session && ["playing", "paused", "preparing", "accepted"].includes(localUpload.session.playbackState ?? "") ? "Stop TV playback" : "Play on TV"}</button>}
+          {detailsOrigin?.kind === "local" && !isTizen && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[4] = element; }} onFocus={() => setDetailsFocusIndex(3)} onClick={() => setShowSettings(true)}>TV settings and pairing</button>}
+          {detailsOrigin?.kind === "local" && onChooseLocalFile && <button className={detailsFocusIndex === 4 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[5] = element; }} onFocus={() => setDetailsFocusIndex(4)} onClick={onChooseLocalFile}>Choose another file</button>}
+          {!isTizen && detailsOrigin?.kind !== "local" && (detailsSearchRecord || /^xtream:(movie|series):\d{1,20}$/.test(detailsTitle.id)) && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(3)} disabled={Boolean(detailsTitle.providerSeriesId && (!detailsEpisodes.length || !detailsEpisodeId))} onClick={() => void playSearchResultOnTv(detailsTitle.providerSeriesId ? (detailsEpisodes.find((episode) => episode.id === detailsEpisodeId) ?? detailsTitle) : detailsTitle)}>Play on TV</button>}
         </div>
         {tvPlaybackStatus && <p className="hint" role="status" aria-live="polite">{tvPlaybackStatus}</p>}
         {episodeStatus && <p className="hint" role="status" aria-live="polite">{episodeStatus}</p>}
@@ -2536,12 +2997,15 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
             {detailsPosterUrl || details.posterUrl ? <img src={detailsPosterUrl || details.posterUrl} alt="" loading="lazy" /> : <span>{detailsMetadataStatus === "Loading title details…" ? "Loading artwork…" : "Artwork unavailable"}</span>}
           </div>
           <div className="details-copy">
-            <p className="eyebrow">{detailsTitle.contentType === "series" ? "SERIES" : "MOVIE"}</p>
+            <p className="eyebrow">{detailsTitle.contentType === "series" ? "SERIES" : detailsTitle.contentType === "other" ? "VIDEO · TYPE UNKNOWN" : "MOVIE"}</p>
             <h2 id="title-details-heading"><span translate="no">{detailsTitle.title}</span></h2>
             <p className="details-facts">{details.year ?? "Year unavailable"}{details.runtimeMinutes ? ` · ${formatRuntime(details.runtimeMinutes)}` : ""}{details.rating !== undefined ? ` · ★ ${details.rating.toFixed(1)}/10` : ""}</p>
             {details.genres.length > 0 && <p className="details-genres">{details.genres.join(" · ")}</p>}
             <p className="details-synopsis"><span translate="no">{details.synopsis ?? (detailsMetadataStatus === "Loading title details…" ? "Loading details…" : "Synopsis unavailable for this title.")}</span></p>
+            {detailsOrigin?.kind === "local" && <div className="details-metadata-search"><label htmlFor="local-details-search">Subtitle and artwork search title</label><input id="local-details-search" type="text" value={localDetailsSearchTitle} onChange={(event) => setLocalDetailsSearchTitle(event.target.value)} /></div>}
             {detailsMetadataStatus && detailsMetadataStatus !== "Loading title details…" && <p className="hint" role="status">{detailsMetadataStatus}</p>}
+            {detailsOrigin?.kind === "local" && detailsTitle.contentType === "other" && <p className="hint">{detailsTitle.classification?.evidence.join(" ")}</p>}
+            {detailsOrigin?.kind === "local" && (tmdbCredentials.readAccessToken || tmdbCredentials.apiKey) && <button type="button" onClick={() => void openTitle(detailsTitle, { kind: "local", focusIndex: detailsFocusIndex })}>Search details again</button>}
             {details.subtitleLanguages.length > 0 ? <p className="hint">Subtitles available: {details.subtitleLanguages.join(", ")}</p> : <p className="hint">Subtitle languages will appear after searching OpenSubtitles.</p>}
             {detailsHistory && <p className="details-resume" role="status">Resume available at {formatPlaybackTime(detailsHistory.currentTimeSeconds)} of {formatPlaybackTime(detailsHistory.durationSeconds)}</p>}
             {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `Season ${episode.season}, ` : ""}${episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}` : "Choose episode"; })()} editing={editingDetailsEpisode} remoteMode={isTizen} className={detailsFocusIndex === 1 ? "remote-focused" : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? "remote-focused" : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => setDetailsFocusIndex(1)} value={detailsEpisodeId} onChange={(event) => setDetailsEpisodeId(event.target.value)} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
@@ -2598,7 +3062,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
       }}>
         <div className="player-heading">
           <div className="player-title"><h2>{selectedTitle.title}</h2><p className="hint">{selectedTitle.year ?? selectedTitle.contentType}</p></div>
-          <button className={playerFocusIndex === 0 ? "remote-focused" : ""} type="button" onClick={() => { browseRequestRef.current.invalidate(); exitPlayerFullscreen(); setShowFullscreenControls(false); setSelectedTitle(null); }} ref={playerBackButtonRef}>Back to titles</button>
+          {selectedTitleSource === "local" && onChooseLocalFile && <button type="button" onClick={onChooseLocalFile}>Choose another file</button>}
+          <button className={playerFocusIndex === 0 ? "remote-focused" : ""} type="button" onClick={() => { browseRequestRef.current.invalidate(); exitPlayerFullscreen(); setShowFullscreenControls(false); if (selectedTitleSource === "local") setDetailsTitle(selectedTitle); setSelectedTitle(null); }} ref={playerBackButtonRef}>{selectedTitleSource === "local" ? "Back to details" : "Back to titles"}</button>
         </div>
         <div
           className={"player-stage " + (playerFocusIndex === videoAreaFocusIndex ? "video-area-focused" : "")}
@@ -2613,7 +3078,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
             : <video className="player" autoPlay ref={videoRef} />}
           {playerFullscreen && isPlaybackBuffering && <div className="buffering-overlay" role="status" aria-live="polite">Buffering…</div>}
           {playerFullscreen && playbackStatus === "Paused" && <div className="paused-title-overlay">{selectedTitle.title}</div>}
-          {playbackStatus === PLAYBACK_UNAVAILABLE_MESSAGE && <div className="playback-error-overlay" role="alert"><strong>Video unavailable</strong><span>{PLAYBACK_UNAVAILABLE_MESSAGE}</span></div>}
+          {(playbackStatus === PLAYBACK_UNAVAILABLE_MESSAGE || playbackStatus === LOCAL_PLAYBACK_ERROR_MESSAGE) && <div className="playback-error-overlay" role="alert"><strong>Video unavailable</strong><span>{playbackStatus}</span></div>}
           {showVideoInfo && <aside className="video-info-overlay" role="status" aria-live="polite"><strong>Video information</strong><span>Resolution: {videoResolution}</span></aside>}
           {visibleSubtitle && <p className="subtitle-overlay" aria-live="off" style={{ fontSize: subtitleFontSize + "rem" }}><span translate="no">{visibleSubtitle}</span></p>}
           {subtitleTimingAvailable && isSubtitleAttached && isSubtitleOffsetVisible && <div className="subtitle-offset-overlay" aria-live="polite">Subtitle offset {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</div>}
@@ -2637,13 +3102,18 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
             <button className={playerFocusIndex === subtitleSmallerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(-.2)} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
             <button className={playerFocusIndex === subtitleLargerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(.2)} ref={subtitleLargerButtonRef}>Subtitle A+</button>
           </>}
-          <span className={"playback-status " + (playbackStatus === PLAYBACK_UNAVAILABLE_MESSAGE ? "error" : "")} role="status" aria-live="polite">{playbackStatus}</span>
+          <span className={"playback-status " + ([PLAYBACK_UNAVAILABLE_MESSAGE, LOCAL_PLAYBACK_ERROR_MESSAGE].includes(playbackStatus) ? "error" : "")} role="status" aria-live="polite">{playbackStatus}</span>
         </div>
         {showPlayerTools && <section className="subtitles">
           <h3>Subtitles</h3>
+          {selectedTitleSource === "local" && <div className="subtitle-actions">
+            <input ref={localSubtitleInputRef} className="sr-only" type="file" accept=".srt,.vtt,application/x-subrip,text/vtt" onChange={attachLocalSubtitle} aria-label="Choose an SRT or WebVTT subtitle file" />
+            <button className={playerFocusIndex === subtitleFocus.localSubtitle ? "remote-focused" : ""} type="button" ref={openLocalSubtitleButtonRef} onClick={() => localSubtitleInputRef.current?.click()}>Open subtitle file (SRT/WebVTT)</button>
+            <p className="hint">Subtitle search uses the editable title only. Video bytes and file paths stay on this computer.</p>
+          </div>}
           {subtitleTimingAvailable && <div className="subtitle-timing" aria-label="Subtitle timing controls">
             <p><strong>Current offset: {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</strong></p>
-            <p className="hint">Positive values show subtitles later; negative values show them earlier. Saved for this title on this device.</p>
+            <p className="hint">{selectedTitleSource === "local" ? "Positive values show subtitles later; negative values show them earlier. Kept in memory for this local session." : "Positive values show subtitles later; negative values show them earlier. Saved for this title on this device."}</p>
             <div className="subtitle-timing-actions">
               <button className={playerFocusIndex === subtitleTimingStartFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-2)} ref={subtitleTimingMinusTwoButtonRef}>−2 s</button>
               <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 1 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-0.5)} ref={subtitleTimingMinusHalfButtonRef}>−0.5 s</button>
@@ -2653,7 +3123,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
           </div>}
           {!hasSubtitleKey && <div className="subtitle-actions">
             <RemoteEditable label="OpenSubtitles API key" value="Not configured" editing={showPlayerApiKeyEditor} remoteMode={isTizen} className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleKeyControlRef.current = element; }} onBeginEdit={showPlayerApiKeySetup} renderEditor={(controlRef) => <label htmlFor="opensubtitles-api-key">OpenSubtitles API key<input id="opensubtitles-api-key" type="password" value={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={(element) => { openSubtitlesApiKeyRef.current = element; subtitleKeyInputRef.current = element; controlRef(element); }} /></label>} />
-            {showPlayerApiKeyEditor && <button className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} type="button" onClick={saveSubtitleSettings} ref={subtitleSaveButtonRef}>Save settings</button>}
+            {showPlayerApiKeyEditor && <button className={playerFocusIndex === subtitleFocus.saveKey ? "remote-focused" : ""} type="button" onClick={saveSubtitleSettings} ref={subtitleSaveButtonRef}>Save settings</button>}
           </div>}
           <p className="subtitle-search-heading">Subtitle search</p>
           <div className="subtitle-search-options">
@@ -2765,20 +3235,46 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
   </main></Localized>;
 }
 
-type AppRoute = "home" | "live" | "vod" | "settings";
+type AppRoute = "home" | "live" | "vod" | "settings" | "local";
 
 export function App() {
   const [language, setLanguageState] = useState<UiLanguage>(loadUiLanguage);
   const setLanguage = (next: UiLanguage) => { setLanguageState(next); saveUiLanguage(next); };
   useEffect(() => { document.documentElement.lang = language; }, [language]);
   const [route, setRoute] = useState<AppRoute>("home");
-  const [homeFocus, setHomeFocus] = useState<0 | 1 | 2>(0);
+  const [homeFocus, setHomeFocus] = useState(0);
+  const [localSource, setLocalSource] = useState<LocalMediaSource | null>(null);
+  const [browserCompanions, setBrowserCompanions] = useState<BrowserCompanionConnection[]>([]);
+  const [selectedTvDeviceId, setSelectedTvDeviceId] = useState("");
   const [playlistSetupOpen, setPlaylistSetupOpen] = useState(() => !loadPlaylistUrl());
   const [playlistDraft, setPlaylistDraft] = useState(loadPlaylistUrl);
   const [playlistError, setPlaylistError] = useState("");
   const cardRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const playlistInputRef = useRef<HTMLInputElement | null>(null);
   const playlistSaveRef = useRef<HTMLButtonElement | null>(null);
+  const localFileInputRef = useRef<HTMLInputElement | null>(null);
+  const localHomeActionRef = useRef<HTMLButtonElement | null>(null);
+  const setupSettingsRef = useRef<HTMLButtonElement | null>(null);
+  const tizenRuntime = isTizenRuntime();
+  const tvUi = tizenRuntime || __SUBSTREAM_TV_UI_PREVIEW__;
+  const localHomeIndex = 3;
+  const openLocalPicker = () => localFileInputRef.current?.click();
+  const acceptLocalFile = (event: FormEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    const next = new LocalMediaSource(file);
+    setLocalSource(next);
+    setHomeFocus(localHomeIndex);
+    setRoute("local");
+    // VodApp owns URL cleanup after it has destroyed the current player.
+  };
+  const leaveLocal = () => {
+    setLocalSource(null);
+    setRoute("home");
+    setHomeFocus(localHomeIndex);
+  };
   const openPlaylistSetup = () => {
     setPlaylistDraft(loadPlaylistUrl());
     setPlaylistError("");
@@ -2804,15 +3300,27 @@ export function App() {
       if (playlistSetupOpen) {
         if (isBackKey(event)) event.preventDefault();
         const key = normalizedRemoteKey(event);
-        if (key === "ArrowDown" && document.activeElement === playlistInputRef.current) {
+        if (key === "ArrowDown" && document.activeElement === localHomeActionRef.current) {
+          event.preventDefault();
+          playlistInputRef.current?.focus();
+        } else if (key === "ArrowDown" && document.activeElement === playlistInputRef.current) {
+          event.preventDefault();
+          playlistSaveRef.current?.focus();
+        } else if (key === "ArrowDown" && document.activeElement === playlistSaveRef.current) {
+          event.preventDefault();
+          setupSettingsRef.current?.focus();
+        } else if (key === "ArrowUp" && document.activeElement === setupSettingsRef.current) {
           event.preventDefault();
           playlistSaveRef.current?.focus();
         } else if (key === "ArrowUp" && document.activeElement === playlistSaveRef.current) {
           event.preventDefault();
           playlistInputRef.current?.focus();
-        } else if (key === "Enter" && document.activeElement === playlistSaveRef.current) {
+        } else if (key === "ArrowUp" && document.activeElement === playlistInputRef.current) {
           event.preventDefault();
-          playlistSaveRef.current?.click();
+          localHomeActionRef.current?.focus();
+        } else if (key === "Enter" && document.activeElement === localHomeActionRef.current) {
+          event.preventDefault();
+          openLocalPicker();
         }
         return;
       }
@@ -2820,21 +3328,22 @@ export function App() {
       if (key === "ArrowLeft" || key === "ArrowUp" || key === "ArrowRight" || key === "ArrowDown") {
         event.preventDefault();
         const current = homeFocus;
-        const next = key === "ArrowLeft" ? Math.max(0, current - 1)
-          : key === "ArrowRight" ? Math.min(2, current + 1)
-            : key === "ArrowUp" ? 0 : 2;
-        const nextIndex = next as 0 | 1 | 2;
+        const lastIndex = tizenRuntime ? 2 : 3;
+        const nextIndex = key === "ArrowLeft" ? Math.max(0, current - 1)
+          : key === "ArrowRight" ? Math.min(lastIndex, current + 1)
+            : key === "ArrowUp" ? 0 : lastIndex;
         setHomeFocus(nextIndex); cardRefs.current[nextIndex]?.focus();
       }
       if (isBackKey(event)) event.preventDefault();
     };
     window.addEventListener("keydown", onKeyDown);
-    window.requestAnimationFrame(() => (playlistSetupOpen ? playlistInputRef.current : cardRefs.current[homeFocus])?.focus());
+    window.requestAnimationFrame(() => (playlistSetupOpen ? (localHomeActionRef.current ?? playlistInputRef.current) : cardRefs.current[homeFocus])?.focus());
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [homeFocus, playlistSetupOpen, route]);
+  }, [homeFocus, playlistSetupOpen, route, tizenRuntime]);
   if (route === "live") return <LanguageContext.Provider value={{ language, setLanguage }}><LiveTv onMainMenu={() => { setHomeFocus(0); setRoute("home"); }} /></LanguageContext.Provider>;
-  if (route === "vod") return <LanguageContext.Provider value={{ language, setLanguage }}><div className="vod-route"><VodApp onMainMenu={() => { setHomeFocus(1); setRoute("home"); }} onPlaylistSetup={openPlaylistSetup} /></div></LanguageContext.Provider>;
-  if (route === "settings") return <LanguageContext.Provider value={{ language, setLanguage }}><div className="vod-route"><VodApp settingsOnOpen onMainMenu={() => { setHomeFocus(2); setRoute("home"); }} onPlaylistSetup={openPlaylistSetup} /></div></LanguageContext.Provider>;
+  if (route === "vod") return <LanguageContext.Provider value={{ language, setLanguage }}><div className="vod-route"><VodApp browserCompanions={browserCompanions} setBrowserCompanions={setBrowserCompanions} selectedTvDeviceId={selectedTvDeviceId} setSelectedTvDeviceId={setSelectedTvDeviceId} onMainMenu={() => { setHomeFocus(1); setRoute("home"); }} onPlaylistSetup={openPlaylistSetup} /></div></LanguageContext.Provider>;
+  if (route === "settings") return <LanguageContext.Provider value={{ language, setLanguage }}><div className="vod-route"><VodApp browserCompanions={browserCompanions} setBrowserCompanions={setBrowserCompanions} selectedTvDeviceId={selectedTvDeviceId} setSelectedTvDeviceId={setSelectedTvDeviceId} settingsOnOpen onMainMenu={() => { setHomeFocus(2); setRoute("home"); }} onPlaylistSetup={openPlaylistSetup} /></div></LanguageContext.Provider>;
+  if (route === "local" && localSource) return <LanguageContext.Provider value={{ language, setLanguage }}><div className="vod-route"><VodApp key={localSource.url} localSource={localSource} browserCompanions={browserCompanions} setBrowserCompanions={setBrowserCompanions} selectedTvDeviceId={selectedTvDeviceId} setSelectedTvDeviceId={setSelectedTvDeviceId} onChooseLocalFile={openLocalPicker} onMainMenu={leaveLocal} onPlaylistSetup={openPlaylistSetup} /><input ref={localFileInputRef} className="sr-only" type="file" accept="video/*,.mkv,.mp4,.m4v,.mov,.webm,.avi,.ts,.m2ts,.mpg,.mpeg" onChange={acceptLocalFile} aria-label="Choose a local video file" /></div></LanguageContext.Provider>;
   return <LanguageContext.Provider value={{ language, setLanguage }}><Localized language={language}><main className="app-home">
     <div className="home-brand" aria-hidden="true"><img src="./branding/substream-icon.png" alt="" /><strong>Substream</strong></div>
     <section className="home-content" aria-label={playlistSetupOpen ? "Set up your playlist" : "Choose what to watch"}>
@@ -2843,13 +3352,17 @@ export function App() {
         <p>Enter your M3U playlist URL to use Live TV and Video-On-Demand.</p>
         <label htmlFor="home-playlist-url">M3U playlist URL</label>
         <input id="home-playlist-url" type="password" value={playlistDraft} onChange={(event) => setPlaylistDraft(event.target.value)} autoComplete="off" ref={playlistInputRef} />
+        {!tvUi && <button type="button" onClick={openLocalPicker} ref={localHomeActionRef}>Open local video file</button>}
         <button type="submit" ref={playlistSaveRef}>Save playlist</button>
+        <button type="button" ref={setupSettingsRef} onClick={() => { setRoute("settings"); setHomeFocus(2); }}>Settings and TV pairing</button>
         {playlistError && <p className="error" role="alert">{playlistError}</p>}
       </form> : <div className="home-cards">
         <button className={`home-card ${homeFocus === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[0] = element; }} onFocus={() => setHomeFocus(0)} onClick={() => setRoute("live")}><strong>Live TV</strong></button>
         <button className={`home-card ${homeFocus === 1 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[1] = element; }} onFocus={() => setHomeFocus(1)} onClick={() => setRoute("vod")}><strong>Video-On-Demand</strong></button>
         <button className={`home-card ${homeFocus === 2 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[2] = element; }} onFocus={() => setHomeFocus(2)} onClick={() => setRoute("settings")}><strong>Settings</strong></button>
+        {!tvUi && <button className={`home-card ${homeFocus === localHomeIndex ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[localHomeIndex] = element; }} onFocus={() => setHomeFocus(localHomeIndex)} onClick={openLocalPicker}><strong>Open local video file</strong></button>}
       </div>}
+      <input ref={localFileInputRef} className="sr-only" type="file" accept="video/*,.mkv,.mp4,.m4v,.mov,.webm,.avi,.ts,.m2ts,.mpg,.mpeg" onChange={acceptLocalFile} aria-label="Choose a local video file" />
     </section>
   </main></Localized></LanguageContext.Provider>;
 }

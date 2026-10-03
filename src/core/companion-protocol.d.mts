@@ -1,4 +1,4 @@
-export const COMPANION_PROTOCOL_VERSION: 3;
+export const COMPANION_PROTOCOL_VERSION: 4;
 
 export type CompanionSelectionWire = {
   kind: "movie" | "series" | "episode";
@@ -12,14 +12,35 @@ export type CompanionSelectionWire = {
   sourceFingerprint: string;
 };
 
+export type CompanionLocalMediaWire = {
+  sessionId: string;
+  ticket: string;
+  title: string;
+  searchTitle: string;
+  year: number | null;
+  season: number | null;
+  episode: number | null;
+  contentType: "movie" | "series" | "unknown";
+  mediaType: string;
+  size: number;
+};
+
 export type CompanionEventWire = {
   sequence: number;
   action?: "play" | "select";
   selection: CompanionSelectionWire;
+} | {
+  sequence: number;
+  action: "play-local";
+  localMedia: CompanionLocalMediaWire;
+} | {
+  sequence: number;
+  action: "stop-local";
+  sessionId: string;
 };
 
 export type CompanionEventsPayload = {
-  protocolVersion: 3;
+  protocolVersion: 4;
   events: CompanionEventWire[];
   paired: boolean;
   retentionGap: { throughSequence: number; firstAvailableSequence: number } | null;

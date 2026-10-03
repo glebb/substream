@@ -1,8 +1,8 @@
 # Substream
 
-Substream is an IPTV live TV and video-on-demand player for Samsung Tizen TVs and browsers. It supports M3U libraries, on-demand Xtream catalogues, TMDb details, OpenSubtitles downloads, local favourites, and playback resume.
+Substream is an IPTV live TV and video-on-demand player for Samsung Tizen TVs and browsers. It supports M3U libraries, on-demand Xtream catalogues, TMDb details, OpenSubtitles downloads, local video files, local favourites, and playback resume.
 
-Live TV currently requires an Xtream-compatible `get.php` source. It browses Finnish provider categories, shows available programme information, and plays embedded subtitles when the stream and device support them. The optional trusted-LAN companion service is primarily for sending an on-demand VOD playback request from the web app to a paired TV. Browsers can also use it as a CORS bridge for the public Nordic guide; TV browsing and playback do not depend on it. See [Current behavior and architecture](docs/status.md#live-tv).
+Live TV currently requires an Xtream-compatible `get.php` source. It browses Finnish provider categories, shows available programme information, and plays embedded subtitles when the stream and device support them. The optional trusted-LAN companion service sends VOD selections and streams a selected browser file from the computer to a paired TV. The computer and companion service must stay available during TV playback. Browsers can also use it as a CORS bridge for the public Nordic guide; TV browsing and playback do not depend on it. See [Current behavior and architecture](docs/status.md#live-tv).
 
 ![Substream home screen](docs/images/substream-home.png)
 
@@ -10,9 +10,10 @@ Live TV currently requires an Xtream-compatible `get.php` source. It browses Fin
 
 - **Live TV:** browse Finnish Xtream categories, see current and next programme information, and play streams with embedded subtitles when the provider and device support them.
 - **VOD library:** browse and search M3U or Xtream movie and series catalogues, view TMDb details and artwork, and select episodes for playback. Series playback can continue to the next episode.
+- **Local video files:** open one video from the browser without configuring IPTV, review filename-based details, then play on the computer or stage it for a paired TV. Release filenames with explicit season/episode markers automatically search OpenSubtitles in the preferred language. SRT/WebVTT subtitles can also be attached locally and shared with the active TV session. TV playback uses ffmpeg/ffprobe on the companion computer to prepare incompatible files as H.264 MP4 before streaming, preserving supported audio such as E-AC-3 5.1.
 - **Playback and subtitles:** resume VOD playback, skip forward or back, adjust aspect mode, subtitle size and timing, and choose a preferred subtitle language.
 - **Personal library:** save favourites and continue watching progress locally on the device.
-- **Play on TV:** pair a browser with named TVs using one-time codes, choose a playback target, and send VOD selections over the optional trusted-LAN companion service.
+- **Play on TV:** pair a browser with named TVs using one-time codes, choose a playback target, and send VOD selections or local media over the optional trusted-LAN companion service.
 - **Finnish and English UI:** switch the app language in Settings.
 - **Samsung Tizen and browsers:** use Tizen AVPlay on supported TVs and browser video playback on compatible devices.
 

@@ -38,6 +38,21 @@ describe("TizenAvPlayPlayer", () => {
     },
   );
 
+  it("buffers ten seconds for local progressive playback before preparing", () => {
+    const setBufferingParam = vi.fn();
+    const prepareAsync = vi.fn((success: () => void) => success());
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), setBufferingParam, prepareAsync, play: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+    } };
+    const player = new TizenAvPlayPlayer({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 1920, height: 1080 }) } as HTMLElement, vi.fn());
+    player.load("http://192.0.2.1/api/local-media/" + "a".repeat(32) + "?ticket=synthetic");
+    expect(setBufferingParam).toHaveBeenNthCalledWith(1, "PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 10);
+    expect(setBufferingParam).toHaveBeenNthCalledWith(2, "PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 10);
+    expect(setBufferingParam.mock.invocationCallOrder[1]).toBeLessThan(prepareAsync.mock.invocationCallOrder[0]!);
+    player.destroy();
+  });
+
   it("continues native playback when older firmware rejects a User-Agent override", () => {
     const prepareAsync = vi.fn((success: () => void) => success());
     const play = vi.fn();

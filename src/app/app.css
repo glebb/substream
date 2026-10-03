@@ -27,6 +27,7 @@ body { margin: 0; overflow-x: hidden; }
 .home-playlist-setup p { margin: 0 0 1rem; }
 .home-playlist-setup label { display: block; font-weight: 700; margin-bottom: .35rem; }
 .home-playlist-setup input { box-sizing: border-box; display: block; margin-bottom: 1rem; width: 100%; }
+.home-playlist-setup > button { margin: 0 1rem 1rem 0; }
 .live-list { display: flex; flex-direction: column; max-height: 66vh; overflow-y: auto; padding: .5rem; }
 .live-list > * + * { margin-top: .5rem; }
 .live-row { align-items: center; background: #151d2b; border: 1px solid #273349; box-sizing: border-box; color: #f4f7ff; display: flex; flex-shrink: 0; min-height: 4.5rem; padding: .65rem 1rem; text-align: left; width: 100%; }
@@ -553,6 +554,20 @@ button:disabled { cursor: default; opacity: .45; }
 .details-copy > .remote-editable-trigger { margin-top: 12px; }
 .details-actions { margin-bottom: 24px; }
 .player-controls { padding: 16px; }
+/* Leave room for remote focus rings, including when controls wrap. Keep
+ * these selectors stronger than the search-label margin reset above. */
+.player-screen .player-controls > button,
+.player-screen .subtitle-actions > button,
+.player-screen .subtitle-actions > label,
+.player-screen .subtitle-timing-actions > button,
+.player-screen .subtitle-search-options > button,
+.player-screen .subtitle-search-options > label {
+  margin: 0 20px 16px 0;
+}
+.player-screen .subtitle-search-options { align-items: flex-end; }
+.player-screen .subtitle-search-options > .subtitle-search-submit { margin-right: 0; }
+.player-screen .subtitle-actions > .hint { flex: 1 1 100%; margin: 0 0 16px; }
+.player-screen .subtitle-timing-actions { margin-top: 12px; }
 .collection-heading { margin-bottom: 18px; }
 .collection-heading .remote-key-hint { margin-top: 8px; }
 .catalog-search-controls { align-items: stretch; }
