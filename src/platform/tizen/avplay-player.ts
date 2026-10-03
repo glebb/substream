@@ -19,6 +19,7 @@ interface AvPlayApi {
   getTotalTrackInfo?(): AvPlayStreamInfo[];
   setSelectTrack?(trackType: "AUDIO" | "TEXT", index: number): void;
   setSilentSubtitle?(silent: boolean): void;
+  setStreamingProperty?(property: "USER_AGENT", value: string): void;
   setBufferingParam?(bufferingType: "PLAYER_BUFFER_FOR_PLAY" | "PLAYER_BUFFER_FOR_RESUME", parameter: "PLAYER_BUFFER_SIZE_IN_SECOND", value: number): void;
   setDisplayRect(left: number, top: number, width: number, height: number): void;
   setDisplayMethod(mode: "PLAYER_DISPLAY_MODE_LETTER_BOX" | "PLAYER_DISPLAY_MODE_FULL_SCREEN" | "PLAYER_DISPLAY_MODE_AUTO_ASPECT_RATIO"): void;
@@ -162,6 +163,12 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     try {
       player.open(streamUrl);
       this.opened = true;
+      // Match the local browser media proxy: some providers reject requests
+      // with no User-Agent. AVPlay properties must be set after open(), before
+      // prepareAsync(), while the player is IDLE.
+      try {
+        player.setStreamingProperty?.("USER_AGENT", "Mozilla/5.0 (compatible; Substream/0.1)");
+      } catch { /* Older firmware may reject an override; retain its native agent. */ }
       if (this.liveAudioMetadataPending) {
         void probeLiveTsAudioMetadata(this.liveAudioMetadataUrl).then((result) => {
           if (!this.isCurrent(generation)) return;

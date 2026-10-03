@@ -2540,7 +2540,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false }: { onMai
             <h2 id="title-details-heading"><span translate="no">{detailsTitle.title}</span></h2>
             <p className="details-facts">{details.year ?? "Year unavailable"}{details.runtimeMinutes ? ` · ${formatRuntime(details.runtimeMinutes)}` : ""}{details.rating !== undefined ? ` · ★ ${details.rating.toFixed(1)}/10` : ""}</p>
             {details.genres.length > 0 && <p className="details-genres">{details.genres.join(" · ")}</p>}
-            <p className="details-synopsis">{details.synopsis ?? (detailsMetadataStatus === "Loading title details…" ? "Loading details…" : "Synopsis unavailable for this title.")}</p>
+            <p className="details-synopsis"><span translate="no">{details.synopsis ?? (detailsMetadataStatus === "Loading title details…" ? "Loading details…" : "Synopsis unavailable for this title.")}</span></p>
             {detailsMetadataStatus && detailsMetadataStatus !== "Loading title details…" && <p className="hint" role="status">{detailsMetadataStatus}</p>}
             {details.subtitleLanguages.length > 0 ? <p className="hint">Subtitles available: {details.subtitleLanguages.join(", ")}</p> : <p className="hint">Subtitle languages will appear after searching OpenSubtitles.</p>}
             {detailsHistory && <p className="details-resume" role="status">Resume available at {formatPlaybackTime(detailsHistory.currentTimeSeconds)} of {formatPlaybackTime(detailsHistory.durationSeconds)}</p>}

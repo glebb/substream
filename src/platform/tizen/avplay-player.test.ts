@@ -14,6 +14,48 @@ afterEach(() => {
 });
 
 describe("TizenAvPlayPlayer", () => {
+  it.each(["movie.mkv", "movie.mp4", "episode.mkv", "live.m3u8", "live.ts"])(
+    "sets a provider-compatible User-Agent before preparing %s, including subsequent loads",
+    (filename) => {
+      const open = vi.fn();
+      const setStreamingProperty = vi.fn();
+      const prepareAsync = vi.fn((success: () => void) => success());
+      const play = vi.fn();
+      (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+        open, setStreamingProperty, prepareAsync, play, stop: vi.fn(), close: vi.fn(),
+        setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+      } };
+      const player = new TizenAvPlayPlayer({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 1920, height: 1080 }) } as HTMLElement, vi.fn());
+      for (const title of [filename, `next-${filename}`]) player.load(`https://media.example.invalid/${title}`);
+      expect(setStreamingProperty).toHaveBeenCalledTimes(2);
+      for (let load = 0; load < 2; load++) {
+        expect(setStreamingProperty).toHaveBeenNthCalledWith(load + 1, "USER_AGENT", "Mozilla/5.0 (compatible; Substream/0.1)");
+        expect(open.mock.invocationCallOrder[load]).toBeLessThan(setStreamingProperty.mock.invocationCallOrder[load]!);
+        expect(setStreamingProperty.mock.invocationCallOrder[load]).toBeLessThan(prepareAsync.mock.invocationCallOrder[load]!);
+      }
+      expect(play).toHaveBeenCalledTimes(2);
+      player.destroy();
+    },
+  );
+
+  it("continues native playback when older firmware rejects a User-Agent override", () => {
+    const prepareAsync = vi.fn((success: () => void) => success());
+    const play = vi.fn();
+    const states: string[] = [];
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), setStreamingProperty: () => { throw new Error("NotSupportedError"); },
+      prepareAsync, play, stop: vi.fn(), close: vi.fn(), setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+    } };
+    const player = new TizenAvPlayPlayer({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 1920, height: 1080 }) } as HTMLElement, vi.fn());
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/movie.mkv");
+    expect(prepareAsync).toHaveBeenCalledOnce();
+    expect(play).toHaveBeenCalledOnce();
+    expect(states).toContain("playing");
+    expect(states).not.toContain("error");
+    player.destroy();
+  });
+
   it("leaves direct-TS DVB discovery stopped after prepare until explicit opt-in", () => {
     (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
       open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),

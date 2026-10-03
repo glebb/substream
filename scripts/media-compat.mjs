@@ -200,7 +200,11 @@ export async function fetchMediaSource(sourceUrl, { headers, redirects = 0, sign
   if (!validMediaSource(url.toString()) || redirects > 4) throw new Error("Media source is not allowed.");
   const address = await raceAbort(resolvePublicAddress(url, resolveHost), signal);
   if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Media request aborted.");
-  const upstream = await request(url, headers, address, signal);
+  // Some IPTV providers reject otherwise valid media requests without a
+  // User-Agent. Identify the local player consistently for probes, conversion,
+  // range requests, and redirects; do not forward browser cookies or credentials.
+  const mediaHeaders = { "user-agent": "Mozilla/5.0 (compatible; Substream/0.1)", ...headers };
+  const upstream = await request(url, mediaHeaders, address, signal);
   if (upstream.status >= 300 && upstream.status < 400) {
     const location = upstream.headers.get("location");
     if (!location) throw new Error("Media source redirect was invalid.");

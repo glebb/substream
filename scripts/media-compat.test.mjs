@@ -408,6 +408,25 @@ describe("browser media compatibility planning", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
+  it.each(["movie.mkv", "episode.mkv", "movie.mp4", "live.ts"])("identifies the player on %s range requests and redirects for providers that reject missing User-Agent", async (filename) => {
+    const request = vi.fn(async (_url, headers) => {
+      if (!headers?.["user-agent"]) return new Response(null, { status: 454 });
+      return request.mock.calls.length === 1
+        ? new Response(null, { status: 302, headers: { location: `https://cdn.example.invalid/${filename}` } })
+        : new Response("synthetic media", { status: 206 });
+    });
+    const response = await fetchMediaSource(`https://media.example.invalid/${filename}`, {
+      headers: { range: "bytes=0-1023" },
+      resolveHost: async () => [{ address: "93.184.216.34", family: 4 }],
+      request,
+    });
+    expect(response.status).toBe(206);
+    expect(request).toHaveBeenCalledTimes(2);
+    for (const [, headers] of request.mock.calls) {
+      expect(headers).toEqual({ "user-agent": "Mozilla/5.0 (compatible; Substream/0.1)", range: "bytes=0-1023" });
+    }
+  });
+
   it("bounds a hanging ffprobe process and escalates termination safely", async () => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();

@@ -72,6 +72,12 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       proxy: {
+        // Media preparation is deliberately loopback-only. A configured LAN
+        // relay is for TV pairing; routing browser media there is rejected.
+        "/api/media": {
+          changeOrigin: true,
+          target: "http://127.0.0.1:8787",
+        },
         // Browser development needs a CORS bridge for the public XMLTV feed.
         // Packaged Tizen requests the public guide directly and never uses the
         // companion relay for guide data.
