@@ -53,6 +53,45 @@ describe("TizenAvPlayPlayer", () => {
     player.destroy();
   });
 
+  it("uses an explicit buffer target for relay playback", () => {
+    const setBufferingParam = vi.fn();
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), setBufferingParam, prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+    } };
+    const player = new TizenAvPlayPlayer({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 1920, height: 1080 }) } as HTMLElement, vi.fn(), { bufferSeconds: 8 });
+    player.load("https://example.invalid/live.m3u8");
+    expect(setBufferingParam).toHaveBeenNthCalledWith(1, "PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 8);
+    expect(setBufferingParam).toHaveBeenNthCalledWith(2, "PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 8);
+    player.destroy();
+  });
+
+  it("reports live playhead progress when AVPlay has no duration, while preserving VOD behavior", () => {
+    const listener: { oncurrentplaytime?(milliseconds: number): void } = {};
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), setListener: (value: typeof listener) => Object.assign(listener, value),
+      getDuration: vi.fn(() => 0),
+    } };
+    const container = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as unknown as HTMLElement;
+    const live = new TizenAvPlayPlayer(container, vi.fn());
+    const liveProgress: Array<{ currentTimeSeconds: number; durationSeconds: number }> = [];
+    live.setLiveSubtitleMode(true);
+    live.setEventHandlers({ onStateChange: vi.fn(), onProgress: (value) => liveProgress.push(value) });
+    live.load("https://example.invalid/live.m3u8");
+    listener.oncurrentplaytime?.(1_520);
+    expect(liveProgress).toEqual([{ currentTimeSeconds: 1.52, durationSeconds: 0 }]);
+    live.destroy();
+
+    const vod = new TizenAvPlayPlayer(container, vi.fn());
+    const vodProgress: Array<{ currentTimeSeconds: number; durationSeconds: number }> = [];
+    vod.setEventHandlers({ onStateChange: vi.fn(), onProgress: (value) => vodProgress.push(value) });
+    vod.load("https://example.invalid/movie.mkv");
+    listener.oncurrentplaytime?.(1_520);
+    expect(vodProgress).toEqual([]);
+    vod.destroy();
+  });
+
   it("continues native playback when older firmware rejects a User-Agent override", () => {
     const prepareAsync = vi.fn((success: () => void) => success());
     const play = vi.fn();

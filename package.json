@@ -6,6 +6,11 @@
   "scripts": {
     "dev": "vite",
     "companion:dev": "node scripts/companion-server.mjs",
+    "relay:dev": "node services/live-subtitle-relay/main.ts",
+    "relay:personal": "node scripts/live-relay-personal.ts",
+    "relay:test": "vitest run services/live-subtitle-relay src/platform/live-relay src/core/live-relay",
+    "relay:smoke": "node scripts/relay-smoke.ts",
+    "relay:local": "node scripts/relay-local-smoke.ts",
     "companion:cert": "node scripts/create-companion-cert.mjs",
     "dev:personal": "node scripts/dev-personal.mjs",
     "build": "vite build",

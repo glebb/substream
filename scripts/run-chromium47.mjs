@@ -83,6 +83,7 @@ if (action === "stop") {
     const dockerArgs = [
       "run", "--detach", "--name", containerName,
       "--platform", "linux/amd64",
+      "--shm-size", "256m",
       "--publish", "127.0.0.1:6080:6080",
       "--volume", `${buildDir}:/app:ro`,
     ];

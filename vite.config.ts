@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import legacy from "@vitejs/plugin-legacy";
+import { ensurePersonalRelayEnvironment } from "./scripts/live-relay-personal-config.ts";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -9,6 +10,11 @@ export default defineConfig(({ mode }) => {
   const tmdbApiKey = env.TMDB_API_KEY;
   const companionServerUrl = env.COMPANION_SERVER_URL;
   const isPersonalBuild = process.env.PERSONAL_BUILD === "1";
+  // Only Tizen artifacts get the private relay defaults. Browser builds never
+  // load or embed the relay-specific env file.
+  const isTizenBuild = process.env.TIZEN_COMPAT_TARGET === "tizen6"
+    || process.argv.some((arg, index, args) => arg === "tizen/dist" && args[index - 1] === "--outDir");
+  const relayEnv = isPersonalBuild && isTizenBuild && process.env.PUBLIC_BUILD !== "1" ? ensurePersonalRelayEnvironment(process.cwd()) : {};
   // A public build is a static browser-only artifact. It deliberately ignores
   // all .env defaults, including the LAN-only companion URL. This keeps
   // provider credentials and companion routing out of deployment artifacts.
@@ -32,6 +38,13 @@ export default defineConfig(({ mode }) => {
         ? { playlistUrl: env.IPTV_M3U_URL, openSubtitlesApiKey: apiKey, tmdbApiReadAccessToken, tmdbApiKey }
         : {}),
     };
+  const relayUrl = relayEnv.LIVE_SUBTITLE_RELAY_URL ?? "";
+  const relayToken = relayEnv.LIVE_SUBTITLE_RELAY_TOKEN ?? "";
+  const relayEnabled = relayEnv.LIVE_SUBTITLE_RELAY_ENABLED === "1";
+  const relayLanHttp = relayEnv.LIVE_SUBTITLE_RELAY_ALLOW_LAN_HTTP === "1";
+  const liveRelayDefaults = isPersonalBuild && isTizenBuild && relayEnabled
+    ? { enabled: true, serviceUrl: relayUrl, deviceCredential: relayToken, allowLanHttp: relayLanHttp, channelMappings: {}, offsetMs: 0, diagnosticsEnabled: true }
+    : null;
   return {
     base: "./",
     // The optional DVB decoder uses a module worker so its WASM decoder and
@@ -52,6 +65,7 @@ export default defineConfig(({ mode }) => {
     // VITE_ variables for them: that would expose them in every browser build.
     define: {
       __SUBSTREAM_PACKAGE_DEFAULTS__: JSON.stringify(packageDefaults),
+      __PERSONAL_LIVE_RELAY_DEFAULTS__: JSON.stringify(liveRelayDefaults),
       __SUBSTREAM_LOCAL_PROVIDER_PROXY__: JSON.stringify(useLocalProviderProxy),
       __SUBSTREAM_TV_UI_PREVIEW__: JSON.stringify(useLocalProviderProxy),
     },

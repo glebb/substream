@@ -1,14 +1,16 @@
 # Embedded live subtitles
 
-The [Tizen 3 sync and flicker plan](live-dvb-subtitles-plan.md) records the newly working direct-TS DVB path, the observed physical-TV defects, and the next verification steps.
+The [historical Tizen 3 experiment](live-dvb-subtitles-plan.md) records why continuous TV-side direct-TS scanning was ruled out. The implemented replacement is the [live subtitle relay](live-subtitle-relay.md), accepted locally on a real TV on 2026-10-03. Public deployment is the next task; see the [deployment handoff](live-subtitle-relay-deployment.md).
 
 ## Release behavior
 
 Live TV enables embedded subtitles in normal browser and Tizen builds. The
 browser HLS adapter scans MPEG-TS media in a dedicated worker and draws DVB
 bitmap cues on a canvas over the video. Tizen uses AVPlay's native `TEXT`
-tracks when available; on Tizen 3 it can also scan a separate direct-TS feed
-and draw DVB bitmaps over AVPlay. Both prefer Finnish, then English; other languages remain off by
+tracks when available. The separate continuous TV-side TS subtitle feed is
+disabled after it disrupted playback; personal Tizen builds instead route
+`Multi-Sub` channels through a server that relays media and decodes PNG captions
+from the same upstream connection. Both prefer Finnish, then English; other languages remain off by
 default. The browser offers a DVB track only after packets appear on its
 advertised transport PID. A PMT descriptor alone does not make an empty track
 selectable.
@@ -72,7 +74,7 @@ counts, and whether a fragment exceeded the limit.
 
 - Run a sustained modern-browser smoke test on a stream with active DVB
   packets, including channel changes, subtitle selection, and worker failure.
-- Verify AVPlay Finnish and English track selection on the target physical TV, and complete the [Tizen DVB timing and flicker plan](live-dvb-subtitles-plan.md).
+- Verify AVPlay native Finnish/English track selection where available. For Multi-Sub channels, use the [relay verification checklist](verification.md#hosted-live-subtitle-relay); do not resume the retired continuous TV-side scanner experiment.
 - Recheck standard Yle TV2's active DVB PID and any future Yle provider feed
   whose subtitle packets become available.
 

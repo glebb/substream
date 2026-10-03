@@ -9,6 +9,7 @@ Live TV currently requires an Xtream-compatible `get.php` source. It browses Fin
 ## Features
 
 - **Live TV:** browse Finnish Xtream categories, see current and next programme information, and play streams with embedded subtitles when the provider and device support them.
+- **Tizen Multi-Sub subtitles:** personal TV builds automatically use the separate live subtitle relay for marked channels. Run it locally with `npm run relay:personal`; the Mac must stay awake. Local TV playback is accepted for now; public hosting is the next deployment task.
 - **VOD library:** browse and search M3U or Xtream movie and series catalogues, view TMDb details and artwork, and select episodes for playback. Series playback can continue to the next episode.
 - **Local video files:** open one video from the browser without configuring IPTV, review filename-based details, then play on the computer or stage it for a paired TV. Release filenames with explicit season/episode markers automatically search OpenSubtitles in the preferred language. SRT/WebVTT subtitles can also be attached locally and shared with the active TV session. TV playback uses ffmpeg/ffprobe on the companion computer to prepare incompatible files as H.264 MP4 before streaming, preserving supported audio such as E-AC-3 5.1.
 - **Playback and subtitles:** resume VOD playback, skip forward or back, adjust aspect mode, subtitle size and timing, and choose a preferred subtitle language.
@@ -38,7 +39,7 @@ Copy [`.env.example`](.env.example) to the ignored `.env`. Personal commands req
 npm run dev:personal
 ```
 
-This starts Vite with personal defaults and the LAN relay; Ctrl+C stops both. Personal builds embed credentials in the client bundle. Anyone with the bundle can recover them: never share or commit personal builds, `.env`, playlist URLs, tokens, or signed media URLs. UI-entered configuration is stored locally on the device; it is not a secret vault.
+This starts Vite with personal defaults and the trusted-LAN VOD/local-file companion; Ctrl+C stops both. The live subtitle relay is a separate process started with `npm run relay:personal`; `dev:personal` does not start it. Personal builds embed credentials in the client bundle. Anyone with the bundle can recover them: never share or commit personal builds, `.env`, playlist URLs, tokens, or signed media URLs. UI-entered configuration is stored locally on the device; it is not a secret vault.
 
 Standard builds do not embed those credentials. The optional `COMPANION_SERVER_URL` address is embedded even in standard builds. Development proxies do not make client-supplied credentials secret; a distributed service needs a server-side design to protect them.
 
@@ -65,6 +66,9 @@ The web server must reject `/api/` rather than routing it through the single-pag
 | `npm run preview:chromium47` | Docker-based legacy UI preview; append `-- stop` to clean up |
 | `npm run preview:chromium47:personal` | Preview with private `.env` defaults |
 | `npm run inspect:m3u` | Fetch the configured private playlist and print a credential-safe summary |
+| `npm run relay:personal` | Discover Multi-Sub channels and run the separate local subtitle relay using private `.env` / `.env.live-relay` |
+| `npm run relay:test` | Synthetic relay protocol, server, decoder and client tests |
+| `npm run relay:smoke` / `npm run relay:local` | Synthetic FFmpeg packaging / complete local relay pipeline checks |
 
 Build commands also have `:personal` variants. See [package.json](package.json) for the complete script list. Tizen web builds are not signed installable packages.
 
@@ -76,5 +80,7 @@ Build commands also have `:personal` variants. See [package.json](package.json) 
 - [Remote navigation](docs/navigation.md): keyboard/remote behavior and focus rules.
 - [Verification](docs/verification.md): automated checks, legacy preview, and device smoke tests.
 - [Embedded live subtitles](docs/live-dvb-subtitles.md): decoder limits and provider diagnostics.
+- [Hosted subtitle relay](docs/live-subtitle-relay.md): automatic Multi-Sub routing in personal Tizen builds; start on this Mac with `npm run relay:personal`.
+- [Subtitle relay deployment handoff](docs/live-subtitle-relay-deployment.md): current local acceptance, prepared server artifacts, required host information, HTTPS setup and rollback work for a fresh session.
 
 TMDb supplies metadata and artwork; Substream is not endorsed or certified by TMDb. Keep the required TMDb attribution visible when distributing the app. OpenSubtitles is an external service; Substream is not affiliated with or endorsed by it.

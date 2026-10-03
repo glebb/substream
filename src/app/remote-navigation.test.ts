@@ -11,6 +11,10 @@ describe("remote dashboard navigation", () => {
       "back", "companion-url", "companion-start", "ui-language", "playlist", "subtitle-language", "api-key-input", "api-key-save", "api-key-cancel", "remove-api-key",
       "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
     ]);
+    expect(settingsControlOrder({ confirmationOpen: false, apiKeyEditorOpen: false, hasSubtitleKey: false, liveRelayControlsVisible: true })).toEqual([
+      "back", "companion-url", "companion-start", "relay-enabled", "relay-url", "relay-allow-http", "relay-credential", "relay-mappings", "relay-offset", "relay-diagnostics", "relay-save", "relay-remove",
+      "ui-language", "playlist", "subtitle-language", "api-key-edit", "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
+    ]);
     expect(settingsControlOrder({ confirmationOpen: true, apiKeyEditorOpen: true, hasSubtitleKey: true })).toEqual([
       "confirm-cancel", "confirm-confirm",
     ]);

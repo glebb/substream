@@ -1,0 +1,4 @@
+{$RELAY_DOMAIN} {
+  # Access logging is intentionally absent: media capabilities appear in URLs.
+  reverse_proxy relay:8790
+}

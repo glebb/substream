@@ -1,0 +1,48 @@
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: deploy/live-subtitle-relay/Dockerfile
+    image: substream-live-relay:${RELAY_IMAGE_TAG:-prototype}
+    restart: unless-stopped
+    environment:
+      RELAY_CONFIG_FILE: /run/secrets/relay-config.json
+      RELAY_HOST: 0.0.0.0
+    secrets:
+      - source: relay-config
+        target: relay-config.json
+    read_only: true
+    tmpfs:
+      - /tmp:uid=1000,gid=1000,mode=0700,size=268435456
+    mem_limit: 768m
+    cpus: 2
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8790/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [relay-private]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:?Set RELAY_DOMAIN to the relay hostname}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [relay-private]
+secrets:
+  relay-config:
+    file: ${RELAY_CONFIG_PATH:?Set RELAY_CONFIG_PATH to a private JSON file outside the checkout}
+networks:
+  relay-private:
+volumes:
+  caddy-data:
+  caddy-config:

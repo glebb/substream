@@ -1,0 +1,14 @@
+# Allowlist only the dependency-free service and shared TypeScript core.
+# Private .env files and provider data must never enter this build context.
+**
+!services/
+!services/live-subtitle-relay/
+!services/live-subtitle-relay/**
+!src/
+!src/core/
+!src/core/**
+**/*.test.ts
+**/*.json
+**/.env*
+**/*.m3u
+**/*.m3u8

@@ -1,6 +1,8 @@
-# Tizen 3 live DVB subtitles: sync and flicker plan
+# Historical Tizen 3 live DVB subtitles experiment
 
-## Current result
+**Superseded on 2026-10-03.** This document preserves the earlier TV-side scanner findings, not current release behavior or a plan to re-enable it. The single-upstream server relay is now implemented, and the user accepted local real-TV playback as good enough for now. Use the [relay implementation notes](live-subtitle-relay.md), [current plan](live-subtitle-relay-plan.md), and [deployment handoff](live-subtitle-relay-deployment.md) for new work. Continuous TV-side DVB scanning remains disabled.
+
+## Historical device result
 
 On the physical Tizen 3 TV, live DVB subtitles now appear. The observed defects are that captions are out of sync with video and the same lines flicker or reappear multiple times. This confirms that discovery, decoding, and display work on at least the tested stream; it does not establish correct timing or stable presentation.
 
@@ -10,7 +12,7 @@ reported one reconnect and a subtitle mapping about 25 seconds ahead of
 AVPlay, consistent with the observed early captions. A direct-TS AVPlay probe
 also exposed no native subtitle track.
 
-## Transport finding and deferred architecture
+## Transport finding and replacement architecture
 
 DVB bitmap captions are packets inside the MPEG-TS multiplex alongside video
 and audio. HLS is the delivery playlist and its media segments; the direct
@@ -25,14 +27,16 @@ second, full-rate TS request. That request competes with AVPlay, and Chromium
 47 retains progressive XHR response text; ending or reconnecting it stopped
 playback in the device test. Live TV must keep that scanner disabled.
 
-The deferred reliable design is a companion relay: one upstream provider TS
+The replacement design is a separate live subtitle relay: one upstream provider TS
 connection, video/audio relayed to AVPlay, server-side DVB demultiplexing, and
 only compact subtitle frames or cue metadata sent to the TV overlay. This
 gives captions and video a shared clock without a second high-bitrate TV
-request. It is documented only, not implemented: protocol, backpressure,
-teardown, credential handling, and device validation still need design.
+request. That relay is now implemented with protocol, bounded image caching,
+teardown, private configuration and local real-TV testing; it is separate from
+the trusted-LAN VOD companion. Public hosting and measured timing validation
+remain outstanding.
 
-## Implemented path
+## Historical TV-side implementation
 
 - Tizen live playback now uses the provider HLS URL. The earlier playback buffer change uses a five-second threshold for both initial playback and resume; the quick TV test did not reproduce the playhead jump, but sustained playback has not been verified.
 - A bounded, plain GET probe of the direct TS stream reads audio language metadata missing from AVPlay's track list. The player maps those languages to AVPlay's audio tracks and prefers Finnish, then English, then the first track. Audio selection and the chosen default still need confirmation on the TV.
@@ -47,12 +51,13 @@ teardown, credential handling, and device validation still need design.
 - The live channel row layout was adjusted so the next EPG programme fits; the user confirmed that result on the TV. Before this TV report, `npm run check` passed 273 tests and `npm run build:tizen` succeeded. Those checks do not verify subtitle sync or stable rendering on hardware.
 - The Tizen canvas now detects an identical frame by its dimensions, position, and exact RGBA bytes. It skips clearing and redrawing that bitmap on subsequent render ticks, while changed frames replace the prior rectangle and explicit clears remain effective. A synthetic test covers repeated and changed frames plus idempotent clearing.
 
-## Next steps
+## Retired investigation steps
 
 The earlier TV-only scanner steps below are superseded by the device result.
 Keep normal Tizen 3 playback on one AVPlay source; do not re-enable continuous
-sideband DVB scanning. The remaining work, if resumed, is to design and
-validate the companion relay described above.
+sideband DVB scanning. The relay replacement has been implemented; continue
+with the deployment handoff instead. The steps below are retained only as a
+record of the earlier investigation.
 
 1. **Measure the two clocks.** Read the numeric diagnostics on the TV: AVPlay playhead, TS video PTS, subtitle PTS, mapped subtitle time, current playhead delta, reconnect count, and present/clear calls. Log no URL, response text, packet bytes, or caption content. Measure several consecutive captions and a reconnect on the same channel.
 2. **Fix the timing model.** Determine whether the separate TS request is ahead of or behind AVPlay's HLS playback, and whether that gap changes. Account for HLS latency and reconnects when mapping TS PTS to the AVPlay clock. Handle PTS wrap and playhead discontinuities. A single anchor captured when the first TS video packet arrives may be insufficient for independently started streams.
@@ -60,4 +65,4 @@ validate the companion relay described above.
 4. **Add synthetic regression tests.** The overlay now has synthetic coverage for repeated identical pixels, changed pixels, and repeated clears. Still cover a stream with a known TS/HLS delay, reconnects, PTS wrap, and page timeout. Assert cue timing and canvas present/clear counts; never use the private playlist or media in fixtures.
 5. **Verify on the target TV.** Test several minutes on the affected channel, including a reconnect, channel switch, subtitle toggle, and return from playback. Confirm captions appear once, remain visible for their intended duration, and track speech without increasing drift. Also confirm Finnish audio is selected by default and can be chosen manually, and watch for the earlier playhead jump. Then run `npm run check` and the Tizen build/package checks.
 
-The clock relationship and cause of flicker are hypotheses until measured on device. Preserve the current working display path while changing timing and presentation separately so each result can be checked.
+The earlier scanner's clock relationship and cause of flicker were not established. Its temporary display success is not a reason to re-enable it. The relay also retains `clock=unverified` until its AVPlay mapping is measured on device.

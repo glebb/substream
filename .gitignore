@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+!.env.live-relay.example
+.live-subtitle-relay/
 .companion-certs/
 .tizen-cli.local
 .tizen-devices.local

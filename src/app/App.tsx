@@ -32,6 +32,8 @@ import { CompanionPanel } from "./CompanionPanel.tsx";
 import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../platform/companion/search-catalog.ts";
 import { companionDeviceLabel, companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, stageLocalMedia, sendLocalCompanionPlayback, sendStopLocalCompanionPlayback, stopLocalMedia, getLocalMediaUploadStatus, getLocalMediaSubtitle, publishLocalMediaSubtitle, companionLocalMediaUrl, renewLocalMediaLease, reportLocalMediaState, isLanCompanionAddress, type BrowserCompanionConnection, type CompanionPlaybackSelection, type CompanionLocalPlayback, type CompanionLocalSubtitle, type LocalMediaUploadStatus } from "../platform/companion/client.ts";
 import { LiveTv } from "./LiveTv.tsx";
+import { LiveRelaySettings } from "./LiveRelaySettings.tsx";
+import { clearLiveRelayConfig, loadLiveRelayConfig, saveLiveRelayConfig, type NormalizedLiveRelayConfig } from "../platform/live-relay/config.ts";
 import { createAbortController } from "../platform/abort-controller.ts";
 import { LanguageContext, Localized, loadUiLanguage, saveUiLanguage, translate, type UiLanguage } from "./language.tsx";
 import { LocalMediaSource, classifyLocalFilename, localDisplayTitle, localSubtitleQuery } from "../platform/browser/local-media-source.ts";
@@ -216,6 +218,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
   const [showSettings, setShowSettings] = useState(settingsOnOpen);
   const [settingsConfirmation, setSettingsConfirmation] = useState<SettingsConfirmation | null>(null);
   const [settingsStatus, setSettingsStatus] = useState("");
+  const [liveRelayConfig, setLiveRelayConfig] = useState<NormalizedLiveRelayConfig | null>(loadLiveRelayConfig);
   const [editingCompanionServer, setEditingCompanionServer] = useState(false);
   const [companionServerDraft, setCompanionServerDraft] = useState(companionServerUrl);
   const [webTvConnectionStatus, setWebTvConnectionStatus] = useState("");
@@ -1608,7 +1611,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
         return;
       }
       if (settingsConfirmation || showSettings) {
-        const settingsTextEntry = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+        const settingsTextEntry = event.target instanceof HTMLTextAreaElement
+          || event.target instanceof HTMLInputElement && event.target.type !== "checkbox";
         if (editingCompanionServer && event.target === settingsControlsRef.current["companion-url"] && (key === "ArrowUp" || key === "ArrowDown")) setEditingCompanionServer(false);
         if (editingSubtitleLanguage && event.target === subtitleLanguageControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingSubtitleLanguage(false);
         if (editingTmdbToken && event.target === tmdbTokenControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingTmdbToken(false);
@@ -1618,6 +1622,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
           confirmationOpen: Boolean(settingsConfirmation),
           apiKeyEditorOpen: showSettingsApiKeyEditor,
           hasSubtitleKey,
+          liveRelayControlsVisible: isTizen,
         });
         const controls = order
           .map((controlKey) => settingsControlsRef.current[controlKey])
@@ -1636,7 +1641,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
         }
         if (key === "Enter") {
           event.preventDefault();
-          if (controls[currentIndex] instanceof HTMLButtonElement) controls[currentIndex].click();
+          const control = controls[currentIndex];
+          if (control instanceof HTMLButtonElement || control instanceof HTMLInputElement && control.type === "checkbox") control.click();
         }
         return;
       }
@@ -2649,6 +2655,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
         setSettingsStatus("Local VOD catalogue cleared. Your saved playlist setting is unchanged.");
       } else {
         clearSavedPlaylistUrl();
+        clearLiveRelayConfig();
+        setLiveRelayConfig(null);
         clearSavedOpenSubtitlesSettings();
         clearSavedTmdbCredentials();
         setTmdbCredentials({ readAccessToken: "", apiKey: "" });
@@ -2898,6 +2906,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
               <button className={settingsFocusClass("back")} data-settings-focus="back" type="button" ref={(element) => registerSettingsControl("back", element)} onClick={() => { setEditingCompanionServer(false); if (settingsOnOpen) onMainMenu(); else setShowSettings(false); }}>{settingsOnOpen ? "Back to main menu" : "Back to library"}</button>
           </div>
           {isTizen && <CompanionPanel playlistUrl={playlistUrl} onPlay={openCompanionTitle} onLocalPlay={openCompanionLocalMedia} onLocalStop={stopCompanionLocalMedia} editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTizen} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
+          {isTizen && <LiveRelaySettings config={liveRelayConfig} language={language} onSave={(config) => { const saved = saveLiveRelayConfig(config); setLiveRelayConfig(saved); setSettingsStatus("Live subtitle relay settings saved."); }} onRemove={() => { clearLiveRelayConfig(); setLiveRelayConfig(null); setSettingsStatus("Saved live subtitle relay settings removed."); }} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
           <section className="settings-section">
             <h3>{language === "fi" ? "Käyttöliittymän kieli" : "Interface language"}</h3>
             <label htmlFor="ui-language">{language === "fi" ? "Kieli" : "Language"}</label>

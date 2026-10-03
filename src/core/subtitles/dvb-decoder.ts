@@ -114,6 +114,14 @@ export class DvbSubtitleDecoder {
     return renderSet(active, this.maxDisplayPixels);
   }
 
+  /** Returns the current page's timeout in seconds for cue scheduling. */
+  getActiveTimeoutAtTimestamp(seconds: number): number | undefined {
+    if (this.disposed || !Number.isFinite(seconds)) return undefined;
+    let active: DisplaySet | undefined;
+    for (const set of this.sets) if (set.at <= seconds) active = set;
+    return active?.timeout;
+  }
+
   reset(): void {
     this.page = { timeout: 0, state: 0, regions: [] };
     this.regions.clear(); this.objects.clear(); this.cluts.clear(); this.sets = [];
@@ -335,7 +343,9 @@ function readRun(reader: BitReader, bits: number): { length: number; color: numb
 
 class BitReader {
   private bit = 0;
-  constructor(private readonly bytes: Uint8Array, private readonly start: number) {}
+  private readonly bytes: Uint8Array;
+  private readonly start: number;
+  constructor(bytes: Uint8Array, start: number) { this.bytes = bytes; this.start = start; }
   get remaining(): number { return (this.bytes.length - this.start) * 8 - this.bit; }
   get bytesRead(): number { return Math.ceil(this.bit / 8); }
   read(size: number): number | undefined {

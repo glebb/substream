@@ -6,6 +6,8 @@ import { loadPlaylistUrl } from "../platform/browser/playlist-config.ts";
 import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
 import type { AudioTrack, LiveBufferWindow, MediaPlayer, PlaybackState } from "../platform/media-player.ts";
 import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avplay-player.ts";
+import { TizenLiveRelayPlayer } from "../platform/tizen/live-relay-player.ts";
+import { loadLiveRelayConfig, relayChannelId } from "../platform/live-relay/config.ts";
 import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "../platform/tizen/remote.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { DnaGuideClient } from "../platform/dna/client.ts";
@@ -116,6 +118,10 @@ export function LiveTv({ onMainMenu }: Props) {
   const liveSubtitlesEnabledRef = useRef(true);
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
   const [audioStatus, setAudioStatus] = useState("");
+  const [relayPlaybackLabel, setRelayPlaybackLabel] = useState("");
+  const [relayDiagnostics, setRelayDiagnostics] = useState("");
+  const previousPlayerTeardown = useRef<Promise<void>>(Promise.resolve());
+  const subtitleSelectionManualRef = useRef(false);
   const [showLiveHint, setShowLiveHint] = useState(false);
   const liveHintTimerRef = useRef<number | null>(null);
   const audioSelectionManualRef = useRef(false);
@@ -146,16 +152,24 @@ export function LiveTv({ onMainMenu }: Props) {
       setLiveSubtitleStatus("Subtitles: Off");
       return;
     }
+    if (subtitleSelectionManualRef.current) {
+      const active = tracks.find((track) => track.selected);
+      if (active) { setLiveSubtitleStatus(`Subtitles: ${active.label}`); return; }
+    }
     let remaining = [...tracks];
     while (remaining.length) {
       const preferred = preferredEmbeddedSubtitleTrack(remaining, loadSubtitlePreferences().languagePreference);
       if (!preferred) break;
       if (player.selectEmbeddedSubtitleTrack?.(preferred.id)) {
         const language = (preferred.language ?? preferred.label).trim().toLocaleLowerCase();
-        setLiveSubtitleStatus(`Subtitles: ${language.startsWith("fi") || language.startsWith("fin") ? "Finnish" : "English"}`);
+        setLiveSubtitleStatus(`Subtitles: ${language.startsWith("fi") || language.startsWith("fin") ? "Finnish" : "English"}${player instanceof TizenLiveRelayPlayer ? " · Timing test" : ""}`);
         return;
       }
       remaining = remaining.filter((track) => track.id !== preferred.id);
+    }
+    if (player instanceof TizenLiveRelayPlayer) {
+      setLiveSubtitleStatus(player.getRelaySubtitleStatus());
+      return;
     }
     if (player instanceof TizenAvPlayPlayer) {
       const status = player.getLiveDvbSubtitleStatus();
@@ -423,37 +437,172 @@ export function LiveTv({ onMainMenu }: Props) {
     if (!selected || !client) return;
     setHasStartedPlayback(false);
     audioSelectionManualRef.current = false;
+    subtitleSelectionManualRef.current = false;
     setEmbeddedSubtitleTracks([]);
     setAudioTracks([]);
-    const player: MediaPlayer | null = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {}) : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
-    if (!player) { setPlaybackState("error"); return; }
-    playerRef.current = player;
-    // Live TV enables embedded subtitle discovery on browser and AVPlay players.
-    player.setLiveSubtitleMode?.(true);
-    // Probe metadata only while HLS is active. Direct TS mode is a transport
-    // test using AVPlay alone, with no parallel TS reader or DVB scanner.
-    if (liveSource === "hls") player.setLiveAudioMetadataUrl?.(client.liveStreamUrl(selected.providerStreamId, "ts"));
-    player.setEventHandlers({
+    setRelayPlaybackLabel("");
+    setRelayDiagnostics("");
+    let cancelled = false;
+    let player: MediaPlayer | null = null;
+    let fallingBack = false;
+    let relayRecovery: Promise<void> | null = null;
+    let relayErrorDuringRecovery: TizenLiveRelayPlayer | null = null;
+    let relayReconnects = 0;
+    let relayHasPlayed = false;
+    let diagnosticTimer: ReturnType<typeof setInterval> | undefined;
+    const config = loadLiveRelayConfig();
+    const hostedChannelId = config ? relayChannelId(config, selected.providerStreamId, selected.name) : null;
+    const bind = (active: MediaPlayer) => {
+      player = active;
+      playerRef.current = active;
+      active.setLiveSubtitleMode?.(true);
+      active.setEventHandlers({
       onStateChange: (state) => {
+        if (cancelled || playerRef.current !== active) return;
+        if (state === "error" && active instanceof TizenLiveRelayPlayer) {
+          if (relayRecovery) { relayErrorDuringRecovery = active; return; }
+          if (relayHasPlayed || relayReconnects > 0) { void recoverRelay(active); return; }
+          void fallBack(active);
+          return;
+        }
         const wasPlaying = playbackStateRef.current === "playing";
         playbackStateRef.current = state;
         setPlaybackState(state);
         if (state === "playing") {
+          if (active instanceof TizenLiveRelayPlayer) relayHasPlayed = true;
           setHasStartedPlayback(true);
-          if (!wasPlaying) reconcileAudioTracks(player, player.getAudioTracks?.() ?? []);
+          if (!wasPlaying) reconcileAudioTracks(active, active.getAudioTracks?.() ?? []);
         }
-        // DVB descriptors may be found while the video is still connecting.
-        // Reconcile again once playback starts so early track discovery is not
-        // left unselected.
-        if (state === "playing") reconcileEmbeddedSubtitles(player, player.getEmbeddedSubtitleTracks?.() ?? []);
+        if (state === "playing") reconcileEmbeddedSubtitles(active, active.getEmbeddedSubtitleTracks?.() ?? []);
       },
-      onLiveBufferWindowChange: setLiveBufferWindow,
-      onEmbeddedSubtitleTracksChange: (tracks) => { setEmbeddedSubtitleTracks(tracks); reconcileEmbeddedSubtitles(player, tracks); },
-      onAudioTracksChange: (tracks) => reconcileAudioTracks(player, tracks),
-    });
-    player.load(client.liveStreamUrl(selected.providerStreamId, liveSource === "hls" ? "m3u8" : "ts"));
+      onProgress: () => { if (!cancelled && playerRef.current === active && active instanceof TizenLiveRelayPlayer) relayHasPlayed = true; },
+      onLiveBufferWindowChange: (value) => { if (!cancelled && playerRef.current === active) setLiveBufferWindow(value); },
+      onEmbeddedSubtitleTracksChange: (tracks) => {
+        if (cancelled || playerRef.current !== active) return;
+        setEmbeddedSubtitleTracks(tracks); reconcileEmbeddedSubtitles(active, tracks);
+      },
+      onAudioTracksChange: (tracks) => { if (!cancelled && playerRef.current === active) reconcileAudioTracks(active, tracks); },
+      });
+    };
+    const startDirect = () => {
+      if (cancelled) return;
+      const direct: MediaPlayer | null = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {})
+        : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
+      if (!direct) { setPlaybackState("error"); return; }
+      bind(direct);
+      // Avoid a second provider connection while recovering a broken live stream.
+      if (liveSource === "hls" && !fallingBack) direct.setLiveAudioMetadataUrl?.(client.liveStreamUrl(selected.providerStreamId, "ts"));
+      direct.load(client.liveStreamUrl(selected.providerStreamId, liveSource === "hls" ? "m3u8" : "ts"));
+    };
+    const makeRelay = (): TizenLiveRelayPlayer => {
+      relayHasPlayed = false;
+      const hosted = new TizenLiveRelayPlayer(objectRef.current!, config!, hostedChannelId!, {
+        mediaToPlayheadOffsetMs: config?.offsetMs ?? 0,
+        preferredLanguage: loadSubtitlePreferences().languagePreference,
+      });
+      bind(hosted);
+      if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
+      if (config?.diagnosticsEnabled) diagnosticTimer = setInterval(() => {
+        if (!cancelled && player === hosted) setRelayDiagnostics(hosted.getRelayDiagnostics());
+      }, 500);
+      return hosted;
+    };
+    const resetRelayPlaybackState = () => {
+      playbackStateRef.current = "loading";
+      setPlaybackState("loading");
+      setHasStartedPlayback(false);
+      setLiveBufferWindow(null);
+      setEmbeddedSubtitleTracks([]);
+      setAudioTracks([]);
+      setAudioStatus("");
+      setLiveSubtitleStatus("");
+      setRelayDiagnostics("");
+    };
+    async function fallBack(failed: TizenLiveRelayPlayer): Promise<void> {
+      if (cancelled || fallingBack || player !== failed) return;
+      fallingBack = true;
+      failed.setEventHandlers(null);
+      if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
+      setRelayDiagnostics("");
+      setRelayPlaybackLabel("Relay unavailable · Closing session…");
+      try { await failed.close(); }
+      catch {
+        if (!cancelled) { setRelayPlaybackLabel("Relay session could not be closed"); setPlaybackState("error"); }
+        return;
+      }
+      if (cancelled) return;
+      setRelayPlaybackLabel("Relay unavailable · Direct playback");
+      setEmbeddedSubtitleTracks([]);
+      startDirect();
+    }
+    async function recoverRelay(failed: TizenLiveRelayPlayer): Promise<void> {
+      if (cancelled || fallingBack || player !== failed) return;
+      if (relayRecovery) return relayRecovery;
+      relayRecovery = (async () => {
+        let current = failed;
+        while (!cancelled && relayReconnects < 2) {
+          relayReconnects += 1;
+          current.setEventHandlers(null);
+          if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
+          diagnosticTimer = undefined;
+          resetRelayPlaybackState();
+          setRelayPlaybackLabel("Subtitle relay · Reconnecting…");
+          try { await current.close(); }
+          catch {
+            if (!cancelled) {
+              setRelayPlaybackLabel("Relay session could not be closed");
+              playbackStateRef.current = "error";
+              setPlaybackState("error");
+            }
+            return;
+          }
+          if (cancelled) return;
+          if (!config || !hostedChannelId || !isTizenAvPlayAvailable() || !objectRef.current) break;
+          try {
+            current = makeRelay();
+            await current.start();
+            if (cancelled) return;
+            if (relayErrorDuringRecovery === current) {
+              relayErrorDuringRecovery = null;
+              throw new Error("Relay playback failed while reconnecting.");
+            }
+            setRelayPlaybackLabel("Subtitle relay · Timing test");
+            return;
+          } catch {
+            // start() may report an error through its event handler as well; the
+            // recovery promise guard prevents that callback from starting a peer.
+            if (cancelled) return;
+            if (relayErrorDuringRecovery === current) relayErrorDuringRecovery = null;
+          }
+        }
+        if (!cancelled && player === current) await fallBack(current);
+        else if (!cancelled && player === failed) await fallBack(failed);
+      })().finally(() => {
+        relayRecovery = null;
+        const lateFailedRelay = relayErrorDuringRecovery;
+        relayErrorDuringRecovery = null;
+        if (lateFailedRelay && !cancelled && player === lateFailedRelay) void recoverRelay(lateFailedRelay);
+      });
+      return relayRecovery;
+    }
+    void previousPlayerTeardown.current.then(async () => {
+      if (cancelled) return;
+      if (config?.enabled && hostedChannelId && isTizenAvPlayAvailable() && objectRef.current) {
+        const hosted = makeRelay();
+        setRelayPlaybackLabel("Subtitle relay · Timing test");
+        try { await hosted.start(); }
+        catch { await fallBack(hosted); }
+      } else startDirect();
+    }).catch(() => { if (!cancelled) setPlaybackState("error"); });
     return () => {
-      player.setEventHandlers(null); player.destroy(); if (playerRef.current === player) playerRef.current = null;
+      cancelled = true;
+      if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
+      player?.setEventHandlers(null);
+      if (player instanceof TizenLiveRelayPlayer) {
+        const closing = player.close().catch(() => undefined);
+        previousPlayerTeardown.current = Promise.all([previousPlayerTeardown.current, closing, relayRecovery ?? Promise.resolve()]).then(() => undefined);
+      } else player?.destroy();
+      if (playerRef.current === player) playerRef.current = null;
     };
   }, [client, isTizen, liveSource, retryCount, selected]);
 
@@ -583,6 +732,25 @@ export function LiveTv({ onMainMenu }: Props) {
       reconcileEmbeddedSubtitles(player, player?.getEmbeddedSubtitleTracks?.() ?? []);
     }
   };
+  const selectNextSubtitleTrack = () => {
+    const player = playerRef.current;
+    const tracks = player?.getEmbeddedSubtitleTracks?.() ?? [];
+    if (!player || !tracks.length) return;
+    const current = tracks.findIndex((track) => track.selected);
+    const next = tracks[(current + 1) % tracks.length];
+    const previouslyManual = subtitleSelectionManualRef.current;
+    const previouslyEnabled = liveSubtitlesEnabledRef.current;
+    subtitleSelectionManualRef.current = true;
+    liveSubtitlesEnabledRef.current = true;
+    if (!next || !player.selectEmbeddedSubtitleTrack?.(next.id)) {
+      subtitleSelectionManualRef.current = previouslyManual;
+      liveSubtitlesEnabledRef.current = previouslyEnabled;
+      setLiveSubtitleStatus("Subtitle track could not be changed.");
+      return;
+    }
+    setLiveSubtitlesEnabled(true);
+    setLiveSubtitleStatus(`Subtitles: ${next.label}`);
+  };
   const toggleLiveSource = () => {
     if (playerFullscreen || !isTizenAvPlayAvailable()) return;
     setEmbeddedSubtitleTracks([]);
@@ -693,8 +861,9 @@ export function LiveTv({ onMainMenu }: Props) {
       <button type="button" onClick={selectNextAudioTrack} ref={(element) => { playerControlRefs.current[7] = element; }}>{audioTracks.length ? `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}` : "Audio: unavailable"}</button>
       <button type="button" aria-pressed={liveSubtitlesEnabled} onClick={toggleLiveSubtitles} ref={(element) => { playerControlRefs.current[8] = element; }}>{`Subtitles: ${liveSubtitlesEnabled ? "On" : "Off"}`}</button>
       {isTizenAvPlayAvailable() && !playerFullscreen && <button type="button" onClick={toggleLiveSource} ref={(element) => { playerControlRefs.current[9] = element; }}>{liveSource === "hls" ? "Try direct TS source" : "Switch back to HLS"}</button>}
+      {embeddedSubtitleTracks.length > 1 && <button type="button" onClick={selectNextSubtitleTrack} ref={(element) => { playerControlRefs.current[10] = element; }}>Subtitle language</button>}
       {audioStatus && <span className="live-buffer-status" role="status">{audioStatus}</span>}
-      <span className="playback-status">{playbackState === "playing" || hasStartedPlayback ? `${liveSource === "hls" ? "HLS" : "Direct TS"} · ${liveSubtitleStatus || "Live"}` : playbackState === "error" ? `${liveSource === "hls" ? "HLS" : "Direct TS"} · Error` : `${liveSource === "hls" ? "HLS" : "Direct TS"} · Connecting`}</span>
+      <span className="playback-status">{relayPlaybackLabel === "Subtitle relay · Reconnecting…" ? relayPlaybackLabel : `${relayPlaybackLabel || (liveSource === "hls" ? "HLS" : "Direct TS")} · ${playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}${relayDiagnostics ? ` · ${relayDiagnostics}` : ""}`}</span>
       {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}
     </div>
   </main></Localized>;

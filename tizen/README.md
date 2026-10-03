@@ -63,6 +63,18 @@ These build and package both compatibility variants into `tizen/Debug/`. They re
 
 ## Troubleshooting and validation
 
+### Multi-Sub live subtitle relay
+
+Personal Tizen preparation/build/packaging embeds the settings from the gitignored `.env.live-relay`. Run `npm run relay:personal` on the Mac to create those defaults, discover all provider channels marked `Multi-Sub`, and start the separate subtitle service. Matching channels select it automatically; no manual TV address, credential or channel mapping is needed. Keep the Mac awake. `dev:personal` starts the VOD/local-file companion, not this subtitle service.
+
+Saved relay settings on the TV override bundled defaults, including an explicit opt-out. Standard/public packages do not enable or embed the personal relay credential. Personal packages remain private. See [local setup and configuration](../docs/live-subtitle-relay.md#automatic-personal-setup).
+
+`Subtitle relay · Timing test` identifies relay playback. `progress=local`, `ack=confirmed`, and a changing `playheadMs` confirm the native playback clock and startup acknowledgement; `clock=unverified` remains until quantitative timing checks. `bufferEvents` counts native buffering starts. Runtime failures try two new relay sessions with `Subtitle relay · Reconnecting…` before `Relay unavailable · Direct playback`; initial setup failures go directly to fallback after teardown. Reconnection pauses are expected. The fallback does not open the extra provider TS audio-language probe.
+
+Client recovery changes require a newly prepared, signed and installed TV package. The server timeout fix only requires restarting the relay. When moving to public HTTPS, update private build defaults, disable LAN HTTP opt-in, rebuild/reinstall, and verify certificate trust on the actual TV. The [deployment handoff](../docs/live-subtitle-relay-deployment.md) records the remaining work. Local testing was accepted as good enough on 2026-10-03; sustained stability and measured subtitle timing remain unverified.
+
+### General troubleshooting
+
 - **Cannot connect:** check Developer Mode, Host PC IP, the restart, port 26101, and LAN isolation/firewall settings.
 - **Install rejected:** check the active certificate, distributor DUID, and permit-to-install step. Replacing the app does not bypass certificate requirements.
 - **Missing package or wrong variant:** prepare, sign, and collect the same target again in that order.

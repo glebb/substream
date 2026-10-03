@@ -579,6 +579,14 @@ button:disabled { cursor: default; opacity: .45; }
 }
 .tv-ui .settings-screen > .settings-section.danger-zone { flex-basis: calc(100% - 16px); width: calc(100% - 16px); }
 .tv-ui .settings-screen > .settings-section.companion-panel { flex-basis: 100%; margin: 0 0 16px; width: 100%; }
+.tv-ui .settings-screen > .settings-section.live-relay-settings { flex-basis: 100%; margin: 0 0 16px; width: 100%; }
+.live-relay-settings > textarea {
+  background: #151d2b; border: 1px solid #273349; border-radius: .55rem; box-sizing: border-box;
+  color: #f4f7ff; display: block; font: inherit; margin: .5rem 0; max-width: 36rem;
+  padding: .85rem 1rem; resize: vertical; width: 100%;
+}
+.live-relay-settings > textarea:focus { box-shadow: 0 0 0 3px #080a10, 0 0 0 7px #ffd54a; outline: 0; }
+.live-relay-settings > label > input[type="checkbox"] { display: inline-block; margin: 0 8px 0 0; }
 
 @supports (display: grid) {
   .episode-picker-options { display: grid; margin: 1rem 0 0; }

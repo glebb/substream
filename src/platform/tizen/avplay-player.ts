@@ -50,6 +50,11 @@ export function isTizenAvPlayAvailable(): boolean {
   return avplay() !== undefined;
 }
 
+export interface TizenAvPlayPlayerOptions {
+  /** Overrides the normal five second live/VOD buffer target. */
+  bufferSeconds?: number;
+}
+
 /**
  * Tizen's AVPlay uses a hardware video plane, unlike an HTML video element.
  * Keep it isolated so browser development stays independent of Tizen globals.
@@ -86,6 +91,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   constructor(
     private readonly container: HTMLElement,
     private readonly onSubtitleCue: (text: string) => void,
+    private readonly options: TizenAvPlayPlayerOptions = {},
   ) {}
 
   setEventHandlers(handlers: MediaPlayerEventHandlers | null): void {
@@ -501,7 +507,10 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     if (!player.setBufferingParam) return;
     // AVPlay accepts these settings only in IDLE, after open() and before prepareAsync().
     // Local progressive files get ten seconds of headroom for Wi-Fi jitter.
-    const seconds = localMedia ? 10 : 5;
+    const configuredSeconds = this.options.bufferSeconds;
+    const seconds = Number.isFinite(configuredSeconds) && configuredSeconds! >= 1 && configuredSeconds! <= 30
+      ? Math.round(configuredSeconds!)
+      : localMedia ? 10 : 5;
     // Use the same threshold for initial playback and rebuffering. A much
     // larger resume threshold makes AVPlay wait for a different amount of media
     // after a stall, which can amplify timestamp discontinuities on older TVs.
@@ -625,16 +634,24 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   }
 
   private emitProgress(currentTimeMilliseconds: number, player: AvPlayApi): void {
-    if (!Number.isFinite(currentTimeMilliseconds) || !player.getDuration) return;
+    if (!Number.isFinite(currentTimeMilliseconds)) return;
+    if (!player.getDuration) {
+      if (this.liveSubtitleMode) this.eventHandlers?.onProgress?.({ currentTimeSeconds: Math.max(0, currentTimeMilliseconds / 1_000), durationSeconds: 0 });
+      return;
+    }
     try {
       const durationMilliseconds = player.getDuration();
-      if (!Number.isFinite(durationMilliseconds) || durationMilliseconds <= 0) return;
+      if (!Number.isFinite(durationMilliseconds) || durationMilliseconds <= 0) {
+        if (this.liveSubtitleMode) this.eventHandlers?.onProgress?.({ currentTimeSeconds: Math.max(0, currentTimeMilliseconds / 1_000), durationSeconds: 0 });
+        return;
+      }
       this.eventHandlers?.onProgress?.({
         currentTimeSeconds: Math.max(0, currentTimeMilliseconds / 1_000),
         durationSeconds: durationMilliseconds / 1_000,
       });
     } catch {
       // Duration may be unavailable while AVPlay is preparing the stream.
+      if (this.liveSubtitleMode) this.eventHandlers?.onProgress?.({ currentTimeSeconds: Math.max(0, currentTimeMilliseconds / 1_000), durationSeconds: 0 });
     }
   }
 

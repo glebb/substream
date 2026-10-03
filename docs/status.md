@@ -22,9 +22,13 @@ Finnish SkyShowtime 1 and 2 prefer the public EPGShare Swedish (`SE1`) XMLTV fee
 
 The trusted-LAN companion service is not required by the TV. It carries provider VOD selections and can stage a browser-selected local video for a paired TV without requiring an IPTV playlist. Provider commands remain fingerprint-checked; local media uses a separate capability, short-lived ticket, range streaming, and TV playback-state lease. Release-style episode filenames trigger preferred-language OpenSubtitles matching. External local subtitles, enabled state, and timing offset follow that session. Incompatible local files are prepared on the computer as bounded-bitrate H.264 MP4 with supported audio preserved before TV playback; this requires ffmpeg/ffprobe and can delay startup. A relay outage cannot affect TV startup or provider browsing; a failed direct Nordic-guide request falls back to the provider guide.
 
-Playback uses browser HLS/native video or Tizen AVPlay with provider TS output. It starts fullscreen. Up/Down changes channels without wrapping; Back returns to the list. Browser adapters expose Rewind 30 seconds and Go live when a usable live buffer exists. This is limited to the available buffer, not recording or provider catch-up. Live playback does not create VOD resume records.
+Playback uses browser HLS/native video or Tizen AVPlay. Direct Tizen playback defaults to provider HLS, with a direct-TS toggle. Configured relay channels use relay-generated MPEG-TS HLS independently of that toggle. Playback starts fullscreen. Up/Down changes channels without wrapping; Back returns to the list. Browser adapters expose Rewind 30 seconds and Go live when a usable live buffer exists. This is limited to the available buffer, not recording or provider catch-up. Live playback does not create VOD resume records.
 
-Embedded subtitles prefer Finnish, then English. The browser's DVB worker requires actual subtitle packets. Tizen uses AVPlay text tracks when present and a separate direct-TS DVB decoder and canvas overlay for streams where AVPlay exposes no text track. The Tizen DVB path displays captions on the target TV, but timing and repeated-line flicker still need work; see the [Tizen subtitle plan](live-dvb-subtitles-plan.md) and [embedded live subtitles](live-dvb-subtitles.md).
+Embedded subtitles prefer Finnish, then English. The browser's DVB worker requires actual subtitle packets; Tizen uses AVPlay text tracks when present. Continuous TV-side TS subtitle scanning remains disabled after it disrupted playback on Tizen 3. The supported Multi-Sub solution is the separate [live subtitle relay](live-subtitle-relay.md): one provider connection supplies relayed video/audio and server-decoded PNG captions, scheduled by the TV's AVPlay playhead.
+
+Personal Tizen builds automatically enable the relay for all provider titles marked `Multi-Sub`; `npm run relay:personal` discovers the matching channel IDs and runs the Mac service using gitignored `.env.live-relay`. Standard/public builds do not embed its device credential. Saved TV settings override bundled defaults. The relay prepares three completed chunks, requests eight-second TV buffering, and tries two fresh relay sessions after a playback failure before direct fallback. It closes the old session first; fallback omits the separate TS audio-language probe.
+
+On 2026-10-03 the user accepted local real-TV playback as good enough for now. Sky Showtime 1 was more stable than 2; diagnostic testing found incoming delivery gaps, an initial 20-second timeout bug (fixed), and a subsequent `upstream-ended` failure. `clock=unverified` remains intentional: quantitative subtitle timing and a sustained soak have not been recorded. Internet deployment is the next task, starting with the [deployment handoff](live-subtitle-relay-deployment.md). See the [historical TV-side experiment](live-dvb-subtitles-plan.md) for why that path was replaced.
 
 ## VOD playback and configuration
 
@@ -43,6 +47,8 @@ Settings holds playlist and API configuration. If local storage is denied, confi
 | `src/platform/xtream`, `tmdb`, `opensubtitles` | External service adapters |
 | `src/platform/browser`, `web`, `tizen` | Playback, device storage, network and remote integration |
 | `src/platform/companion` | Optional web-to-TV command client, local media staging/streaming, and browser-owned Xtream search/cache adapter |
+| `src/core/live-relay`, `src/platform/live-relay`, `src/platform/tizen/live-relay-player.ts` | Relay protocol, cue scheduling, device configuration, authenticated client and Tizen PNG overlay |
+| `services/live-subtitle-relay`, `deploy/live-subtitle-relay` | Single-stream ingest/packaging, server subtitle decoding, bounded session API, and prepared public deployment artifacts |
 | `src/app/App.tsx`, `LiveTv.tsx` | VOD/application shell and live UI |
 | `src/app/remote-navigation.ts`, `remote-editable.tsx` | Focus decisions and deliberate TV text editing |
 | `scripts/`, `vite.config.ts`, `tizen/` | Development services, build targets, packaging and deployment |
@@ -56,5 +62,6 @@ Settings holds playlist and API configuration. If local storage is denied, confi
 - Large non-streaming M3U responses need a future file-backed import path.
 - Browser playback depends on provider access, CORS, and codec support. The development MKV fallback is described in [the browser/relay guide](companion-search.md#browser-mkv-audio).
 - Physical Tizen playback, embedded subtitles, remote responsiveness, and sustained browser live playback require device checks. Builds and unit tests do not establish hardware compatibility.
+- The live subtitle relay is accepted locally but not deployed publicly. Reconnects include preparation pauses, the subtitle clock remains provisionally mapped, and a VPS cannot repair an unavailable provider channel. Public HTTPS trust, resource sizing, restart and rollback still need verification.
 
 Completed live-TV and Tizen UX plans have been consolidated here and in the navigation/verification guides. New work should be scoped against the implementation above rather than the retired plans.

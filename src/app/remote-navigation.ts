@@ -89,6 +89,15 @@ export type SettingsControlKey =
   | "playlist"
   | "companion-url"
   | "companion-start"
+  | "relay-enabled"
+  | "relay-url"
+  | "relay-allow-http"
+  | "relay-credential"
+  | "relay-mappings"
+  | "relay-offset"
+  | "relay-diagnostics"
+  | "relay-save"
+  | "relay-remove"
   | "ui-language"
   | "subtitle-language"
   | "api-key-input"
@@ -109,6 +118,7 @@ export interface SettingsControlOrderOptions {
   confirmationOpen: boolean;
   apiKeyEditorOpen: boolean;
   hasSubtitleKey: boolean;
+  liveRelayControlsVisible?: boolean;
 }
 
 /** Returns visible Settings controls in their logical DOM order. */
@@ -119,6 +129,7 @@ export function settingsControlOrder(options: SettingsControlOrderOptions): Sett
     "back",
     "companion-url",
     "companion-start",
+    ...(options.liveRelayControlsVisible ? ["relay-enabled", "relay-url", "relay-allow-http", "relay-credential", "relay-mappings", "relay-offset", "relay-diagnostics", "relay-save", "relay-remove"] as const : []),
     "ui-language",
     "playlist",
     "subtitle-language",
