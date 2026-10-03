@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { validateRelayConfig } from './config.ts';
 import { createRelayServer } from './service.ts';
 import type { RelayWorker, RelayWorkerFactory } from './ingest.ts';
@@ -42,9 +42,10 @@ describe('live subtitle relay HTTP API', () => {
     if (server) await server.shutdown();
     if (root) await rm(root, { recursive: true, force: true });
     server = undefined; root = undefined;
+    vi.useRealTimers();
   });
 
-  async function start(maxSessions = 1, suppliedFactory?: RelayWorkerFactory, startupAckTimeoutMs?: number, onDiagnostic?: (event: import('./service.ts').RelayDiagnosticEvent) => void) {
+  async function start(maxSessions = 1, suppliedFactory?: RelayWorkerFactory, startupAckTimeoutMs?: number, onDiagnostic?: (event: import('./service.ts').RelayDiagnosticEvent) => void, mediaIdleTimeoutMs?: number) {
     root = await mkdtemp(join(tmpdir(), 'relay-service-test-'));
     const workers: FakeWorker[] = [];
     const factory: RelayWorkerFactory = suppliedFactory ?? { async create() { const worker = new FakeWorker(); workers.push(worker); return worker; } };
@@ -52,7 +53,7 @@ describe('live subtitle relay HTTP API', () => {
     server = await createRelayServer(validateRelayConfig({
       apiToken: TOKEN, channels: { sky: 'https://provider.example/live?fixture=synthetic' },
       sessionRoot: join(root, 'sessions'), maxSessions,
-    }), { workerFactory: factory, ...(onDiagnostic ? { onDiagnostic } : {}), randomToken: () => (++token).toString(16).padStart(32, '0') + '0'.repeat(32), ...(startupAckTimeoutMs !== undefined ? { startupAckTimeoutMs } : {}) });
+    }), { workerFactory: factory, ...(onDiagnostic ? { onDiagnostic } : {}), randomToken: () => (++token).toString(16).padStart(32, '0') + '0'.repeat(32), ...(startupAckTimeoutMs !== undefined ? { startupAckTimeoutMs } : {}), ...(mediaIdleTimeoutMs !== undefined ? { mediaIdleTimeoutMs } : {}) });
     async function invoke(method: string, path: string, options: { body?: unknown; authorization?: string; origin?: string } = {}) {
       const payload = options.body === undefined ? undefined : Buffer.from(JSON.stringify(options.body));
       const request = Readable.from(payload ? [payload] : []) as Readable & Record<string, unknown>;
@@ -179,6 +180,77 @@ describe('live subtitle relay HTTP API', () => {
     expect(workers[0]?.stopped).toBe(true);
     expect((await invoke('POST', info.heartbeatUrl, { authorization: 'Bearer ' + TOKEN })).status).toBe(404);
     await expect(rm(join(root!, 'sessions', info.sessionId))).rejects.toThrow();
+  });
+
+  it('starts no upstream for health checks and expires an abandoned session without further requests', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { invoke, workers } = await start();
+    await invoke('GET', '/healthz');
+    expect(workers).toHaveLength(0);
+    const created = JSON.parse((await invoke('POST', '/v1/sessions', { authorization: 'Bearer ' + TOKEN, body: { channelId: 'sky' } })).body);
+    await invoke('POST', created.playbackStartedUrl, { authorization: 'Bearer ' + TOKEN });
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(workers[0]!.stopped).toBe(true);
+    expect((await invoke('GET', created.statusUrl, { authorization: 'Bearer ' + TOKEN })).status).toBe(404);
+    await server!.shutdown();
+    expect(await readdir(join(root!, 'sessions'))).toEqual([]);
+  });
+
+  it('does not let heartbeats, playlists or captions keep an unused provider stream alive', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { invoke, workers } = await start(1, undefined, undefined, undefined, 1000);
+    const created = JSON.parse((await invoke('POST', '/v1/sessions', { authorization: 'Bearer ' + TOKEN, body: { channelId: 'sky' } })).body);
+    await invoke('POST', created.playbackStartedUrl, { authorization: 'Bearer ' + TOKEN });
+    await vi.advanceTimersByTimeAsync(700);
+    await invoke('POST', created.heartbeatUrl, { authorization: 'Bearer ' + TOKEN });
+    await invoke('GET', created.mediaUrl);
+    await invoke('GET', created.cueUrl, { authorization: 'Bearer ' + TOKEN });
+    await vi.advanceTimersByTimeAsync(301);
+    expect(workers[0]!.stopped).toBe(true);
+    expect((await invoke('POST', created.heartbeatUrl, { authorization: 'Bearer ' + TOKEN })).status).toBe(404);
+  });
+
+  it('keeps serving while video segments are consumed, then stops when consumption ends', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { invoke, workers } = await start(1, undefined, undefined, undefined, 1000);
+    const created = JSON.parse((await invoke('POST', '/v1/sessions', { authorization: 'Bearer ' + TOKEN, body: { channelId: 'sky' } })).body);
+    await invoke('POST', created.playbackStartedUrl, { authorization: 'Bearer ' + TOKEN });
+    const segment = created.mediaUrl.replace('index.m3u8', 'segment-00000000.ts');
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(700);
+      expect((await invoke('GET', segment)).status).toBe(200);
+      expect(workers[0]!.stopped).toBe(false);
+    }
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(workers[0]!.stopped).toBe(true);
+  });
+
+  it('holds the provider slot until the old worker has actually stopped', async () => {
+    let finishStop!: () => void;
+    const stopped = new Promise<void>((resolve) => { finishStop = resolve; });
+    const worker = new FakeWorker();
+    worker.stop = async () => { await stopped; worker.stopped = true; };
+    const { invoke } = await start(1, { async create() { return worker; } });
+    const created = JSON.parse((await invoke('POST', '/v1/sessions', { authorization: 'Bearer ' + TOKEN, body: { channelId: 'sky' } })).body);
+    const deletion = invoke('DELETE', created.deleteUrl, { authorization: 'Bearer ' + TOKEN });
+    try {
+      expect((await invoke('POST', '/v1/sessions', { authorization: 'Bearer ' + TOKEN, body: { channelId: 'sky' } })).status).toBe(429);
+      expect(worker.stopped).toBe(false);
+    } finally { finishStop(); await deletion; }
+    expect(worker.stopped).toBe(true);
+    expect((await invoke('POST', '/v1/sessions', { authorization: 'Bearer ' + TOKEN, body: { channelId: 'sky' } })).status).toBe(201);
+  });
+
+  it('stops an unacknowledged startup even when the worker has no optional markFailed hook', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const worker = new FakeWorker();
+    Object.defineProperty(worker, 'markFailed', { value: undefined });
+    const { invoke } = await start(1, { async create() { return worker; } }, 1000);
+    const created = JSON.parse((await invoke('POST', '/v1/sessions', { authorization: 'Bearer ' + TOKEN, body: { channelId: 'sky' } })).body);
+    await vi.advanceTimersByTimeAsync(700);
+    await invoke('POST', created.heartbeatUrl, { authorization: 'Bearer ' + TOKEN });
+    await vi.advanceTimersByTimeAsync(301);
+    expect(worker.stopped).toBe(true);
   });
 
   it('removes only owned stale session directories at startup', async () => {

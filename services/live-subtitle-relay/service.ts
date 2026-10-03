@@ -15,6 +15,8 @@ interface Session {
   timer?: NodeJS.Timeout;
   prepareTimer?: NodeJS.Timeout;
   startupTimer?: NodeJS.Timeout;
+  mediaTimer?: NodeJS.Timeout;
+  mediaExpiresAt?: number;
   startupDeadlineAt: number;
   playbackStarted: boolean;
   preparationFailed?: boolean;
@@ -30,6 +32,8 @@ export interface RelayServerOptions {
   cleanupStaleSessions?: boolean;
   /** Override the bounded startup pin for deterministic tests. */
   startupAckTimeoutMs?: number;
+  /** Override the video-demand timeout for deterministic tests. */
+  mediaIdleTimeoutMs?: number;
 }
 export type RelayDiagnosticName = 'options-accepted' | 'options-rejected' | 'session-auth-failed' | 'invalid-channel' | 'session-created' | 'preparer-state' | 'media-playlist-requested' | 'playback-acknowledged' | 'session-deleted';
 export type RelayDiagnosticState = 'preparing' | 'ready' | 'failed' | 'stopped';
@@ -60,6 +64,7 @@ export async function createRelayServer(config: RelayConfig, options: RelayServe
   const now = options.now ?? Date.now;
   const tokenFactory = options.randomToken ?? (() => randomBytes(32).toString('hex'));
   const startupAckTimeoutMs = Math.min(options.startupAckTimeoutMs ?? STARTUP_ACK_TIMEOUT_MS, STARTUP_ACK_TIMEOUT_MS);
+  const mediaIdleTimeoutMs = Math.min(options.mediaIdleTimeoutMs ?? 60_000, 60_000);
   const diagnostic = (event: RelayDiagnosticEvent): void => { try { options.onDiagnostic?.(event); } catch { /* diagnostics must not affect serving */ } };
   let creatingSessions = 0;
   let closing = false;
@@ -144,7 +149,7 @@ export async function createRelayServer(config: RelayConfig, options: RelayServe
       sendError(res, 404, 'not_found'); return;
     }
     const session = sessions.get(parts[2]);
-    if (!session || session.expiresAt <= now()) { if (session) void removeSession(session); sendError(res, 404, 'session_expired'); return; }
+    if (!session || session.deleting || session.expiresAt <= now() || (session.mediaExpiresAt !== undefined && session.mediaExpiresAt <= now())) { if (session) void removeSession(session); sendError(res, 404, 'session_expired'); return; }
 
     if (parts[3] === 'hls' || parts[3] === 'images') {
       if (!capabilityMatches(url.searchParams.get('cap'), session.capability)) { sendError(res, 401, 'unauthorized'); return; }
@@ -161,6 +166,7 @@ export async function createRelayServer(config: RelayConfig, options: RelayServe
       if (parts[3] === 'hls' && parts[4] && SEGMENT.test(parts[4]) && req.method === 'GET') {
         const bytes = await session.worker.segment(parts[4]);
         if (!bytes) { sendError(res, 404, 'segment_expired'); return; }
+        if (session.playbackStarted) armMediaExpiry(session);
         res.writeHead(200, { 'content-type': 'video/mp2t', 'content-length': bytes.byteLength, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }).end(bytes); return;
       }
       if (parts[3] === 'images' && parts[4] && IMAGE_ID.test(parts[4]) && req.method === 'GET') {
@@ -180,6 +186,7 @@ export async function createRelayServer(config: RelayConfig, options: RelayServe
         session.playbackStarted = true;
         if (session.startupTimer) clearTimeout(session.startupTimer);
         session.worker.markPlaybackStarted();
+        armMediaExpiry(session);
       }
       diagnostic({ event: 'playback-acknowledged', status: 200, state: session.worker.state, originKind });
       sendJson(res, 200, { playbackStarted: true }); return;
@@ -229,7 +236,7 @@ export async function createRelayServer(config: RelayConfig, options: RelayServe
       const upstreamUrl = config.channels[channelId];
       if (!upstreamUrl) throw new Error('invalid_config');
       const worker = await workerFactory.create({ sessionId: id, sessionDirectory: directory, upstreamUrl, allowedRedirectHosts: config.allowedRedirectHosts, allowPublicRedirects: config.allowPublicRedirects === true, ...(preferredLanguage ? { preferredLanguage } : {}) });
-      if (closing) {
+      if (closing || res.destroyed) {
         await worker.stop();
         await rm(directory, { recursive: true, force: true });
         sendError(res, 503, 'service_stopping');
@@ -246,7 +253,7 @@ export async function createRelayServer(config: RelayConfig, options: RelayServe
         if (session.worker.state === 'preparing') {
           session.preparationFailed = true;
           diagnostic({ event: 'preparer-state', status: 504, state: 'failed' });
-          void session.worker.markFailed?.();
+          void stopFailedWorker(session);
         }
       }, config.prepareTimeoutMs);
       session.prepareTimer.unref();
@@ -270,22 +277,33 @@ export async function createRelayServer(config: RelayConfig, options: RelayServe
     session.timer = setTimeout(() => { void removeSession(session); }, Math.max(1, session.expiresAt - now()));
     session.timer.unref();
   }
+  function armMediaExpiry(session: Session): void {
+    if (session.mediaTimer) clearTimeout(session.mediaTimer);
+    session.mediaExpiresAt = now() + mediaIdleTimeoutMs;
+    session.mediaTimer = setTimeout(() => { void removeSession(session); }, mediaIdleTimeoutMs);
+    session.mediaTimer.unref();
+  }
+  async function stopFailedWorker(session: Session): Promise<void> {
+    await session.worker.markFailed?.().catch(() => undefined);
+    await session.worker.stop().catch(() => undefined);
+  }
   async function failStartup(session: Session): Promise<void> {
     if (session.playbackStarted || session.preparationFailed || session.deleting) return;
     session.preparationFailed = true;
     diagnostic({ event: 'preparer-state', status: 410, state: 'failed' });
     if (session.startupTimer) clearTimeout(session.startupTimer);
-    await session.worker.markFailed?.().catch(() => undefined);
+    await stopFailedWorker(session);
   }
   async function removeSession(session: Session): Promise<void> {
     if (session.deleting) return session.deleting;
     session.deleting = (async () => {
-      sessions.delete(session.id);
       if (session.timer) clearTimeout(session.timer);
       if (session.prepareTimer) clearTimeout(session.prepareTimer);
       if (session.startupTimer) clearTimeout(session.startupTimer);
+      if (session.mediaTimer) clearTimeout(session.mediaTimer);
       await session.worker.stop().catch(() => undefined);
       await rm(session.directory, { recursive: true, force: true }).catch(() => undefined);
+      sessions.delete(session.id);
       diagnostic({ event: 'session-deleted', status: 204, state: 'stopped' });
     })();
     return session.deleting;

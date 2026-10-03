@@ -1,0 +1,24 @@
+[Unit]
+Description=WireGuard egress for the subtitle relay only
+After=network-online.target
+Wants=network-online.target
+Before=live-subtitle-relay.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/bin/python3 /opt/live-subtitle-relay/relay-wireguard.py up /etc/live-subtitle-relay/mullvad/mullvad-fi.conf
+ExecStop=/usr/bin/python3 /opt/live-subtitle-relay/relay-wireguard.py down
+TimeoutStartSec=30
+TimeoutStopSec=30
+UMask=0077
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,8 @@
 # Live subtitle relay deployment handoff
 
-Prepared 2026-10-03 for a fresh session. Public deployment has **not** happened. The user has a server, permits deployment preparation, confirms provider permission, and accepted local real-TV behavior as good enough for now. The next session should continue with server deployment rather than restart the TV-side subtitle investigation.
+Updated 2026-10-03. The service is deployed at `https://subtitles.displayofpatience.com` using native systemd, Node 24.21.0, FFmpeg and the existing Nginx on Ubuntu 24.04.3. **Hosted media/subtitles now pass through cloud-only Mullvad egress:** Finnish Showtime 1 produced four subtitle tracks and PNG captions, and the production HTTPS session/media/authentication/acknowledgement/off/deletion check passed. Direct server egress still receives HTTP 456 despite verified credentials; the Finnish `fi-hel-wg-101` route resolves it. Only the relay UID uses WireGuard; IPv4/IPv6 direct fallback is blocked, and root/deploy/HTTPS routes stay on the original server connection. Account capacity is one provider connection. See [current operations, private config refresh and rollback](../deploy/live-subtitle-relay/OPERATIONS.md). The personal Tizen 3 HTTPS package is signed and collected at `tizen/Debug/tizen3.wgt`; both signature files and every fresh bundled asset were verified. The package was installed successfully on the configured Tizen 3 TV after explicit approval to clear saved data. Remote launch was rejected; open Substream from the TV Apps screen. On 2026-10-03 the user confirmed that the hosted relay works on Tizen, establishing basic HTTPS trust and playback on the installed TV. The Mac relay was stopped and verified to have no processes or listener on port 8790. A sustained soak and measured subtitle timing remain unrecorded. The server now runs the `20261003-demand-guardrails` release: a 60-second segment-demand deadline prevents control heartbeats from keeping unused ingest alive, and teardown reserves provider capacity until the worker stops. All 509 tests and synthetic FFmpeg lifecycle checks on Mac/server passed; the previous release is retained.
+
+The following is the original deployment preparation context, retained for the remaining TV rollout. The user has a server, permits deployment preparation, confirms provider permission, and accepted local real-TV behavior as good enough for now. The next session should continue with server deployment rather than restart the TV-side subtitle investigation.
 
 ## Start here
 
@@ -16,7 +18,7 @@ The user wanted automatic personal builds: all titles marked `Multi-Sub` use the
 - Latest check: 504 tests passed, typechecking passed, personal Tizen build passed. Synthetic packaging and full local-pipeline smoke checks passed during implementation. Re-run affected checks after deployment changes.
 - Real-TV captions/playback worked; Showtime 1 was more stable than 2. Source delivery gaps and an `upstream-ended` response caused failures on 2, and direct playback also stopped. The 20-second live body timeout bug was fixed to a separate 20-second header deadline and 90-second socket idle timeout.
 - Three-chunk startup reserve, eight-second TV buffer and two automatic relay reconnect attempts are implemented. Each reconnect resets the media/subtitle session, so it includes a preparation pause. The final user assessment was “works good enough for now.” Measured synchronization and a long soak remain unrecorded; `clock=unverified` is intentional.
-- No server hostname, OS/architecture, reverse-proxy arrangement or deployment access method has been provided yet. No image has been built/published for release, no DNS/certificate setup has been performed, and no internet endpoint has been tested.
+- Host inventory, DNS, certificate provisioning and native deployment are now complete; see the operations guide. Docker is absent and was not needed. Hosted provider playback passed through Mullvad and the user confirmed hosted playback on Tizen. A sustained soak and measured timing remain outstanding.
 
 ## Existing artifacts
 
@@ -34,11 +36,11 @@ The user wanted automatic personal builds: all titles marked `Multi-Sub` use the
 
 The default images are development tags (`node:24-bookworm-slim`, `caddy:2`); FFmpeg is installed without a version pin. Pin images/package versions for the actual release. The relay image copies only server code and shared core, not personal client bundles or the private channel config.
 
-## Information needed in the next session
+## Original preparation checklist (host information now obtained)
 
 Obtain server OS and CPU architecture, available CPU/RAM/disk, Docker/Compose or other runtime, existing HTTPS reverse proxy/ports, desired hostname and DNS control, intended simultaneous TVs, and the user's authorized deployment access method. Credentials remain outside chat. Reuse an existing ingress proxy rather than taking its ports 80/443 with a second Caddy.
 
-## Deployment sequence
+## Original deployment sequence (use native operations for the deployed host)
 
 1. Inspect the host and choose a dedicated HTTPS hostname. Confirm DNS and server egress to the provider/CDN. Determine whether the existing proxy or supplied Caddy will terminate TLS; test Tizen trust early.
 2. Build and tag a release image, with pinned dependencies and architecture matching the server. Verify the allowlisted context and run synthetic tests. Keep a previous known release for rollback; for the first deployment, retain the accepted local setup as the fallback.
@@ -72,6 +74,11 @@ Socket-restricted environments may need permission for the synthetic local serve
 
 Rollback selects the previous compatible image and configuration, preserving certificate volumes and private channel/device config. Restore compatible personal TV defaults/package if endpoint or protocol changes require it. Rotating the single API token requires updating affected personal TV packages or saved configuration. Stopping the Mac relay is a separate step once hosted playback is accepted; do not leave unnecessary active upstream sessions.
 
-## Suggested opening prompt for the fresh session
+## Original suggested opening prompt
 
 > Continue the live subtitle relay deployment from docs/live-subtitle-relay-deployment.md. The local Tizen implementation is accepted as good enough for now. Inspect the current code and host setup, preserve automatic Multi-Sub routing and private personal-build defaults, and deploy the separate service with trusted HTTPS. Keep credentials and provider URLs out of chat/logs. Use Luna subagents where useful. Obtain the missing host/hostname/access details before dependent deployment actions.
+
+
+## Latest TV package
+
+The 2026-10-03 failure-copy update was signed, its assets compared with the fresh personal Tizen 3 build, and installed successfully. It adds Finnish/English explanations for channel connection loss, direct fallback, retry and waiting for teardown; it does not guess the VPN/provider root cause. The signed package SHA-256 is recorded in the operations guide. Remote launch still requires opening Substream from Apps. The change passed 509 tests and typechecking; the new failure screen has not yet been deliberately exercised on the TV.

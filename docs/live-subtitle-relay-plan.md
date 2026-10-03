@@ -49,17 +49,17 @@ On 2026-10-03 the user tested Sky Showtime 1 and 2 on a physical TV. Showtime 1 
 
 The latest code passed `npm run check` (504 tests) and `npm run build:tizen:personal`. Synthetic FFmpeg packaging and full local-pipeline smoke checks passed during implementation. The reconnect UI lifecycle has no dedicated automated harness; it was reviewed and typechecked. The user's final assessment was that the result works well enough for now. Precise clock mapping remains unmeasured (`clock=unverified`); no quantitative drift or 60-minute soak result is recorded.
 
-## Next: public deployment
+## Hosted deployment and physical-TV acceptance
 
-Start with the [deployment handoff](live-subtitle-relay-deployment.md). Inventory OS/CPU architecture, Docker/runtime, available CPU/RAM, existing reverse proxy, hostname/DNS and the authorized access method. No credentials should be supplied in chat.
+The native systemd relay is deployed at `https://subtitles.displayofpatience.com` using pinned Node 24.21.0, Ubuntu FFmpeg and existing Nginx. DNS, Let's Encrypt certificate, loopback binding, private config permissions, restart and synthetic pipeline checks passed. Docker was not needed. See [operations](../deploy/live-subtitle-relay/OPERATIONS.md) for refresh, release identity and rollback.
 
-Prepare a versioned, pinned image and an external private runtime configuration. Reuse existing HTTPS ingress when appropriate. Keep the relay port private, disable request access logs that would expose capabilities, and validate the actual certificate chain on the TV. Update personal TV build defaults to the hosted HTTPS endpoint with LAN HTTP opt-in off; retain automatic Multi-Sub routing and saved-setting precedence.
+Direct source requests returned 456, despite correct credentials. A dedicated Mullvad device and Finnish `fi-hel-wg-101` egress now work: isolated media/DVB decoding and the production HTTPS lifecycle passed with four tracks and PNGs. Only the relay UID uses the VPN; IPv4/IPv6 direct fallback is blocked. Provider concurrency is one connection. Personal defaults now select hosted HTTPS and preserve automatic Multi-Sub routing; the personal Tizen 3 package has been signed and installed. On 2026-10-03 the user confirmed the hosted relay works on Tizen, establishing basic HTTPS trust/playback. The Mac relay was stopped and verified inactive. Public/standard builds were checked for playlist/device/API credentials.
 
-Verify container build/start/health, secret readability as UID 1000, DNS/public redirects, one active upstream per session, cleanup, restart and rollback. Run synthetic checks and standard/public/personal TV builds; verify that public outputs contain no personal defaults. Then install the updated personal TV package and run hosted playback/language/off/reconnect/teardown checks.
+Basic hosted TV playback is user-confirmed. Detailed language/off/fullscreen, channel-change, reconnect, teardown, service-restart-during-viewing and sustained resource checks are not separately recorded. Saved settings still override defaults.
 
 ## Remaining rollout checks and limitations
 
-- Public HTTPS trust on the actual Tizen 3 device, persistent certificate storage and renewal, server egress and resource capacity are unverified.
+- Basic public HTTPS trust/playback on the installed Tizen 3 device is user-confirmed; sustained real-stream resource capacity remains unverified. Certificate persistence/renewal is configured; direct provider egress receives 456, while relay-only Mullvad egress passed media/subtitle checks.
 - Startup reserve and reconnect preparation add delay. Two attempts are a per-channel budget, reset by changing channel or Retry; there is no seamless server-side ingest reconnection or endless retry loop.
 - Quantify AVPlay-to-output PTS mapping, cue display/clear error and drift when convenient; offsets are provisional, not proof of synchronization.
 - Exercise sustained playback, rapid channel switching, language/off, audio selection, normal/fullscreen geometry, interruptions, service restart and app exit/reopen. Record only safe counts, durations and outcomes.

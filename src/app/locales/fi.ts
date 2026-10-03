@@ -403,4 +403,12 @@ export const fi: Record<keyof typeof en, string> = {
   "The LAN service rejected this app's origin. Check the relay's allowed origins.": "LAN-palvelu hylkäsi sovelluksen alkuperän. Tarkista välityspalvelimen sallitut alkuperät.",
   "The LAN service has reached its TV connection limit. Disconnect unused TVs or restart the LAN service.": "LAN-palvelun TV-yhteyksien enimmäismäärä on saavutettu. Katkaise käyttämättömät TV-yhteydet tai käynnistä LAN-palvelu uudelleen.",
   "Companion service did not respond within 10 seconds. Check the LAN address and service, then try again.": "LAN-palvelu ei vastannut 10 sekunnissa. Tarkista lähiverkon osoite ja palvelu ja yritä uudelleen.",
+  "Playing directly · Subtitles may be unavailable": "Toistetaan suoraan · Tekstitykset eivät ehkä ole saatavilla",
+  "The subtitle service could not load this channel, and direct playback failed. Select Retry or try another channel.": "Tekstityspalvelu ei voinut avata kanavaa, eikä suora toisto onnistunut. Valitse Yritä uudelleen tai kokeile toista kanavaa.",
+  "Channel connection failed · Stopping the previous stream…": "Yhteys kanavaan epäonnistui · Pysäytetään edellinen lähetys…",
+  "Could not stop the previous stream": "Edellistä lähetystä ei voitu pysäyttää",
+  "The previous stream could not be stopped. Wait a minute, then select Retry.": "Edellistä lähetystä ei voitu pysäyttää. Odota minuutti ja valitse Yritä uudelleen.",
+  "Subtitle service unavailable · Trying direct playback…": "Tekstityspalvelu ei ole saatavilla · Kokeillaan suoraa toistoa…",
+  "Channel connection lost · Reconnecting…": "Yhteys kanavaan katkesi · Yhdistetään uudelleen…",
+  "Channel connection failed": "Yhteys kanavaan epäonnistui",
 };

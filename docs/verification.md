@@ -76,7 +76,7 @@ Check `progress=local`, `ack=confirmed`, advancing `playheadMs`, `bufferEvents`,
 
 Mac logs report `inputIdleMs` and fixed failure reasons such as `upstream-ended` or `upstream-idle-timeout`. Record sanitized outcomes without URLs, tokens, capability paths or transport payloads. Avoid a second real provider stream while testing an active TV session unless account capacity is known.
 
-Local real-TV playback was accepted as good enough on 2026-10-03, with Sky Showtime 1 more stable than 2. Measured cue accuracy/drift and a sustained soak remain outstanding; keep `clock=unverified` until measured. Hosted acceptance additionally needs actual TV HTTPS certificate trust, restart/rollback, capacity and session cleanup checks. A successful container healthcheck does not prove upstream channel availability.
+Local real-TV playback was accepted as good enough on 2026-10-03, with Sky Showtime 1 more stable than 2. Measured cue accuracy/drift and a sustained soak remain outstanding; keep `clock=unverified` until measured. On 2026-10-03 the signed personal Tizen 3 package was installed and the user confirmed hosted playback works on Tizen, establishing basic HTTPS trust/playback with the Mac relay stopped. Server session cleanup and restart/dependency checks passed; detailed TV controls/recovery, sustained capacity and soak results remain unrecorded. A successful container healthcheck does not prove upstream channel availability.
 
 ## Physical-TV release check
 

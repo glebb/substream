@@ -401,4 +401,12 @@ export const en = {
   "The LAN service rejected this app's origin. Check the relay's allowed origins.": "The LAN service rejected this app's origin. Check the relay's allowed origins.",
   "The LAN service has reached its TV connection limit. Disconnect unused TVs or restart the LAN service.": "The LAN service has reached its TV connection limit. Disconnect unused TVs or restart the LAN service.",
   "Companion service did not respond within 10 seconds. Check the LAN address and service, then try again.": "Companion service did not respond within 10 seconds. Check the LAN address and service, then try again.",
+  "Playing directly · Subtitles may be unavailable": "Playing directly · Subtitles may be unavailable",
+  "The subtitle service could not load this channel, and direct playback failed. Select Retry or try another channel.": "The subtitle service could not load this channel, and direct playback failed. Select Retry or try another channel.",
+  "Channel connection failed · Stopping the previous stream…": "Channel connection failed · Stopping the previous stream…",
+  "Could not stop the previous stream": "Could not stop the previous stream",
+  "The previous stream could not be stopped. Wait a minute, then select Retry.": "The previous stream could not be stopped. Wait a minute, then select Retry.",
+  "Subtitle service unavailable · Trying direct playback…": "Subtitle service unavailable · Trying direct playback…",
+  "Channel connection lost · Reconnecting…": "Channel connection lost · Reconnecting…",
+  "Channel connection failed": "Channel connection failed",
 } as const;

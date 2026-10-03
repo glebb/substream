@@ -119,6 +119,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
   const [audioStatus, setAudioStatus] = useState("");
   const [relayPlaybackLabel, setRelayPlaybackLabel] = useState("");
+  const [relayFailureMessage, setRelayFailureMessage] = useState("");
   const [relayDiagnostics, setRelayDiagnostics] = useState("");
   const previousPlayerTeardown = useRef<Promise<void>>(Promise.resolve());
   const subtitleSelectionManualRef = useRef(false);
@@ -441,6 +442,7 @@ export function LiveTv({ onMainMenu }: Props) {
     setEmbeddedSubtitleTracks([]);
     setAudioTracks([]);
     setRelayPlaybackLabel("");
+    setRelayFailureMessage("");
     setRelayDiagnostics("");
     let cancelled = false;
     let player: MediaPlayer | null = null;
@@ -469,6 +471,7 @@ export function LiveTv({ onMainMenu }: Props) {
         playbackStateRef.current = state;
         setPlaybackState(state);
         if (state === "playing") {
+          if (fallingBack) setRelayPlaybackLabel("Playing directly · Subtitles may be unavailable");
           if (active instanceof TizenLiveRelayPlayer) relayHasPlayed = true;
           setHasStartedPlayback(true);
           if (!wasPlaying) reconcileAudioTracks(active, active.getAudioTracks?.() ?? []);
@@ -524,14 +527,19 @@ export function LiveTv({ onMainMenu }: Props) {
       failed.setEventHandlers(null);
       if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
       setRelayDiagnostics("");
-      setRelayPlaybackLabel("Relay unavailable · Closing session…");
+      setRelayFailureMessage("The subtitle service could not load this channel, and direct playback failed. Select Retry or try another channel.");
+      setRelayPlaybackLabel("Channel connection failed · Stopping the previous stream…");
       try { await failed.close(); }
       catch {
-        if (!cancelled) { setRelayPlaybackLabel("Relay session could not be closed"); setPlaybackState("error"); }
+        if (!cancelled) {
+          setRelayPlaybackLabel("Could not stop the previous stream");
+          setRelayFailureMessage("The previous stream could not be stopped. Wait a minute, then select Retry.");
+          setPlaybackState("error");
+        }
         return;
       }
       if (cancelled) return;
-      setRelayPlaybackLabel("Relay unavailable · Direct playback");
+      setRelayPlaybackLabel("Subtitle service unavailable · Trying direct playback…");
       setEmbeddedSubtitleTracks([]);
       startDirect();
     }
@@ -546,11 +554,12 @@ export function LiveTv({ onMainMenu }: Props) {
           if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
           diagnosticTimer = undefined;
           resetRelayPlaybackState();
-          setRelayPlaybackLabel("Subtitle relay · Reconnecting…");
+          setRelayPlaybackLabel("Channel connection lost · Reconnecting…");
           try { await current.close(); }
           catch {
             if (!cancelled) {
-              setRelayPlaybackLabel("Relay session could not be closed");
+              setRelayPlaybackLabel("Could not stop the previous stream");
+              setRelayFailureMessage("The previous stream could not be stopped. Wait a minute, then select Retry.");
               playbackStateRef.current = "error";
               setPlaybackState("error");
             }
@@ -847,7 +856,7 @@ export function LiveTv({ onMainMenu }: Props) {
     <div className="player-stage" ref={playerStageRef} tabIndex={-1} onClick={() => { if (playerFullscreen) showControls(); }}>
       {isTizenAvPlayAvailable() ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
       {playbackState === "loading" || (playbackState === "buffering" && !hasStartedPlayback) ? <div className="buffering-overlay">Connecting…</div> : null}
-      {playbackState === "error" && <div className="playback-error-overlay"><strong>Channel unavailable</strong><span>The stream could not be played on this device.</span></div>}
+      {playbackState === "error" && <div className="playback-error-overlay"><strong>{relayFailureMessage ? "Channel connection failed" : "Channel unavailable"}</strong><span>{relayFailureMessage || "The stream could not be played on this device."}</span></div>}
       {playerFullscreen && showLiveHint && playbackState !== "error" && <span className="live-controls-hint">Press OK or Enter for controls</span>}
     </div>
     <div className="player-controls live-controls">
@@ -863,7 +872,7 @@ export function LiveTv({ onMainMenu }: Props) {
       {isTizenAvPlayAvailable() && !playerFullscreen && <button type="button" onClick={toggleLiveSource} ref={(element) => { playerControlRefs.current[9] = element; }}>{liveSource === "hls" ? "Try direct TS source" : "Switch back to HLS"}</button>}
       {embeddedSubtitleTracks.length > 1 && <button type="button" onClick={selectNextSubtitleTrack} ref={(element) => { playerControlRefs.current[10] = element; }}>Subtitle language</button>}
       {audioStatus && <span className="live-buffer-status" role="status">{audioStatus}</span>}
-      <span className="playback-status">{relayPlaybackLabel === "Subtitle relay · Reconnecting…" ? relayPlaybackLabel : `${relayPlaybackLabel || (liveSource === "hls" ? "HLS" : "Direct TS")} · ${playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}${relayDiagnostics ? ` · ${relayDiagnostics}` : ""}`}</span>
+      <span className="playback-status" role="status" aria-live="polite">{relayPlaybackLabel === "Channel connection lost · Reconnecting…" ? relayPlaybackLabel : <>{relayPlaybackLabel || (liveSource === "hls" ? "HLS" : "Direct TS")}{" · "}{playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}{relayDiagnostics ? ` · ${relayDiagnostics}` : ""}</>}</span>
       {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}
     </div>
   </main></Localized>;

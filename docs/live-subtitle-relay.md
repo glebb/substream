@@ -8,7 +8,7 @@ The user tested Sky Showtime 1 and 2 on a real TV and accepted the local result 
 
 Implemented fixes include a three-segment startup reserve, an eight-second AVPlay buffer, forwarding live progress when duration is zero, retried playback acknowledgement, separate connection/body timeouts, and two automatic relay reconnect attempts before direct fallback. The initial relay killed an idle upstream after 20 seconds; this was fixed. A subsequent failure was logged as `upstream-ended`, confirming that the incoming response ended rather than reaching the new 90-second idle limit. Reconnects prepare a new session and include a playback pause; no seamless recovery is claimed.
 
-The latest code passed `npm run check` (504 tests) and `npm run build:tizen:personal`. Synthetic packaging and full local-pipeline checks also passed during implementation. No dedicated UI lifecycle test covers the new reconnect flow; it was reviewed and typechecked, and the user's final local assessment was positive. Public deployment has **not** happened. Continue with the [deployment handoff](live-subtitle-relay-deployment.md) in a fresh session.
+The latest code passed `npm run check` (504 tests) and `npm run build:tizen:personal`. Synthetic packaging and full local-pipeline checks also passed during implementation. No dedicated UI lifecycle test covers the new reconnect flow; it was reviewed and typechecked, and the user's final local assessment was positive. The native service is now deployed at `https://subtitles.displayofpatience.com`; HTTPS health/authentication and server synthetic checks pass. Real provider media/subtitles now pass through a Finnish Mullvad endpoint on the server. Direct server egress still returns 456; only the relay UID uses the VPN, and the hosted HTTPS lifecycle passed with four subtitle tracks/PNGs. See [operations and remaining validation](../deploy/live-subtitle-relay/OPERATIONS.md). On 2026-10-03 the signed personal Tizen 3 package was installed and the user confirmed hosted playback works on Tizen, establishing basic TV HTTPS trust/playback. The Mac relay is stopped; no local relay process or port 8790 listener remains. Sustained stability and measured timing remain unverified.
 
 ## Test locally on this computer
 
@@ -70,6 +70,17 @@ RELAY_CONFIG_FILE=/absolute/path/to/private/config.json npm run relay:dev
 
 It binds `127.0.0.1:8790` by default. `RELAY_HOST` and `RELAY_PORT` override that binding. Use HTTPS when exposing it beyond local development. A live source connection exists only while a session is active; callers must renew the lease, and close sessions when leaving playback. Logs contain fixed status messages and safe errors only.
 
+### Provider-stream lifetime guardrails
+
+The server does not ingest at startup, for health checks, or while browsing channels. An authenticated, allowlisted session creation opens one upstream. Leaving playback/channel changes close the client session; DELETE destroys the upstream connection, terminates FFmpeg (SIGTERM, then SIGKILL if needed), and removes files. The provider slot stays reserved until teardown completes, preventing replacement-stream overlap.
+
+If the client disappears or DELETE fails, the hosted 60-second heartbeat lease expires without needing another request. Preparation has a separate 30-second limit, and startup must be acknowledged within 60 seconds; both failure paths explicitly stop the worker. A create response already disconnected when the worker becomes available is discarded and stopped.
+
+After playback acknowledgement, a separate 60-second video-demand deadline is renewed only by successful authenticated-capability video segment requests. Heartbeats, status, cue/image polling and playlist requests cannot renew that deadline. This prevents a stuck control loop from keeping an unused provider stream alive indefinitely. Cleanup has a short grace period rather than promising instant detection of TV power-off. Long pauses or stalls without video requests expire the session and may require a fresh session on resume. Subtitle Off alone retains ingestion because the relay is still supplying video/audio.
+
+The hosted configuration allows one session, matching the provider account's one-connection capacity. Synthetic regression tests cover idle startup, no-demand expiry despite heartbeats, continued segment consumption, orphaned lease cleanup, and reserving capacity during teardown. The real synthetic FFmpeg lifecycle check confirms that the upstream socket closes and files are removed. These checks do not open the real provider stream.
+
+
 ## Deployment preparation
 
 `deploy/live-subtitle-relay/` contains a Dockerfile, an allowlisted build context, Compose configuration, and Caddy HTTPS proxy. It is preparation for the later hosted deployment, not an already deployed service. It uses a separate secret-mounted JSON file, an unprivileged relay process, a bounded temporary filesystem, private internal networking, resource limits, and no request access logging.
@@ -115,3 +126,8 @@ The following steps apply to manually configured or hosted installations instead
 HTTP is for this explicit local test. The public deployment uses HTTPS. The Mac test still ingests the provider's public MPEG-TS URL; production ingestion restrictions are preserved. Real-TV tests have demonstrated playback and subtitle display, but the automated synthetic test does not establish AVPlay timing, caption placement on every device, long-running stability, or public HTTPS certificate trust.
 
 The [implementation plan](live-subtitle-relay-plan.md) records completed work and remaining rollout checks. The [deployment handoff](live-subtitle-relay-deployment.md) is the starting point for the next session.
+
+
+### TV connection-failure messages
+
+When relay playback fails, the TV explains that the channel connection failed and tries direct playback after teardown. Successful fallback says it is playing directly and subtitles may be unavailable. If direct playback also fails, the overlay says: “The subtitle service could not load this channel, and direct playback failed. Select Retry or try another channel.” Failed teardown instead asks the viewer to wait a minute before Retry, allowing the server lease to expire. Reconnection is shown explicitly. These messages are translated into Finnish and English; the TV does not guess whether the cause is the provider, server network or VPN, and does not display raw errors or credentials.

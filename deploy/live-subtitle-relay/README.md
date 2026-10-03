@@ -1,6 +1,8 @@
 # Live subtitle relay deployment artifacts
 
-This directory contains deployment preparation, not a deployed service. Local real-TV behavior was accepted as good enough on 2026-10-03; public deployment is the next task in a fresh session.
+A native systemd service is deployed at `https://subtitles.displayofpatience.com` as of 2026-10-03. It reuses existing Nginx; Docker was not installed. See [operations](OPERATIONS.md) for exact versions, private configuration refresh, verification and rollback. **Hosted media/subtitle checks now pass through relay-only Finnish Mullvad egress.** Direct requests still return 456. The signed personal Tizen 3 package is installed, and the user confirmed hosted playback works on Tizen on 2026-10-03. The Mac relay is stopped. A sustained soak and measured timing remain unverified.
+
+`live-subtitle-relay.service` and `nginx.conf` describe the installed native setup. The Docker/Compose artifacts below remain an alternative preparation path; they were not used or release-validated.
 
 Start with the [deployment handoff](../../docs/live-subtitle-relay-deployment.md), [implementation notes](../../docs/live-subtitle-relay.md), and [current plan](../../docs/live-subtitle-relay-plan.md). The handoff records missing host information, automatic personal TV defaults, release verification, operations and rollback work.
 

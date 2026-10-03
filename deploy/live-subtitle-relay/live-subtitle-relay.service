@@ -1,0 +1,44 @@
+[Unit]
+Description=Substream live subtitle relay
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=live-subtitle-relay
+Group=live-subtitle-relay
+WorkingDirectory=/opt/live-subtitle-relay/current
+ExecStart=/opt/live-subtitle-relay/node/bin/node services/live-subtitle-relay/main.ts
+Environment=RELAY_CONFIG_FILE=/etc/live-subtitle-relay/config.json
+Environment=RELAY_HOST=127.0.0.1
+Environment=RELAY_PORT=8790
+Environment=PATH=/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+TemporaryFileSystem=/tmp:rw,size=384M,mode=1777,nodev,nosuid,noexec
+MemoryHigh=768M
+MemoryMax=1G
+CPUQuota=200%
+TasksMax=128
+LimitNOFILE=1024
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=multi-user.target

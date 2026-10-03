@@ -65,7 +65,7 @@ These build and package both compatibility variants into `tizen/Debug/`. They re
 
 ### Multi-Sub live subtitle relay
 
-Personal Tizen preparation/build/packaging embeds the settings from the gitignored `.env.live-relay`. Run `npm run relay:personal` on the Mac to create those defaults, discover all provider channels marked `Multi-Sub`, and start the separate subtitle service. Matching channels select it automatically; no manual TV address, credential or channel mapping is needed. Keep the Mac awake. `dev:personal` starts the VOD/local-file companion, not this subtitle service.
+Personal Tizen preparation/build/packaging embeds the settings from the gitignored `.env.live-relay`. The signed personal Tizen 3 package is installed, and the user confirmed hosted playback works on Tizen on 2026-10-03. Matching `Multi-Sub` channels select the relay automatically; no manual TV address, credential or channel mapping is needed. The Mac relay is stopped and does not need to remain running for hosted playback. For explicit local development, `npm run relay:personal` creates local defaults, discovers Multi-Sub channels and starts the Mac subtitle service; avoid invoking it just to rebuild a hosted package. `dev:personal` starts the separate VOD/local-file companion.
 
 Saved relay settings on the TV override bundled defaults, including an explicit opt-out. Standard/public packages do not enable or embed the personal relay credential. Personal packages remain private. See [local setup and configuration](../docs/live-subtitle-relay.md#automatic-personal-setup).
 
