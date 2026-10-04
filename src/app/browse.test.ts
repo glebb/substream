@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BROWSE_COLLECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, sortAndPageBrowseItems } from "./browse.ts";
+import { BROWSE_COLLECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, groupsWithLatest, isLatestVirtualGroup, sortAndPageBrowseItems } from "./browse.ts";
 import type { VodCatalogItem } from "../core/catalog/index.ts";
 
 function deferred<T>() {
@@ -33,6 +33,19 @@ describe("browse helpers", () => {
     ];
     expect(favouriteGroupsFirst(groups, ["c", "a"]).map((group) => group.id)).toEqual(["a", "c", "b"]);
     expect(BROWSE_COLLECTION_ORDER).toEqual(["favourites", "recent", "movies", "series"]);
+  });
+
+  it("keeps Latest first in Movies and Series regardless of favourites, without making it a favourite", () => {
+    const groups = [
+      { id: "movie", name: "Films", count: 3, contentType: "movie" as const },
+      { id: "series", name: "Shows", count: 2, contentType: "series" as const },
+    ];
+    const movieList = groupsWithLatest(groups, "movies", ["movie"]);
+    const seriesList = groupsWithLatest(groups, "series", []);
+    expect(movieList.map((group) => group.id)).toEqual(["virtual:latest:movie", "movie"]);
+    expect(seriesList.map((group) => group.id)).toEqual(["virtual:latest:series", "series"]);
+    expect(isLatestVirtualGroup(movieList[0])).toBe(true);
+    expect(favouriteToggleFocusIndex(groups, "movies", ["movie"], "movie", 0)).toBe(0);
   });
 
   it("keeps focus on a toggled group after it moves in a typed collection", () => {

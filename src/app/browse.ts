@@ -6,6 +6,19 @@ export const BROWSE_COLLECTION_ORDER: readonly BrowseCollection[] = ["favourites
 export type AppSection = BrowseCollection | "search";
 export const APP_SECTION_ORDER: readonly AppSection[] = ["favourites", "recent", "movies", "series", "search"];
 
+export function latestVirtualGroup(contentType: "movie" | "series"): VodGroup {
+  return { id: `virtual:latest:${contentType}`, name: "Latest", count: 0, contentType };
+}
+
+export function isLatestVirtualGroup(group: VodGroup | null | undefined): boolean {
+  return Boolean(group && group.id.startsWith("virtual:latest:"));
+}
+
+export function groupsWithLatest(groups: readonly VodGroup[], collection: "movies" | "series", favouriteIds: readonly string[]): VodGroup[] {
+  const typed = favouriteGroupsFirst(browseGroupsForCollection(groups, collection), favouriteIds);
+  return [latestVirtualGroup(collection === "movies" ? "movie" : "series"), ...typed];
+}
+
 /** Mixed local groups remain reachable from either typed collection. */
 export function browseGroupsForCollection(groups: readonly VodGroup[], collection: Exclude<BrowseCollection, "recent">): VodGroup[] {
   const type = collection === "movies" ? "movie" : "series";

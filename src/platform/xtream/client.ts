@@ -160,7 +160,7 @@ export class XtreamClient {
         year: normalized.year ?? numberOrNull(record.year),
         group: "",
         contentType: "movie" as const,
-        addedAt: numberOrNull(record.added) ?? 0,
+        addedAt: providerTimestamp(record.added),
         sourceLine: numberOrNull(record.stream_id) ?? 0,
         streamUrl: this.streamUrl("movie", id, record.container_extension),
       }];
@@ -182,7 +182,7 @@ export class XtreamClient {
         year: normalized.year ?? numberOrNull(record.year),
         group: "",
         contentType: "series" as const,
-        addedAt: numberOrNull(record.last_modified) ?? 0,
+        addedAt: providerTimestamp(record.last_modified),
         sourceLine: id,
         streamUrl: "",
         providerSeriesId: id,
@@ -305,6 +305,13 @@ function numberOrNull(value: string | number | undefined): number | null {
   if (typeof value === "string" && value.trim() === "") return null;
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
+function providerTimestamp(value: string | number | undefined): number {
+  const timestamp = numberOrNull(value);
+  if (timestamp === null || timestamp <= 0) return 0;
+  // Xtream dates are Unix seconds, while a few providers return milliseconds.
+  return timestamp < 100_000_000_000 ? timestamp * 1000 : timestamp;
 }
 
 function epgTime(value: string | number | undefined): number | null {

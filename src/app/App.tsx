@@ -18,7 +18,8 @@ import { clearSubtitlePreferences, loadSubtitlePreferences, saveLastSubtitleLang
 import { clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared } from "../platform/browser/catalog-preferences.ts";
 import { clearFavouriteGroups, defaultFavouriteGroupIds, hasSavedFavouriteGroupIds, loadFavouriteGroupIds, saveFavouriteGroupIds, setFavouriteGroup } from "../platform/browser/favourites-config.ts";
 import { clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, type PlaybackHistoryItem } from "../platform/browser/playback-progress-config.ts";
-import { APP_SECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, sortAndPageBrowseItems, type AppSection } from "./browse.ts";
+import { LatestVodLoader } from "../platform/browser/latest-vod.ts";
+import { APP_SECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, groupsWithLatest, isLatestVirtualGroup, latestVirtualGroup, sortAndPageBrowseItems, type AppSection } from "./browse.ts";
 import { formatCategoryBadge, formatGroupDisplayName } from "./display-formatting.ts";
 import { formatRuntime, titleDetailsFor } from "./title-details.ts";
 import { clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials } from "../platform/browser/tmdb-config.ts";
@@ -45,11 +46,11 @@ const PAGE_SIZE = 16;
 const OPEN_SUBTITLES_BASE_URL = import.meta.env.DEV ? "/opensubtitles-api/api/v1" : undefined;
 const PLAYBACK_UNAVAILABLE_MESSAGE = "The provider or network did not return playable media for this title. Try another title or retry later.";
 const LOCAL_PLAYBACK_ERROR_MESSAGE = "This browser could not decode the local video. Try another file or Play on TV.";
-type BrowseMode = "local" | "provider" | "episodes";
+type BrowseMode = "local" | "provider" | "episodes" | "latest";
 type SettingsConfirmation = "clear-catalog" | "clear-subtitles" | "reset-all";
 type SettingsFocusKey = SettingsControlKey;
 type SubtitleSearchType = "movie" | "series";
-type BrowseControlFocus = "back" | "previous-page" | "next-page" | null;
+type BrowseControlFocus = "back" | "latest-refresh" | "previous-page" | "next-page" | null;
 type BrowseArtworkTarget = Pick<VodCatalogItem, "id" | "title" | "searchTitle" | "year" | "contentType">;
 
 function playbackHistoryItem(title: VodCatalogItem, progress: PlaybackProgress, providerSourceId?: string, updatedAt = Date.now()): PlaybackHistoryItem {
@@ -96,6 +97,12 @@ function subtitleApiKeyTag(value: string): string {
   return value.length + ":" + (hash >>> 0).toString(36);
 }
 
+function safeSourceFingerprint(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  return (hash >>> 0).toString(36);
+}
+
 function positiveInteger(value: string): number | undefined {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
@@ -131,6 +138,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
   const [activeGroup, setActiveGroup] = useState<VodGroup | null>(null);
   const [titles, setTitles] = useState<VodCatalogItem[]>([]);
   const [page, setPage] = useState(0);
+  const pageRef = useRef(page);
+  pageRef.current = page;
   const [sort, setSort] = useState<VodSort>("playlist");
   const [browseMode, setBrowseMode] = useState<BrowseMode>("local");
   const [browseCollection, setBrowseCollection] = useState<AppSection>("recent");
@@ -153,7 +162,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
   const searchRefreshRequestRef = useRef(0);
   const searchRefreshControllerRef = useRef<AbortController | null>(null);
   const [favouriteGroupIds, setFavouriteGroupIds] = useState<string[]>(loadFavouriteGroupIds);
-  const visibleGroups = useMemo(() => browseCollection === "recent" || browseCollection === "search" ? [] : favouriteGroupsFirst(browseCollection === "favourites" ? groups.filter((group) => favouriteGroupIds.includes(group.id)) : browseGroupsForCollection(groups, browseCollection), favouriteGroupIds), [browseCollection, favouriteGroupIds, groups]);
+  const visibleGroups = useMemo(() => browseCollection === "recent" || browseCollection === "search" ? [] : browseCollection === "movies" || browseCollection === "series" ? groupsWithLatest(groups, browseCollection, favouriteGroupIds) : favouriteGroupsFirst(groups.filter((group) => favouriteGroupIds.includes(group.id)), favouriteGroupIds), [browseCollection, favouriteGroupIds, groups]);
   const searchProviderFingerprint = XtreamClient.fromPlaylistUrl(playlistUrl)?.pairingFingerprint() ?? "";
   const visibleSearchRecords = useMemo(() => searchProviderFingerprint
     ? searchSafeRecords(searchRecords.filter((record) => record.sourceFingerprint === searchProviderFingerprint), searchQuery)
@@ -276,6 +285,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
   const detailsRequestRef = useRef(0);
   const sortSelectRef = useRef<HTMLSelectElement | null>(null);
   const backToGroupsRef = useRef<HTMLButtonElement | null>(null);
+  const latestRefreshRef = useRef<HTMLButtonElement | null>(null);
   const previousPageRef = useRef<HTMLButtonElement | null>(null);
   const nextPageRef = useRef<HTMLButtonElement | null>(null);
   const playerBackButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -322,6 +332,10 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
   const localSubtitlePublishQueueRef = useRef<Promise<void>>(Promise.resolve());
   const remoteSubtitleVersionRef = useRef<{ sessionId: string; version: number } | null>(null);
   const browseRequestRef = useRef(new BrowseRequestGate());
+  const latestLoaderRef = useRef(new LatestVodLoader());
+  const latestRequestRef = useRef(0);
+  const latestLoadingRequestRef = useRef<number | null>(null);
+  useEffect(() => { latestLoaderRef.current.invalidate(); latestRequestRef.current += 1; }, [playlistUrl, groups, favouriteGroupIds]);
   const remoteBrowseRef = useRef<{ key: string; items: VodCatalogItem[] } | null>(null);
   const playerRef = useRef<MediaPlayer | null>(null);
   const playbackProgressRef = useRef<PlaybackProgress | null>(null);
@@ -585,7 +599,74 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
     else onPlaylistSetup();
   }, [onPlaylistSetup, playlistUrl, state]);
 
+  const openLatest = async (contentType: "movie" | "series", force = false) => {
+    if (force && latestLoadingRequestRef.current === latestRequestRef.current) return;
+    const virtualGroup = latestVirtualGroup(contentType);
+    const request = ++latestRequestRef.current;
+    latestLoadingRequestRef.current = request;
+    browseRequestRef.current.invalidate();
+    remoteBrowseRef.current = null;
+    setBrowseMode("latest");
+    setActiveGroup(virtualGroup);
+    setTitles([]);
+    setBrowseCount(0);
+    setPage(0);
+    setFocusIndex(0);
+    setCatalogStatus("Loading Latest…");
+    let sourceVersion = "";
+    try {
+      const store = await IndexedDbCatalogStore.open();
+      try {
+        const metadata = await store.metadata();
+        sourceVersion = `${metadata.activeGeneration ?? ""}:${metadata.importedAt ?? ""}`;
+      } finally { store.close(); }
+    } catch { /* provider-only categories may not have local catalogue metadata */ }
+    if (request !== latestRequestRef.current) return;
+    const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
+    const sourceKey = `${provider?.pairingFingerprint() ?? safeSourceFingerprint(playlistUrl)}:${sourceVersion}`;
+    const loaderOptions = {
+      sourceKey,
+      contentType,
+      groups,
+      favouriteIds: favouriteGroupIds,
+      force,
+      loadGroup: async (group: VodGroup) => {
+        if (group.providerCategoryId && group.providerContentType) {
+          if (!provider) throw new Error("Provider unavailable");
+          const items = group.providerContentType === "movie"
+            ? await provider.movies(group.providerCategoryId)
+            : await provider.series(group.providerCategoryId);
+          return items.map((item) => ({ ...item, group: group.name }));
+        }
+        const store = await IndexedDbCatalogStore.open();
+        try { return await store.byGroupPage(group.name, 0, group.count, "playlist"); }
+        finally { store.close(); }
+      },
+    };
+    const cached = latestLoaderRef.current.peek(loaderOptions);
+    if (cached) {
+      remoteBrowseRef.current = { key: "latest:" + contentType, items: cached.items };
+      setTitles(cached.items.slice(0, PAGE_SIZE));
+      setBrowseCount(cached.items.length);
+      setCatalogStatus(force ? "Refreshing Latest…" : cached.items.length.toLocaleString() + " titles ready");
+    }
+    const result = await latestLoaderRef.current.load(loaderOptions);
+    if (request !== latestRequestRef.current) return;
+    latestLoadingRequestRef.current = null;
+    remoteBrowseRef.current = { key: "latest:" + contentType, items: result.items };
+    const lastPage = Math.max(0, Math.ceil(result.items.length / PAGE_SIZE) - 1);
+    const currentPage = Math.min(pageRef.current, lastPage);
+    const pageItems = result.items.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+    setPage(currentPage);
+    setTitles(pageItems);
+    setFocusIndex((index) => Math.max(0, Math.min(index, pageItems.length - 1)));
+    setBrowseCount(result.items.length);
+    setCatalogStatus(result.groupCount === 0 ? "Favourite categories to see Latest titles." : result.failedGroups ? `Latest loaded with ${result.failedGroups} unavailable ${result.failedGroups === 1 ? "category" : "categories"}.` : result.items.length.toLocaleString() + " titles ready");
+  };
+
   const openGroup = async (group: VodGroup, targetPage: number, targetSort = sort, focusAtEnd = false) => {
+    if (isLatestVirtualGroup(group)) { void openLatest(group.contentType === "series" ? "series" : "movie"); return; }
+    latestRequestRef.current += 1;
     if (group.providerCategoryId && group.providerContentType) {
       const key = "provider:" + group.providerContentType + ":" + group.providerCategoryId;
       let items = remoteBrowseRef.current?.key === key ? remoteBrowseRef.current.items : null;
@@ -646,6 +727,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
   };
 
   const startPlayback = (title: VodCatalogItem, resumeSeconds = 0, followingEpisode: VodCatalogItem | null = null, source: "catalogue" | "local" = "catalogue") => {
+    latestRequestRef.current += 1;
     browseRequestRef.current.invalidate();
     resumeStartSecondsRef.current = resumeSeconds;
     playbackProgressRef.current = null;
@@ -687,6 +769,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
   };
 
   const openTitle = async (title: VodCatalogItem, origin: { kind: "browse" | "search" | "local"; focusIndex: number } | null = null, searchRecord: SafeSearchRecord | null = null) => {
+    latestRequestRef.current += 1;
     const request = ++detailsRequestRef.current;
     setDetailsOrigin(origin);
     setDetailsSearchRecord(searchRecord);
@@ -1260,11 +1343,12 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
   };
 
   const toggleFavouriteForGroup = (group: VodGroup) => {
+    if (isLatestVirtualGroup(group)) return;
     const nextFavourite = !favouriteGroupIds.includes(group.id);
     const nextIds = setFavouriteGroup(group.id, nextFavourite);
     setFavouriteGroupIds(nextIds);
     if (browseCollection !== "recent" && browseCollection !== "search") {
-      setFocusIndex(favouriteToggleFocusIndex(groups, browseCollection, nextIds, group.id, focusIndex));
+      setFocusIndex(favouriteToggleFocusIndex(groups, browseCollection, nextIds, group.id, focusIndex - (browseCollection === "movies" || browseCollection === "series" ? 1 : 0)) + (browseCollection === "movies" || browseCollection === "series" ? 1 : 0));
     }
     setFavouriteStatus(`${group.name} ${nextFavourite ? "added to" : "removed from"} favourites.`);
   };
@@ -1290,10 +1374,12 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
   const changeBrowsePage = (targetPage: number, targetSort = sort, focusAtEnd = false) => {
     if (browseMode !== "local" && remoteBrowseRef.current) {
       browseRequestRef.current.invalidate();
-      const pageItems = sortAndPageBrowseItems(remoteBrowseRef.current.items, targetPage, PAGE_SIZE, targetSort);
+      const pageItems = browseMode === "latest"
+        ? remoteBrowseRef.current.items.slice(targetPage * PAGE_SIZE, (targetPage + 1) * PAGE_SIZE)
+        : sortAndPageBrowseItems(remoteBrowseRef.current.items, targetPage, PAGE_SIZE, targetSort);
       setTitles(pageItems);
       setPage(targetPage);
-      setSort(targetSort);
+      if (browseMode !== "latest") setSort(targetSort);
       setFocusIndex(focusAtEnd ? Math.max(0, pageItems.length - 1) : 0);
       return;
     }
@@ -1320,7 +1406,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
         focusBrowseIndex(targetIndex);
       } else if (allowEndpointExit && key === "ArrowUp" && focusIndex < columns) {
         setFocusIndex(0);
-        sortSelectRef.current?.focus();
+        if (browseMode === "latest") latestRefreshRef.current?.focus();
+        else sortSelectRef.current?.focus();
       } else if (allowEndpointExit && key === "ArrowDown" && focusIndex + columns >= itemCount) {
         if (page + 1 < browsePageCount(browseCount, PAGE_SIZE) && nextPageRef.current) nextPageRef.current.focus();
         else if (page > 0 && previousPageRef.current) previousPageRef.current.focus();
@@ -1474,6 +1561,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
             setSelectedTitle(null);
             break;
           case "close-group":
+            latestRequestRef.current += 1;
             remoteBrowseRef.current = null;
             browseReturnFocusPendingRef.current = true;
             setBrowseMode("local");
@@ -1485,6 +1573,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
             setCatalogStatus("");
             break;
           case "cancel-browse-loading":
+            latestRequestRef.current += 1;
             setCatalogStatus("");
             break;
           case "stay":
@@ -1798,6 +1887,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
           const nextCollection = sectionOrder;
           const nextSection = nextCollection[nextTab] ?? "recent";
           if (nextSection !== browseCollection) {
+            latestRequestRef.current += 1;
             browseTabTransitionRef.current = "menu";
             setFocusIndex(0);
             setBrowseCollection(nextSection);
@@ -1829,7 +1919,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
         }
       }
       if (targetButton && !targetButton.classList.contains("tile")) {
-        const browseControls = [mainMenuButtonRef.current, sortSelectRef.current, backToGroupsRef.current, previousPageRef.current, nextPageRef.current]
+        const browseControls = [mainMenuButtonRef.current, sortSelectRef.current, latestRefreshRef.current, backToGroupsRef.current, previousPageRef.current, nextPageRef.current]
           .filter((control): control is HTMLSelectElement | HTMLButtonElement => control !== null && !(control instanceof HTMLButtonElement && control.disabled));
         const index = browseControls.indexOf(targetButton);
         if (key === "Enter") return;
@@ -1899,7 +1989,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
           return;
         }
         if (activeGroup && key === "ArrowUp" && targetIndex === null && focusIndex < browseGridColumnCount(true, compactViewport, narrowViewport)) {
-          sortSelectRef.current?.focus();
+          if (browseMode === "latest") latestRefreshRef.current?.focus();
+          else sortSelectRef.current?.focus();
           return;
         }
         if (activeGroup && key === "ArrowDown" && targetIndex === null) {
@@ -3156,7 +3247,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
       </section> : activeGroup ? <>
         <div className="catalogue-heading">
           <div><h2 title={formatGroupDisplayName(activeGroup.name, language)}>{formatGroupDisplayName(activeGroup.name, language)}</h2><p className="hint">{browseCount.toLocaleString()} {browseMode === "episodes" ? "episodes" : "titles"} · page {page + 1} of {browsePageCount(browseCount, PAGE_SIZE)}</p></div>
-          <label className="sort-control">Sort
+          {browseMode !== "latest" && <label className="sort-control">Sort
             <select ref={sortSelectRef} value={sort} onChange={(event) => {
               const nextSort = event.target.value as VodSort;
               setSort(nextSort);
@@ -3166,17 +3257,18 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
               <option value="playlist">Playlist order</option>
               <option value="year">Release year (newest)</option>
             </select>
-          </label>
-          <button className={browseControlFocus === "back" ? "remote-focused" : ""} type="button" ref={backToGroupsRef} onFocus={() => setBrowseControlFocus("back")} onBlur={() => setBrowseControlFocus(null)} onClick={() => { browseRequestRef.current.invalidate(); remoteBrowseRef.current = null; browseReturnFocusPendingRef.current = true; setBrowseMode("local"); setBrowseCount(0); setActiveGroup(null); setTitles([]); setPage(0); setFocusIndex(browseReturnFocusIndexRef.current); setCatalogStatus(""); }}>Back to groups</button>
+          </label>}
+          {browseMode === "latest" && <button className={browseControlFocus === "latest-refresh" ? "remote-focused" : ""} type="button" ref={latestRefreshRef} onFocus={() => setBrowseControlFocus("latest-refresh")} onBlur={() => setBrowseControlFocus(null)} onClick={() => void openLatest(activeGroup?.contentType === "series" ? "series" : "movie", true)}>Refresh Latest</button>}
+          <button className={browseControlFocus === "back" ? "remote-focused" : ""} type="button" ref={backToGroupsRef} onFocus={() => setBrowseControlFocus("back")} onBlur={() => setBrowseControlFocus(null)} onClick={() => { latestRequestRef.current += 1; browseRequestRef.current.invalidate(); remoteBrowseRef.current = null; browseReturnFocusPendingRef.current = true; setBrowseMode("local"); setBrowseCount(0); setActiveGroup(null); setTitles([]); setPage(0); setFocusIndex(browseReturnFocusIndexRef.current); setCatalogStatus(""); }}>Back to groups</button>
         </div>
-        {isTizen && <p className="remote-key-hint tv-title-list-hint">Use the arrow keys to browse titles · Up from the first row returns to sorting</p>}
+        {isTizen && <p className="remote-key-hint tv-title-list-hint">{browseMode === "latest" ? "Use the arrow keys to browse titles · Up from the first row returns to refresh" : "Use the arrow keys to browse titles · Up from the first row returns to sorting"}</p>}
         <div className={isTizen ? "tv-title-list-viewport" : ""} ref={isTizen ? titleListViewportRef : undefined}>
         {catalogStatus && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
         <div className={"groups title-grid" + (isTizen ? " tv-title-list" : "")}>
           {titles.map((title, index) => <button className={"tile title-card " + (index === focusIndex ? "focused remote-focused" : "")} key={title.id} onClick={() => { setFocusIndex(index); void openTitle(title); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
-            <BrowseArtwork title={title.title} image={browseArtwork[title.id]} /><span className="tile-copy"><strong>{title.title}</strong><span className="tile-meta">{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span></span>
+            <BrowseArtwork title={title.title} image={browseArtwork[title.id]} /><span className="tile-copy"><strong>{title.title}</strong><span className="tile-meta">{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span>{browseMode === "latest" && <span className="tile-meta">{formatCategoryBadge(title.group, language)}</span>}</span>
           </button>)}
-          {!titles.length && !catalogStatus.startsWith("Loading ") && <p className="empty-state">No titles are available in this group yet.</p>}
+          {!titles.length && !catalogStatus.startsWith("Loading ") && <p className="empty-state">{browseMode === "latest" && !groups.some((group) => favouriteGroupIds.includes(group.id) && ((group.providerContentType ?? group.contentType) === activeGroup?.contentType || group.contentType === "mixed")) ? "Favourite categories to see Latest titles." : "No titles are available in this group yet."}</p>}
         </div>
         </div>
         <div className="pagination">
@@ -3189,7 +3281,7 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
             aria-selected={browseCollection === collection}
             className={"browse-tab " + (browseCollection === collection ? "selected" : "")}
             key={collection}
-            onClick={() => { if (collection === browseCollection) return; browseTabTransitionRef.current = "menu"; setFocusIndex(0); setBrowseCollection(collection); }}
+            onClick={() => { if (collection === browseCollection) return; latestRequestRef.current += 1; browseTabTransitionRef.current = "menu"; setFocusIndex(0); setBrowseCollection(collection); }}
             ref={(element) => { browseTabRefs.current[index] = element; }}
             role="tab"
             type="button"
@@ -3234,8 +3326,8 @@ function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSour
           <div className="collection-heading"><h2>{browseCollection === "favourites" ? "Favourite groups" : browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">{browseCollection === "favourites" ? "Your saved movie genres and series categories." : "Choose a group to browse its titles. Provider groups load when selected."}</p><p className="remote-key-hint">Press the red remote key to toggle the focused group as a favourite.</p>{favouriteStatus && <p className="hint" role="status" aria-live="polite">{favouriteStatus}</p>}</div>
           <div className="groups group-grid">
           {visibleGroups.map((group, index) => <div className="favourite-tile" key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
-            <strong title={formatGroupDisplayName(group.name, language)}>{formatGroupDisplayName(group.name, language)}</strong><span>{group.providerCategoryId ? "Select to load titles" : `${group.count.toLocaleString()} titles`}</span>{favouriteGroupIds.includes(group.id) && <span className="favourite-indicator">★ Favourite</span>}
-          </button><button className="quiet-button favourite-toggle" type="button" tabIndex={isTizen ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTizen) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => toggleFavouriteForGroup(group)}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button></div>)}
+            <strong title={formatGroupDisplayName(group.name, language)}>{formatGroupDisplayName(group.name, language)}</strong><span>{isLatestVirtualGroup(group) ? (group.contentType === "series" ? "Recently updated shows" : "Recently added movies") : group.providerCategoryId ? "Select to load titles" : `${group.count.toLocaleString()} titles`}</span>{!isLatestVirtualGroup(group) && favouriteGroupIds.includes(group.id) && <span className="favourite-indicator">★ Favourite</span>}
+          </button>{!isLatestVirtualGroup(group) && <button className="quiet-button favourite-toggle" type="button" tabIndex={isTizen ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTizen) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => toggleFavouriteForGroup(group)}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button>}</div>)}
           {!visibleGroups.length && <div className="empty-state"><h2>{browseCollection === "favourites" ? "No favourite groups yet" : `No ${browseCollection === "movies" ? "movie" : "series"} groups found`}</h2><p>{browseCollection === "favourites" ? "Use the red remote key on a group, or the button on a card, to save it on this device." : `Import a library with ${browseCollection === "movies" ? "movies" : "series"} to browse titles here.`}</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = "content"; setBrowseCollection("recent"); setFocusIndex(0); }}>Browse recent</button></div>}
           </div>
         </>}

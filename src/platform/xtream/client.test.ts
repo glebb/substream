@@ -121,6 +121,32 @@ describe("XtreamClient", () => {
     expect(client.pairingFingerprint()).not.toContain("user");
   });
 
+  it("normalizes Xtream movie added and series last-modified dates to milliseconds", async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [
+        { stream_id: 1, name: "Seconds", added: "1700000000" },
+        { stream_id: 2, name: "Milliseconds", added: 1700000000123 },
+        { stream_id: 3, name: "Invalid", added: "nope" },
+        { stream_id: 4, name: "Zero", added: 0 },
+      ] })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [
+        { series_id: 5, name: "Series seconds", last_modified: "1700000001" },
+        { series_id: 6, name: "Series milliseconds", last_modified: 1700000001123 },
+        { series_id: 7, name: "Series invalid", last_modified: "bad" },
+        { series_id: 8, name: "Series zero", last_modified: 0 },
+      ] });
+    const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=pass", request);
+    if (!client) throw new Error("Expected Xtream client");
+
+    await expect(client.movies("1")).resolves.toMatchObject([
+      { addedAt: 1700000000000 }, { addedAt: 1700000000123 }, { addedAt: 0 }, { addedAt: 0 },
+    ]);
+    await expect(client.series("2")).resolves.toMatchObject([
+      { contentType: "series", addedAt: 1700000001000 }, { contentType: "series", addedAt: 1700000001123 },
+      { contentType: "series", addedAt: 0 }, { contentType: "series", addedAt: 0 },
+    ]);
+  });
+
   it("returns null for non-Xtream playlist URLs", () => {
     expect(XtreamClient.fromPlaylistUrl("https://example.test/list.m3u")).toBeNull();
   });

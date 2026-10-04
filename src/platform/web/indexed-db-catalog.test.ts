@@ -14,7 +14,7 @@ https://iptv.example/series/user/pass/2.mkv
 
 let store: IndexedDbCatalogStore | undefined;
 
-afterEach(() => store?.close());
+afterEach(() => { store?.close(); vi.restoreAllMocks(); });
 
 describe("IndexedDbCatalogStore", () => {
   it("stores catalog items in batches and exposes indexed groups and searches", async () => {
@@ -50,6 +50,31 @@ describe("IndexedDbCatalogStore", () => {
     await expect(store.groups()).resolves.toMatchObject([{ name: original.group }]);
     await expect(store.byGroup(original.group)).resolves.toMatchObject([{ title: original.title }]);
     await expect(store.byGroup("Replacement group")).resolves.toEqual([]);
+  });
+
+  it("preserves local first-seen dates across line shifts and rolls back dates with a failed import", async () => {
+    store = await IndexedDbCatalogStore.open();
+    await store.clearCatalog();
+    const [original] = buildVodCatalog(entries).items;
+    if (!original) throw new Error("Missing fixture item");
+    const firstSeen = 1_704_067_200_000;
+    await store.replaceAll([{ ...original, addedAt: firstSeen }]);
+
+    const shifted = { ...original, id: "line-shifted", sourceLine: original.sourceLine + 100, addedAt: 1_735_689_600_000 };
+    const sameNameDifferentStream = { ...shifted, id: "different-stream", streamUrl: "https://iptv.example/movie/new/1.mkv", addedAt: 1_735_689_600_001 };
+    await store.replaceAll([shifted, sameNameDifferentStream]);
+    await expect(store.byIds([shifted.id, sameNameDifferentStream.id])).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: shifted.id, addedAt: firstSeen }),
+      expect.objectContaining({ id: sameNameDifferentStream.id, addedAt: 1_735_689_600_001 }),
+    ]));
+
+    await store.begin();
+    await store.append([{ ...shifted, id: "pending-line-shift", addedAt: 1_767_225_600_000 }]);
+    await store.fail();
+    await store.replaceAll([{ ...shifted, id: "after-rollback", addedAt: 1_767_225_600_000 }]);
+    await expect(store.byGroup(shifted.group)).resolves.toMatchObject([
+      { id: "after-rollback", addedAt: firstSeen },
+    ]);
   });
 
   it("cleans up the pending generation when replaceAll append fails", async () => {

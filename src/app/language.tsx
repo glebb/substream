@@ -28,6 +28,13 @@ export function translate(value: string, language: UiLanguage): string {
   if (subtitleCount) return dictionary["{{count}} subtitle matches found"]!.replace("{{count}}", subtitleCount[1]!);
   const episodeSubtitleCount = value.match(/^(.+) possible episode subtitles found$/);
   if (episodeSubtitleCount) return dictionary["{{count}} possible episode subtitles found"]!.replace("{{count}}", episodeSubtitleCount[1]!);
+  const latestFailureCount = value.match(/^Latest loaded with (\d+) unavailable categories?\.$/);
+  if (latestFailureCount) {
+    const count = latestFailureCount[1]!;
+    return language === "fi"
+      ? `Uusimpien latauksessa ${count} ${count === "1" ? "kategoria" : "kategoriaa"} ei ollut saatavilla.`
+      : `Latest loaded with ${count} unavailable ${count === "1" ? "category" : "categories"}.`;
+  }
   if (language === "en") return value;
 
   const loadingCategories = value.match(/^Loading (.+) of (.+) categories…$/);

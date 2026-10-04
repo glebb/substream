@@ -89,6 +89,7 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
 
 export class IndexedDbCatalogStore {
   private pendingGeneration: number | undefined;
+  private committedFirstSeen = new Map<string, number>();
 
   private constructor(private readonly database: IDBDatabase) {}
 
@@ -323,6 +324,26 @@ export class IndexedDbCatalogStore {
 
   async begin(): Promise<void> {
     const previous = await this.metadata();
+    this.committedFirstSeen = new Map();
+    if (previous.activeGeneration !== undefined) {
+      const read = this.database.transaction(ITEMS_STORE, "readonly");
+      const request = read.objectStore(ITEMS_STORE).index("by-generation")
+        .openCursor(IDBKeyRange.only(previous.activeGeneration));
+      await new Promise<void>((resolve, reject) => {
+        request.onerror = () => reject(request.error ?? new Error("IndexedDB first-seen lookup failed"));
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return resolve();
+          const item = cursor.value as VodCatalogItem;
+          if (!item.id.startsWith("xtream:")) {
+            const key = localStreamIdentity(item.streamUrl, item.contentType);
+            if (!this.committedFirstSeen.has(key)) this.committedFirstSeen.set(key, item.addedAt);
+          }
+          cursor.continue();
+        };
+      });
+      await transactionDone(read);
+    }
     const generation = previous.pendingGeneration ?? ((previous.activeGeneration ?? -1) + 1);
     await Promise.all([ITEMS_STORE, GROUPS_STORE, UNKNOWN_STORE].map((storeName) => this.deleteGeneration(storeName, generation)));
     this.pendingGeneration = generation;
@@ -341,7 +362,12 @@ export class IndexedDbCatalogStore {
     if (generation === undefined) throw new Error("Catalog import has not been started");
     const transaction = this.database.transaction(stores, "readwrite");
     const store = items.length > 0 ? transaction.objectStore(ITEMS_STORE) : undefined;
-    for (const item of items) store!.put({ ...item, generation, yearSortKey: item.year ?? 0 });
+    for (const item of items) {
+      const firstSeen = item.id.startsWith("xtream:")
+        ? undefined
+        : this.committedFirstSeen.get(localStreamIdentity(item.streamUrl, item.contentType));
+      store!.put({ ...item, ...(firstSeen === undefined ? {} : { addedAt: firstSeen }), generation, yearSortKey: item.year ?? 0 });
+    }
     if (unknownEntries.length > 0) {
       const unknownStore = transaction.objectStore(UNKNOWN_STORE);
       for (const item of unknownEntries) unknownStore.put({ ...item, generation });
@@ -368,6 +394,7 @@ export class IndexedDbCatalogStore {
     delete metadata.pendingGeneration;
     await this.writeMetadata(metadata);
     this.pendingGeneration = undefined;
+    this.committedFirstSeen.clear();
   }
 
   async replaceProviderGroups(groups: readonly VodGroup[]): Promise<void> {
@@ -395,6 +422,7 @@ export class IndexedDbCatalogStore {
     delete metadata.pendingGeneration;
     await this.writeMetadata(metadata);
     this.pendingGeneration = undefined;
+    this.committedFirstSeen.clear();
   }
 
   async fail(): Promise<void> {
@@ -410,6 +438,7 @@ export class IndexedDbCatalogStore {
     delete failed.pendingGeneration;
     await this.writeMetadata(failed);
     this.pendingGeneration = undefined;
+    this.committedFirstSeen.clear();
   }
 
   async groups(): Promise<VodGroup[]> {
@@ -471,6 +500,7 @@ export class IndexedDbCatalogStore {
     } satisfies CatalogMetadata);
     await transactionDone(transaction);
     this.pendingGeneration = undefined;
+    this.committedFirstSeen.clear();
   }
 
   async byGroupPage(group: string, offset = 0, limit = 100, sort: VodSort = "title"): Promise<VodCatalogItem[]> {
@@ -558,6 +588,10 @@ export class IndexedDbCatalogStore {
     });
     await transactionDone(transaction);
   }
+}
+
+function localStreamIdentity(streamUrl: string, contentType: VodContentType): string {
+  return contentType + "\u0000" + streamUrl;
 }
 
 function summarizeGroups(items: readonly VodCatalogItem[]): VodGroup[] {
