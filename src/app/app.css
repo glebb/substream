@@ -264,6 +264,18 @@ button:disabled { cursor: default; opacity: .45; }
 .quiet-danger { font-size: .9rem; padding: .7rem .85rem; }
 .modal-backdrop { align-items: center; background: rgba(3, 5, 10, .82); bottom: 0; display: flex; justify-content: center; left: 0; padding: 1rem; position: fixed; right: 0; top: 0; z-index: 30; }
 .modal-panel { box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, .5); margin: 0; max-height: calc(100vh - 2rem); overflow: auto; }
+.resume-choice { background: #151d2b; border: 1px solid #34435a; border-radius: .85rem; padding: 2rem; width: 100%; }
+.resume-choice h2 { line-height: 1.25; overflow-wrap: break-word; word-wrap: break-word; }
+.resume-choice .hint { margin: 0 0 1.75rem; }
+.resume-choice-actions { display: flex; padding: .5rem; }
+.resume-choice-actions > button { flex: 1 1 0%; min-height: 3.25rem; min-width: 0; white-space: normal; word-wrap: break-word; }
+.resume-choice-actions > button + button { margin-left: 28px; }
+@media (max-width: 600px) {
+  .resume-choice { padding: 1.5rem; }
+  .resume-choice-actions { flex-direction: column; }
+  .resume-choice-actions > button { flex: 0 0 auto; width: 100%; }
+  .resume-choice-actions > button + button { margin-left: 0; margin-top: 28px; }
+}
 .sr-only { height: 1px; margin: -1px; overflow: hidden; position: absolute; width: 1px; clip: rect(0, 0, 0, 0); }
 .section-heading { font-size: 1.5rem; margin: 2rem 0 .8rem; }
 .continue-grid { margin-bottom: 2rem; }
