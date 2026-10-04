@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { preferredAudioTrackIndex } from "../core/media/audio.ts";
@@ -11,11 +11,13 @@ import { loadLiveRelayConfig, relayChannelId } from "../platform/live-relay/conf
 import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "../platform/tizen/remote.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { DnaGuideClient } from "../platform/dna/client.ts";
+import { createAbortController } from "../platform/abort-controller.ts";
 import { NordicSkyShowtimeEpgClient, nordicGuideSourceUrl, skyShowtimeNordicXmltvId } from "../platform/nordic/skyshowtime-epg.ts";
 import { companionServerUrl } from "../platform/companion/client.ts";
 import { focusTitleListItem } from "./title-list-focus.ts";
+import { createGuideWorkScope, prioritizeGuideItems } from "./guide-priority.ts";
 import { loadSubtitlePreferences } from "../platform/browser/subtitle-preferences.ts";
-import { LanguageContext, Localized } from "./language.tsx";
+import { LanguageContext, Localized, translate, type UiLanguage } from "./language.tsx";
 
 type Props = { onMainMenu(): void };
 type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCategory: Record<string, LiveChannel[]> };
@@ -27,6 +29,8 @@ const DNA_EPG_CACHE_PREFIX = "substream.dna-epg.v1.";
 const EPG_CACHE_TTL_MS = 12 * 60 * 1000;
 const EPG_CONCURRENCY = 4;
 const EPG_LIMIT = 10;
+const EPG_CACHE_READ_BATCH = 24;
+const EPG_UPDATE_BATCH_MS = 100;
 
 type CachedGuide = { savedAt: number; programmes: EpgProgramme[]; dnaAttemptAt?: number };
 type CachedDnaGuide = { savedAt: number; programmes: EpgProgramme[] };
@@ -78,6 +82,49 @@ function categoryLabel(name: string): string {
   return name.replace(/^finland\s*[-:|]\s*/i, "").trim() || name;
 }
 
+type LiveChannelRowProps = {
+  channel: LiveChannel;
+  index: number;
+  focused: boolean;
+  guide?: CachedGuide | undefined;
+  guideFailed: boolean;
+  current: EpgProgramme | null;
+  next: EpgProgramme | null;
+  guideNow: number;
+  logoFailure?: { providerFailed?: boolean; dnaFailed?: boolean } | undefined;
+  language: UiLanguage;
+  rowRefs: MutableRefObject<Array<HTMLButtonElement | null>>;
+  focusIndexSetter: Dispatch<SetStateAction<number>>;
+  logoFailureSetter: Dispatch<SetStateAction<Record<string, { providerFailed?: boolean; dnaFailed?: boolean }>>>;
+  onTune(channel: LiveChannel): void;
+};
+
+const LiveChannelRow = memo(function LiveChannelRow({ channel, index, focused, guide, guideFailed, current, next, guideNow, logoFailure, language, rowRefs, focusIndexSetter, logoFailureSetter, onTune }: LiveChannelRowProps) {
+  const logoUrl = channel.logo && !logoFailure?.providerFailed ? channel.logo : !logoFailure?.dnaFailed ? channel.dnaLogo : undefined;
+  const remaining = current ? Math.max(0, Math.ceil((current.endTime - guideNow) / 60_000)) : 0;
+  const progress = current ? programmeProgress(current, guideNow) : 0;
+  return <button className={`live-row ${focused ? "remote-focused" : ""}`} type="button" key={channel.id} ref={(element) => { rowRefs.current[index] = element; }} onFocus={() => focusIndexSetter(index)} onClick={() => onTune(channel)}>
+    <span className="live-logo">{logoUrl
+      ? <img src={logoUrl} alt="" loading="lazy" onError={() => logoFailureSetter((previous) => {
+        const existing = previous[channel.id] ?? {};
+        return logoUrl === channel.logo && channel.dnaLogo !== channel.logo
+          ? { ...previous, [channel.id]: { ...existing, providerFailed: true } }
+          : { ...previous, [channel.id]: { ...existing, dnaFailed: true } };
+      })} />
+      : channel.name.charAt(0).toLocaleUpperCase()}</span>
+    <span className="live-channel-copy"><span className="live-channel-heading"><strong>{translate(channel.name, language)}</strong>{channel.variant && <span className="live-variant">{translate(channel.variant, language)}</span>}</span>
+      {!current ? next
+        ? <span className="live-guide"><span className="live-guide-next">{translate(`Next: ${next.title} · ${programmeTime(next.startTime)}`, language)}</span></span>
+        : <span className="live-guide-unavailable">{translate(guideFailed || guide ? "Programme information unavailable" : "Loading programme information…", language)}</span>
+        : <span className="live-guide">
+          <span className="live-guide-current"><strong>{translate(current.title, language)}</strong><span>{translate(`${programmeTime(current.startTime)}–${programmeTime(current.endTime)} · ${remaining} min left`, language)}</span></span>
+          <progress className="live-guide-progress" max={100} value={progress} aria-label={translate(`${progress.toFixed(0)}% of ${current.title}`, language)} />
+          {focused && next && <span className="live-guide-next">{translate(`Next: ${next.title} · ${programmeTime(next.startTime)}`, language)}</span>}
+        </span>}
+    </span>
+  </button>;
+});
+
 export function LiveTv({ onMainMenu }: Props) {
   const { language } = useContext(LanguageContext);
   const playlistUrl = loadPlaylistUrl();
@@ -97,8 +144,11 @@ export function LiveTv({ onMainMenu }: Props) {
   const [categories, setCategories] = useState<LiveCategory[]>(cached?.categories ?? []);
   const [selectedCategory, setSelectedCategory] = useState<LiveCategory | null>(null);
   const [channels, setChannels] = useState<LiveChannel[]>([]);
+  const channelsRef = useRef(channels);
+  channelsRef.current = channels;
   const [status, setStatus] = useState(cached ? "Showing saved categories while checking for updates…" : "Loading Finnish categories…");
   const [focusIndex, setFocusIndex] = useState(0);
+  const focusIndexRef = useRef(0);
   const [guideByChannel, setGuideByChannel] = useState<Record<string, CachedGuide>>({});
   const [guideFailures, setGuideFailures] = useState<Record<string, boolean>>({});
   const [logoFailures, setLogoFailures] = useState<Record<string, { providerFailed?: boolean; dnaFailed?: boolean }>>({});
@@ -144,6 +194,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const playerControlRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const requestedFullscreenExitRef = useRef(false);
   const requestRef = useRef(0);
+  focusIndexRef.current = focusIndex;
   playbackStateRef.current = playbackState;
 
   function reconcileEmbeddedSubtitles(player: MediaPlayer | null, tracks: import("../platform/media-player.ts").EmbeddedSubtitleTrack[]): void {
@@ -279,10 +330,14 @@ export function LiveTv({ onMainMenu }: Props) {
       const streams = await client.liveStreams(category.id);
       const result = selectFinnishChannels([category], streams, [], client.pairingFingerprint());
       if (request !== requestRef.current) return;
+      const focusedRow = rowRefs.current.indexOf(document.activeElement as HTMLButtonElement);
+      const focusedChannelId = focusedRow >= 0 ? channelsRef.current[focusedRow]?.id : undefined;
+      const nextFocusIndex = focusedChannelId ? result.channels.findIndex((channel) => channel.id === focusedChannelId) : 0;
+      setFocusIndex(nextFocusIndex >= 0 ? nextFocusIndex : 0);
       setChannels(result.channels);
       setStatus(result.channels.length ? `${result.channels.length.toLocaleString()} channels ready` : "No channels were found in this category.");
       saveCache(categories, category.id, result.channels);
-      if (result.channels.length) window.requestAnimationFrame(() => focusListItem(rowRefs.current[0] ?? null));
+      if (result.channels.length && !savedChannels.length) window.requestAnimationFrame(() => focusListItem(rowRefs.current[0] ?? null));
       void dnaClient.channels().then((dnaCatalog) => {
         if (request !== requestRef.current) return;
         const enriched = result.channels.map((channel) => attachDnaFallback(channel, matchDnaChannel(channel, dnaCatalog)));
@@ -320,23 +375,76 @@ export function LiveTv({ onMainMenu }: Props) {
     if (activeElement === document.body || !(activeElement instanceof HTMLElement) || !activeElement.isConnected) {
       focusListItem(rowRefs.current[focusIndex] ?? null);
     }
-  }, [channels.length, focusIndex, selectedCategory?.id]);
+  }, [channels, focusIndex, selectedCategory?.id]);
 
   useEffect(() => {
     if (!selectedCategory || !channels.length || !client) return;
-    let cancelled = false;
+    const workScope = createGuideWorkScope();
     const cachePrefix = EPG_CACHE_PREFIX + client.pairingFingerprint() + ".";
     const initial: Record<string, CachedGuide> = {};
-    channels.forEach((channel) => {
-      const cachedGuide = safeGuideCache(cachePrefix + channel.providerStreamId);
-      if (cachedGuide) initial[channel.id] = cachedGuide;
-    });
-    setGuideByChannel((previous) => ({ ...previous, ...initial }));
-    setGuideFailures({});
+    const pendingUpdates: Record<string, CachedGuide> = {};
+    const pendingFailures: Record<string, boolean> = {};
+    const cacheWrites: Array<[string, CachedGuide | CachedDnaGuide]> = [];
+    let updateTimer: number | null = null;
+    let cacheWriteTimer: number | null = null;
+    let scanTimer: number | null = null;
+    const flushUpdates = () => {
+      updateTimer = null;
+      if (workScope.cancelled) return;
+      const updates = Object.keys(pendingUpdates);
+      const failures = Object.keys(pendingFailures);
+      if (updates.length) {
+        const batch: Record<string, CachedGuide> = {};
+        updates.forEach((id) => { batch[id] = pendingUpdates[id]!; delete pendingUpdates[id]; });
+        setGuideByChannel((previous) => ({ ...previous, ...batch }));
+      }
+      if (failures.length) {
+        const batch: Record<string, boolean> = {};
+        failures.forEach((id) => { batch[id] = pendingFailures[id]!; delete pendingFailures[id]; });
+        setGuideFailures((previous) => ({ ...previous, ...batch }));
+      }
+    };
+    const scheduleUpdateFlush = () => {
+      if (updateTimer === null) updateTimer = window.setTimeout(flushUpdates, EPG_UPDATE_BATCH_MS);
+    };
+    const flushCacheWrites = () => {
+      cacheWriteTimer = null;
+      if (workScope.cancelled) return;
+      // Keep storage serialization off the response path and limit each turn to
+      // one synchronous localStorage write on older TV browsers.
+      const write = cacheWrites.shift();
+      if (write) {
+        try { localStorage.setItem(write[0], JSON.stringify(write[1])); } catch { /* guide cache is optional */ }
+      }
+      if (cacheWrites.length) cacheWriteTimer = window.setTimeout(flushCacheWrites, 80);
+    };
+    const scheduleCacheWrite = (key: string, value: CachedGuide | CachedDnaGuide) => {
+      cacheWrites.push([key, value]);
+      if (cacheWriteTimer === null) cacheWriteTimer = window.setTimeout(flushCacheWrites, 250);
+    };
 
-    const missing = channels
-      .map((channel, index) => ({ channel, index }))
-      .filter(({ channel }) => {
+    const loadGuides = async () => {
+      // Spread cache parsing across event-loop turns so a large category does
+      // not monopolize the Tizen renderer before network work can start.
+      for (let start = 0; start < channels.length; start += EPG_CACHE_READ_BATCH) {
+        if (workScope.cancelled) return;
+        const end = Math.min(channels.length, start + EPG_CACHE_READ_BATCH);
+        const batch: Record<string, CachedGuide> = {};
+        for (let index = start; index < end; index += 1) {
+          const channel = channels[index]!;
+          const cachedGuide = safeGuideCache(cachePrefix + channel.providerStreamId);
+          if (cachedGuide) { initial[channel.id] = cachedGuide; batch[channel.id] = cachedGuide; }
+        }
+        if (Object.keys(batch).length) setGuideByChannel((previous) => ({ ...previous, ...batch }));
+        if (end < channels.length) await new Promise<void>((resolve) => {
+          scanTimer = window.setTimeout(() => { scanTimer = null; resolve(); }, 0);
+        });
+      }
+      if (workScope.cancelled) return;
+      setGuideFailures({});
+      const channelIndexes = new Map<string, number>();
+      channels.forEach((channel, index) => channelIndexes.set(channel.id, index));
+      const missing = prioritizeGuideItems(channels.filter((channel) => {
         const guide = initial[channel.id];
         const now = Date.now();
         if (!guide) return true;
@@ -350,55 +458,77 @@ export function LiveTv({ onMainMenu }: Props) {
             || !guide.dnaAttemptAt || now - guide.dnaAttemptAt >= EPG_CACHE_TTL_MS;
         }
         return !guideIsFresh(guide, now);
-      })
-      .sort((left, right) => Math.abs(left.index - focusIndex) - Math.abs(right.index - focusIndex));
-    let cursor = 0;
-    const worker = async () => {
-      while (!cancelled && cursor < missing.length) {
-        const item = missing[cursor++];
-        if (!item) return;
-        const { channel } = item;
-        try {
-          let programmes: EpgProgramme[] = [];
-          let dnaAttemptAt: number | undefined;
-          const nordicXmltvId = skyShowtimeNordicXmltvId(channel);
-          if (nordicXmltvId) {
-            try { programmes = await nordicEpgClient.schedule(nordicXmltvId, channel.providerStreamId); }
-            catch { try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT); } catch { /* guide remains unavailable */ } }
-          } else {
-            try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT); } catch { /* continue to DNA fallback */ }
+      }), focusIndexRef.current, (channel) => channelIndexes.get(channel.id)!);
+      let cursor = 0;
+      let priorityFocusIndex = focusIndexRef.current;
+      const worker = async () => {
+        while (!workScope.cancelled && cursor < missing.length) {
+          const focusedIndex = focusIndexRef.current;
+          if (focusedIndex !== priorityFocusIndex) {
+            const queued = prioritizeGuideItems(missing.slice(cursor), focusedIndex, (item) => channelIndexes.get(item.id)!);
+            for (let index = 0; index < queued.length; index += 1) missing[cursor + index] = queued[index]!;
+            missing.length = cursor + queued.length;
+            priorityFocusIndex = focusedIndex;
           }
-          const slotsAfterNordicFallback = selectCurrentAndNextProgramme(programmes, Date.now());
-          if (channel.dnaChannelId && (!slotsAfterNordicFallback.current || !slotsAfterNordicFallback.next)) {
-            dnaAttemptAt = Date.now();
-            try {
-              const now = Date.now();
-              const dnaCacheKey = dnaGuideCacheKey(channel.dnaChannelId, now);
-              const cachedDnaGuide = safeDnaGuideCache(dnaCacheKey, now);
-              let fallback: EpgProgramme[];
-              if (cachedDnaGuide) fallback = cachedDnaGuide.programmes;
-              else {
-                const windowMs = 6 * 60 * 60 * 1000;
-                const start = Math.floor(now / windowMs) * windowMs - windowMs;
-                fallback = await dnaClient.schedule(channel.dnaChannelId, start, start + 24 * 60 * 60 * 1000);
-                try { localStorage.setItem(dnaCacheKey, JSON.stringify({ savedAt: Date.now(), programmes: fallback } satisfies CachedDnaGuide)); } catch { /* guide cache is optional */ }
-              }
-              programmes = fillMissingGuideSlots(programmes, fallback, Date.now());
-            } catch { /* provider guide remains usable when DNA is unavailable */ }
+          const channel = missing[cursor++];
+          if (!channel) return;
+          const controller = createAbortController();
+          workScope.track(controller);
+          try {
+            let programmes: EpgProgramme[] = [];
+            let dnaAttemptAt: number | undefined;
+            const nordicXmltvId = skyShowtimeNordicXmltvId(channel);
+            if (nordicXmltvId) {
+              try { programmes = await nordicEpgClient.schedule(nordicXmltvId, channel.providerStreamId); }
+              catch { try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT, controller?.signal); } catch { /* guide remains unavailable */ } }
+            } else {
+              try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT, controller?.signal); } catch { /* continue to DNA fallback */ }
+            }
+            if (workScope.cancelled || controller?.signal.aborted) return;
+            const slotsAfterNordicFallback = selectCurrentAndNextProgramme(programmes, Date.now());
+            if (channel.dnaChannelId && (!slotsAfterNordicFallback.current || !slotsAfterNordicFallback.next)) {
+              dnaAttemptAt = Date.now();
+              try {
+                const now = Date.now();
+                const dnaCacheKey = dnaGuideCacheKey(channel.dnaChannelId, now);
+                const cachedDnaGuide = safeDnaGuideCache(dnaCacheKey, now);
+                let fallback: EpgProgramme[];
+                if (cachedDnaGuide) fallback = cachedDnaGuide.programmes;
+                else {
+                  const windowMs = 6 * 60 * 60 * 1000;
+                  const start = Math.floor(now / windowMs) * windowMs - windowMs;
+                  if (workScope.cancelled || controller?.signal.aborted) return;
+                  fallback = await dnaClient.schedule(channel.dnaChannelId, start, start + 24 * 60 * 60 * 1000);
+                  if (workScope.cancelled || controller?.signal.aborted) return;
+                  scheduleCacheWrite(dnaCacheKey, { savedAt: Date.now(), programmes: fallback });
+                }
+                programmes = fillMissingGuideSlots(programmes, fallback, Date.now());
+              } catch { /* provider guide remains usable when DNA is unavailable */ }
+            }
+            if (workScope.cancelled) return;
+            const guide: CachedGuide = { savedAt: Date.now(), programmes, ...(dnaAttemptAt ? { dnaAttemptAt } : {}) };
+            pendingUpdates[channel.id] = guide;
+            pendingFailures[channel.id] = false;
+            scheduleUpdateFlush();
+            scheduleCacheWrite(cachePrefix + channel.providerStreamId, guide);
+          } catch {
+            if (workScope.cancelled) return;
+            pendingFailures[channel.id] = true;
+            scheduleUpdateFlush();
+          } finally {
+            workScope.release(controller);
           }
-          if (cancelled) return;
-          const guide: CachedGuide = { savedAt: Date.now(), programmes, ...(dnaAttemptAt ? { dnaAttemptAt } : {}) };
-          setGuideByChannel((previous) => ({ ...previous, [channel.id]: guide }));
-          setGuideFailures((previous) => ({ ...previous, [channel.id]: false }));
-          try { localStorage.setItem(cachePrefix + channel.providerStreamId, JSON.stringify(guide)); } catch { /* guide cache is optional */ }
-        } catch {
-          if (cancelled) return;
-          setGuideFailures((previous) => ({ ...previous, [channel.id]: true }));
         }
-      }
+      };
+      for (let workerIndex = 0; workerIndex < Math.min(EPG_CONCURRENCY, missing.length); workerIndex += 1) void worker();
     };
-    for (let workerIndex = 0; workerIndex < Math.min(EPG_CONCURRENCY, missing.length); workerIndex += 1) void worker();
-    return () => { cancelled = true; };
+    void loadGuides();
+    return () => {
+      workScope.cancel();
+      if (updateTimer !== null) window.clearTimeout(updateTimer);
+      if (cacheWriteTimer !== null) window.clearTimeout(cacheWriteTimer);
+      if (scanTimer !== null) window.clearTimeout(scanTimer);
+    };
   }, [cacheKey, channels, client, guideRefresh, nordicEpgClient, selectedCategory]);
 
   useEffect(() => {
@@ -428,6 +558,23 @@ export function LiveTv({ onMainMenu }: Props) {
     }, Math.max(1_000, nextEnd - guideNow + 500));
     return () => window.clearTimeout(timer);
   }, [channels, guideByChannel, guideNow, selectedCategory]);
+
+  const guideSlotsCacheRef = useRef<Record<string, { guide: CachedGuide | undefined; now: number; slots: ReturnType<typeof selectCurrentAndNextProgramme> }>>({});
+  const guideSlotsByChannel = useMemo(() => {
+    const slots: Record<string, ReturnType<typeof selectCurrentAndNextProgramme>> = {};
+    const cache: typeof guideSlotsCacheRef.current = {};
+    channels.forEach((channel) => {
+      const guide = guideByChannel[channel.id];
+      const previous = guideSlotsCacheRef.current[channel.id];
+      const channelSlots = previous && previous.guide === guide && previous.now === guideNow
+        ? previous.slots
+        : selectCurrentAndNextProgramme(guide?.programmes ?? [], guideNow);
+      slots[channel.id] = channelSlots;
+      cache[channel.id] = { guide, now: guideNow, slots: channelSlots };
+    });
+    guideSlotsCacheRef.current = cache;
+    return slots;
+  }, [channels, guideByChannel, guideNow]);
 
   useEffect(() => {
     if (selectedCategory || !categories.length) return;
@@ -675,6 +822,9 @@ export function LiveTv({ onMainMenu }: Props) {
     setSelected(channel);
     window.requestAnimationFrame(() => playerStageRef.current?.focus());
   };
+  const tuneRef = useRef(tune);
+  tuneRef.current = tune;
+  const tuneFromRow = useCallback((channel: LiveChannel) => tuneRef.current(channel), []);
   const changeChannel = (delta: number) => {
     if (!selected) return;
     const index = channels.findIndex((channel) => channel.id === selected.id);
@@ -893,40 +1043,14 @@ export function LiveTv({ onMainMenu }: Props) {
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV · FINLAND</p><h1>{categoryLabel(selectedCategory.name)}</h1></div><div className="header-actions"><button type="button" onClick={leaveCategory} ref={categoriesButtonRef}>Categories</button><button type="button" onClick={onMainMenu} ref={mainMenuRef}>Main menu</button></div></header>
     <p className="hint" role="status" aria-live="polite">{status}</p>
     <div className="live-list" ref={listViewportRef}>
-      {channels.map((channel, index) => <button className={`live-row ${index === focusIndex ? "remote-focused" : ""}`} type="button" key={channel.id} ref={(element) => { rowRefs.current[index] = element; }} onFocus={() => setFocusIndex(index)} onClick={() => tune(channel)}>
-        {(() => {
-          const failures = logoFailures[channel.id] ?? {};
-          const logoUrl = channel.logo && !failures.providerFailed
-            ? channel.logo
-            : !failures.dnaFailed ? channel.dnaLogo : undefined;
-          return <span className="live-logo">{logoUrl
-            ? <img src={logoUrl} alt="" loading="lazy" onError={() => {
-              setLogoFailures((previous) => {
-                const current = previous[channel.id] ?? {};
-                return logoUrl === channel.logo && channel.dnaLogo !== channel.logo
-                  ? { ...previous, [channel.id]: { ...current, providerFailed: true } }
-                  : { ...previous, [channel.id]: { ...current, dnaFailed: true } };
-              });
-            }} />
-            : channel.name.charAt(0).toLocaleUpperCase()}</span>;
-        })()}
-        <span className="live-channel-copy"><span className="live-channel-heading"><strong>{channel.name}</strong>{channel.variant && <span className="live-variant">{channel.variant}</span>}</span>
-          {(() => {
-            const guide = guideByChannel[channel.id];
-            const { current, next } = selectCurrentAndNextProgramme(guide?.programmes ?? [], guideNow);
-            if (!current) {
-              if (next) return <span className="live-guide"><span className="live-guide-next">Next: {next.title} · {programmeTime(next.startTime)}</span></span>;
-              return <span className="live-guide-unavailable">{guideFailures[channel.id] || guide ? "Programme information unavailable" : "Loading programme information…"}</span>;
-            }
-            const remaining = Math.max(0, Math.ceil((current.endTime - guideNow) / 60_000));
-            return <span className="live-guide">
-              <span className="live-guide-current"><strong>{current.title}</strong><span>{programmeTime(current.startTime)}–{programmeTime(current.endTime)} · {remaining} min left</span></span>
-              <progress className="live-guide-progress" max={100} value={programmeProgress(current, guideNow)} aria-label={`${programmeProgress(current, guideNow).toFixed(0)}% of ${current.title}`} />
-              {index === focusIndex && next && <span className="live-guide-next">Next: {next.title} · {programmeTime(next.startTime)}</span>}
-            </span>;
-          })()}
-        </span>
-      </button>)}
+      {channels.map((channel, index) => {
+        const guide = guideByChannel[channel.id];
+        const slots = guideSlotsByChannel[channel.id] ?? { current: null, next: null };
+        return <LiveChannelRow key={channel.id} channel={channel} index={index} focused={index === focusIndex}
+          guide={guide} guideFailed={!!guideFailures[channel.id]} current={slots.current} next={slots.next} guideNow={guideNow}
+          logoFailure={logoFailures[channel.id]} language={language} rowRefs={rowRefs} focusIndexSetter={setFocusIndex}
+          logoFailureSetter={setLogoFailures} onTune={tuneFromRow} />;
+      })}
       {!channels.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No channels</h2><p>Refresh this category to try again.</p><button type="button" ref={emptyRefreshRef} onClick={() => void openCategory(selectedCategory)}>Refresh</button></div>}
     </div>
   </main></Localized>;

@@ -1,7 +1,8 @@
-import { gunzipSync } from "fflate";
+import { AsyncGunzip, Gunzip } from "fflate";
 
 import type { LiveChannel } from "../../core/live/types.ts";
 import type { EpgProgramme } from "../../core/live/types.ts";
+import { parseSkyShowtimeXmltv, parseSkyShowtimeXmltvAsync } from "./skyshowtime-epg-parser.ts";
 
 type Response = { ok: boolean; status: number; arrayBuffer(): Promise<ArrayBuffer> };
 type Request = (url: string) => Promise<Response>;
@@ -79,9 +80,9 @@ export class NordicSkyShowtimeEpgClient {
       if (!response.ok) throw new NordicEpgRequestError(response.status);
       const compressed = new Uint8Array(await response.arrayBuffer());
       if (compressed.byteLength > MAX_COMPRESSED_BYTES) throw new NordicEpgRequestError();
-      const decoded = gunzipSync(compressed);
+      const decoded = await gunzipAsync(compressed);
       if (decoded.byteLength > MAX_DECOMPRESSED_BYTES) throw new NordicEpgRequestError();
-      return parseSkyShowtimeXmltv(new TextDecoder().decode(decoded));
+      return await parseOffMainThread(decoded);
     } catch (error) {
       if (error instanceof NordicEpgRequestError) throw error;
       throw new NordicEpgRequestError();
@@ -89,41 +90,177 @@ export class NordicSkyShowtimeEpgClient {
   }
 }
 
-function parseSkyShowtimeXmltv(xml: string): EpgProgramme[] {
-  const programmes: EpgProgramme[] = [];
-  const supported = new Set(Object.values(SKYSHOWTIME_XMLTV_IDS));
-  for (const match of xml.matchAll(/<programme\b([^>]*)>([\s\S]*?)<\/programme>/g)) {
-    const attributes = match[1] ?? "";
-    const body = match[2] ?? "";
-    const channelId = attribute(attributes, "channel");
-    const startTime = xmltvTime(attribute(attributes, "start"));
-    const endTime = xmltvTime(attribute(attributes, "stop"));
-    const title = elementText(body, "title");
-    if (!channelId || !supported.has(channelId) || startTime === null || endTime === null || endTime <= startTime || !title) continue;
-    const description = elementText(body, "desc");
-    programmes.push({ channelId, title, startTime, endTime, ...(description ? { description } : {}) });
+function gunzipAsync(compressed: Uint8Array): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    let stream: AsyncGunzip | null = null;
+    let settled = false;
+    let total = 0;
+    const chunks: Uint8Array[] = [];
+    let fallbackStarted = false;
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
+    async function fallback(): Promise<void> {
+      if (settled || fallbackStarted) return;
+      fallbackStarted = true;
+      if (watchdog) clearTimeout(watchdog);
+      stream?.terminate?.();
+      try {
+        const result = await gunzipWithYielding(compressed);
+        settled = true;
+        resolve(result);
+      } catch (error) {
+        settled = true;
+        reject(error);
+      }
+    }
+
+    try {
+      stream = new AsyncGunzip((error, chunk, final) => {
+        if (settled) return;
+        if (error) { void fallback(); return; }
+        if (chunk?.byteLength) {
+          total += chunk.byteLength;
+          if (total > MAX_DECOMPRESSED_BYTES) {
+            settled = true;
+            if (watchdog) clearTimeout(watchdog);
+            stream?.terminate?.();
+            reject(new NordicEpgRequestError());
+            return;
+          }
+          chunks.push(chunk);
+        }
+        if (final) {
+          settled = true;
+          if (watchdog) clearTimeout(watchdog);
+          resolve(joinChunks(chunks, total));
+        }
+      });
+    } catch {
+      void fallback();
+      return;
+    }
+    watchdog = setTimeout(() => { void fallback(); }, 10_000);
+
+    try {
+      const chunkSize = 64 * 1024;
+      for (let offset = 0; offset < compressed.byteLength; offset += chunkSize) {
+        const end = Math.min(compressed.byteLength, offset + chunkSize);
+        const copy = compressed.slice(offset, end);
+        stream.push(copy, end === compressed.byteLength);
+      }
+    } catch {
+      void fallback();
+    }
+  });
+}
+
+async function gunzipWithYielding(compressed: Uint8Array): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const stream = new Gunzip((chunk, final) => {
+    if (!chunk?.byteLength) return;
+    total += chunk.byteLength;
+    if (total > MAX_DECOMPRESSED_BYTES) throw new NordicEpgRequestError();
+    chunks.push(chunk);
+  });
+  const chunkSize = 32 * 1024;
+  for (let offset = 0; offset < compressed.byteLength; offset += chunkSize) {
+    const end = Math.min(compressed.byteLength, offset + chunkSize);
+    stream.push(compressed.subarray(offset, end), end === compressed.byteLength);
+    if (end < compressed.byteLength) await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
-  return programmes.sort((left, right) => left.startTime - right.startTime || left.endTime - right.endTime);
+  return joinChunks(chunks, total);
 }
 
-function attribute(source: string, name: string): string {
-  return new RegExp(`\\b${name}="([^"]*)"`, "i").exec(source)?.[1] ?? "";
+function joinChunks(chunks: Uint8Array[], length: number): Uint8Array {
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
+  return result;
 }
 
-function elementText(source: string, name: string): string {
-  const raw = new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)<\\/${name}>`, "i").exec(source)?.[1] ?? "";
-  return decodeXml(raw.replace(/<[^>]+>/g, "")).trim();
+function parseOffMainThread(decoded: Uint8Array): Promise<EpgProgramme[]> {
+  if (typeof Worker === "undefined" || typeof Blob === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) {
+    return decodeAndParseAsync(decoded);
+  }
+  let worker: Worker;
+  let objectUrl: string | null = null;
+  try {
+    // A function-backed Blob keeps the worker classic and self-contained. This
+    // is required by Tizen 3's Chromium 47, which cannot run module workers.
+    objectUrl = URL.createObjectURL(new Blob([createNordicEpgWorkerSource()], { type: "text/javascript" }));
+    worker = new Worker(objectUrl);
+  } catch {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    return decodeAndParseAsync(decoded);
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let watchdog: ReturnType<typeof setTimeout>;
+    const cleanup = () => {
+      clearTimeout(watchdog);
+      worker.terminate();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+    watchdog = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void decodeAndParseAsync(decoded).then(resolve, reject);
+    }, 30_000);
+    worker.onmessage = (event: MessageEvent) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const response = event.data as { programmes?: EpgProgramme[]; error?: boolean };
+      if (response?.error || !Array.isArray(response?.programmes)) void decodeAndParseAsync(decoded).then(resolve, reject);
+      else resolve(response.programmes);
+    };
+    worker.onerror = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // Security policies and older webviews can reject Blob workers. Keep the
+      // guide usable by parsing in small tasks on the UI thread.
+      void decodeAndParseAsync(decoded).then(resolve, reject);
+    };
+    try {
+      const buffer = decoded.buffer.slice(decoded.byteOffset, decoded.byteOffset + decoded.byteLength) as ArrayBuffer;
+      worker.postMessage(buffer, [buffer]);
+    }
+    catch {
+      settled = true;
+      cleanup();
+      void decodeAndParseAsync(decoded).then(resolve, reject);
+    }
+  });
 }
 
-function decodeXml(value: string): string {
-  return value.replace(/&(?:amp|lt|gt|quot|apos);/g, (entity) => ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" })[entity] ?? entity);
+function workerEntrypoint(parse: (xml: string) => EpgProgramme[]): void {
+  const workerScope = self as unknown as { onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null; postMessage(value: unknown): void };
+  workerScope.onmessage = (event) => {
+    try { workerScope.postMessage({ programmes: parse(new TextDecoder().decode(new Uint8Array(event.data))) }); }
+    catch { workerScope.postMessage({ error: true }); }
+  };
 }
 
-function xmltvTime(value: string): number | null {
-  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\s+([+-])(\d{2})(\d{2})$/.exec(value.trim());
-  if (!match) return null;
-  const [, year, month, day, hour, minute, second, sign, offsetHour, offsetMinute] = match;
-  const utc = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
-  const offset = (Number(offsetHour) * 60 + Number(offsetMinute)) * 60_000;
-  return Number.isFinite(utc) ? utc + (sign === "+" ? -offset : offset) : null;
+export function createNordicEpgWorkerSource(): string {
+  return `(${workerEntrypoint.toString()})(${parseSkyShowtimeXmltv.toString()});`;
 }
+
+async function decodeAndParseAsync(decoded: Uint8Array): Promise<EpgProgramme[]> {
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  const chunkSize = 256 * 1024;
+  for (let offset = 0; offset < decoded.byteLength; offset += chunkSize) {
+    const end = Math.min(decoded.byteLength, offset + chunkSize);
+    parts.push(decoder.decode(decoded.subarray(offset, end), { stream: end < decoded.byteLength }));
+    if (end < decoded.byteLength) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  parts.push(decoder.decode());
+  return parseSkyShowtimeXmltvAsync(parts.join(""));
+}
+
+export { parseSkyShowtimeXmltv, parseSkyShowtimeXmltvAsync };
+
+/* Parser implementations live in a separate file so synthetic fixtures can
+ * exercise both worker-compatible and yielding paths without any TV data. */

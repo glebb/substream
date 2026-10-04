@@ -41,6 +41,7 @@ export const en = {
   "Browse your library": "Browse your library",
   "Browser paired successfully.": "Browser paired successfully.",
   "Buffering…": "Buffering…",
+  "Could not open this screen. Please try again.": "Could not open this screen. Please try again.",
   "Cancel": "Cancel",
   "catalog": "catalog",
   "catalogue": "catalogue",

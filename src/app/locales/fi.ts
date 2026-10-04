@@ -43,6 +43,7 @@ export const fi: Record<keyof typeof en, string> = {
   "Browse your library": "Selaa kirjastoasi",
   "Browser paired successfully.": "Selain liitetty.",
   "Buffering…": "Puskuroidaan…",
+  "Could not open this screen. Please try again.": "Näkymää ei voitu avata. Yritä uudelleen.",
   "Cancel": "Peruuta",
   "catalog": "luettelo",
   "catalogue": "luettelo",
