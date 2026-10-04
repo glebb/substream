@@ -1,20 +1,9 @@
 # Live subtitle relay deployment artifacts
 
-A native systemd service is deployed at `https://subtitles.displayofpatience.com` as of 2026-10-03. It reuses existing Nginx; Docker was not installed. See [operations](OPERATIONS.md) for exact versions, private configuration refresh, verification and rollback. **Hosted media/subtitle checks now pass through relay-only Finnish Mullvad egress.** Direct requests still return 456. The signed personal Tizen 3 package is installed, and the user confirmed hosted playback works on Tizen on 2026-10-03. The Mac relay is stopped. A sustained soak and measured timing remain unverified.
+The last recorded hosted deployment used a native systemd service behind the host's existing Nginx at `https://subtitles.displayofpatience.com`. The record is from 2026-10-03 and has not been reverified during this documentation update. See [operations](OPERATIONS.md) for the recorded host setup, private configuration refresh, service commands, validation procedure and rollback.
 
-`live-subtitle-relay.service` and `nginx.conf` describe the installed native setup. The Docker/Compose artifacts below remain an alternative preparation path; they were not used or release-validated.
+The checked-in systemd and Nginx files describe that native deployment. The Docker/Compose/Caddy files are an alternative preparation path: Docker was not installed on the recorded host, and this container setup has not been deployed or release-validated. Do not infer that these files match the deployed host's current state.
 
-Start with the [deployment handoff](../../docs/live-subtitle-relay-deployment.md), [implementation notes](../../docs/live-subtitle-relay.md), and [current plan](../../docs/live-subtitle-relay-plan.md). The handoff records missing host information, automatic personal TV defaults, release verification, operations and rollback work.
+The four container artifacts provide a non-root Node 24 + FFmpeg image, an allowlisted build context, an optional Caddy proxy, and bounded temporary storage/resources. Compose expects private `RELAY_DOMAIN`, `RELAY_CONFIG_PATH` and versioned `RELAY_IMAGE_TAG` values. Keep runtime JSON outside the checkout, readable only by the service UID, and set `sessionRoot` under `/tmp` for the supplied tmpfs. Never include `.env`, generated provider JSON, playlists or personal TV packages in an image.
 
-| Artifact | Purpose |
-| --- | --- |
-| `Dockerfile` | Node 24 + FFmpeg, dependency-free server/core runtime, non-root UID 1000 |
-| `Dockerfile.dockerignore` | Allows only service/core source; excludes env, JSON, playlists and tests from the context |
-| `compose.yaml` | Relay plus optional Caddy; private runtime JSON secret, internal relay port, tmpfs/resource limits, healthcheck and restart policy |
-| `Caddyfile` | HTTPS hostname reverse proxy without request access logging |
-
-Compose runs from this directory with private deployment variables `RELAY_DOMAIN`, `RELAY_CONFIG_PATH` and versioned `RELAY_IMAGE_TAG`. Runtime JSON lives outside the checkout and must be readable by container UID 1000. Its session root must be under `/tmp` for this stack. Do not copy private Mac `.env` files, generated JSON or personal TV bundles into the image.
-
-Reuse an existing ingress proxy if ports 80/443 are occupied. Pin Node/Caddy image digests and FFmpeg package version for release; checked-in tags are development defaults. Verify the 768 MiB RAM, two CPU, 64-process and 256 MiB tmpfs limits against real bitrate and concurrency. Default two sessions can each retain up to 128 MiB, so temporary storage capacity needs particular attention.
-
-`restart: unless-stopped` restarts exited processes, not unhealthy running ones. `/healthz` reports process health, not provider availability. Actual image build, secret permissions, server egress, certificate trust on Tizen, health operation and rollback remain deployment checks. Keep certificate volumes and private configuration when rolling back; never log access URLs containing session capabilities.
+The checked-in image tags and FFmpeg package selection are development defaults. A future container deployment still needs pinned image/package versions, capacity checks, secret-permission checks, HTTPS validation on the TV, health/restart validation and a tested rollback. `/healthz` reports relay process health, not provider availability. Preserve certificates and private configuration when changing deployment methods or rolling back; never log capability-bearing URLs.

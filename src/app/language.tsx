@@ -2,18 +2,10 @@ import { Children, cloneElement, createContext, isValidElement, type ReactNode }
 import { en } from "./locales/en.ts";
 import { fi } from "./locales/fi.ts";
 
-export type UiLanguage = "fi" | "en";
+import type { UiLanguage } from "../platform/web/ui-language-config.ts";
+export { loadUiLanguage, saveUiLanguage, type UiLanguage } from "../platform/web/ui-language-config.ts";
 
-const storageKey = "substream.ui-language";
 const dictionaries: Record<UiLanguage, Record<string, string>> = { en, fi };
-export function loadUiLanguage(): UiLanguage {
-  try { return localStorage.getItem(storageKey) === "en" ? "en" : "fi"; } catch { return "fi"; }
-}
-
-export function saveUiLanguage(language: UiLanguage): void {
-  try { localStorage.setItem(storageKey, language); } catch { /* optional preference */ }
-}
-
 export function translate(value: string, language: UiLanguage): string {
   const dictionary = dictionaries[language];
   if (dictionary[value] !== undefined) return dictionary[value]!;

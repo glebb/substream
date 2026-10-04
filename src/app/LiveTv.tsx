@@ -2,65 +2,39 @@ import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, use
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { preferredAudioTrackIndex } from "../core/media/audio.ts";
-import { loadPlaylistUrl } from "../platform/browser/playlist-config.ts";
-import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
 import type { AudioTrack, LiveBufferWindow, MediaPlayer, PlaybackState } from "../platform/media-player.ts";
-import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avplay-player.ts";
-import { TizenLiveRelayPlayer } from "../platform/tizen/live-relay-player.ts";
-import { loadLiveRelayConfig, relayChannelId } from "../platform/live-relay/config.ts";
-import { isBackKey, isTizenRuntime, normalizedRemoteKey } from "../platform/tizen/remote.ts";
+import { relayChannelId } from "../platform/live-relay/config.ts";
+import { isBackKey, normalizedRemoteKey } from "../contracts/input.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { DnaGuideClient } from "../platform/dna/client.ts";
 import { createAbortController } from "../platform/abort-controller.ts";
 import { NordicSkyShowtimeEpgClient, nordicGuideSourceUrl, skyShowtimeNordicXmltvId } from "../platform/nordic/skyshowtime-epg.ts";
-import { companionServerUrl } from "../platform/companion/client.ts";
+import { useCompanion } from "./companion.tsx";
+import { safeGuideCache as readGuideCache, safeDnaGuideCache as readDnaGuideCache, safeCache as readLiveCache, dnaGuideCacheKey, guideIsFresh, EPG_CACHE_TTL_MS, type CachedGuide, type CachedLive, type CachedDnaGuide } from "../application/live-cache.ts";
+import { providerRequestUrl } from "../platform/provider-request.ts";
 import { focusTitleListItem } from "./title-list-focus.ts";
 import { useFixedListRowHeight } from "./fixed-list-sizing.ts";
 import { ScreenNavigation } from "./ScreenNavigation.tsx";
 import { createGuideWorkScope, prioritizeGuideItems } from "./guide-priority.ts";
-import { loadSubtitlePreferences } from "../platform/browser/subtitle-preferences.ts";
+import { createDeviceSettings } from "../bootstrap/settings.ts";
 import { LanguageContext, Localized, translate, type UiLanguage } from "./language.tsx";
+import { useRuntime } from "./runtime.tsx";
+import { LivePlaybackController } from "../application/live-playback-controller.ts";
 
 type Props = { onMainMenu(): void };
-type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCategory: Record<string, LiveChannel[]> };
 const CACHE_PREFIX = "substream.live.v2.";
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 const BROWSER_PLAYBACK_START_TIMEOUT_MS = 8_000;
 const EPG_CACHE_PREFIX = "substream.epg.v1.";
-const DNA_EPG_CACHE_PREFIX = "substream.dna-epg.v1.";
-const EPG_CACHE_TTL_MS = 12 * 60 * 1000;
 const EPG_CONCURRENCY = 4;
 const EPG_LIMIT = 10;
 const EPG_CACHE_READ_BATCH = 24;
 const EPG_UPDATE_BATCH_MS = 100;
 
-type CachedGuide = { savedAt: number; programmes: EpgProgramme[]; dnaAttemptAt?: number };
-type CachedDnaGuide = { savedAt: number; programmes: EpgProgramme[] };
 
-function safeGuideCache(key: string): CachedGuide | null {
-  try {
-    const value = JSON.parse(localStorage.getItem(key) ?? "null") as CachedGuide | null;
-    return value && typeof value.savedAt === "number" && Array.isArray(value.programmes) ? value : null;
-  } catch { return null; }
-}
 
-function safeDnaGuideCache(key: string, now: number): CachedDnaGuide | null {
-  try {
-    const value = JSON.parse(localStorage.getItem(key) ?? "null") as CachedDnaGuide | null;
-    return value && typeof value.savedAt === "number" && Array.isArray(value.programmes)
-      && now - value.savedAt < EPG_CACHE_TTL_MS ? value : null;
-  } catch { return null; }
-}
 
-function dnaGuideCacheKey(channelId: string, now: number): string {
-  const windowMs = 6 * 60 * 60 * 1000;
-  return `${DNA_EPG_CACHE_PREFIX}${channelId}.${Math.floor(now / windowMs)}`;
-}
 
-function guideIsFresh(guide: CachedGuide, now: number): boolean {
-  const programmeAtFetch = guide.programmes.find((item) => item.startTime <= guide.savedAt && item.endTime > guide.savedAt);
-  return now - guide.savedAt < EPG_CACHE_TTL_MS && (!programmeAtFetch || now < programmeAtFetch.endTime);
-}
 
 function programmeTime(value: number): string {
   const date = new Date(value);
@@ -73,12 +47,6 @@ function programmeProgress(programme: EpgProgramme, now: number): number {
   return duration > 0 ? Math.max(0, Math.min(100, (now - programme.startTime) / duration * 100)) : 0;
 }
 
-function safeCache(key: string): CachedLive | null {
-  try {
-    const value = JSON.parse(localStorage.getItem(key) ?? "null") as CachedLive | null;
-    return value && Array.isArray(value.categories) && value.channelsByCategory && typeof value.channelsByCategory === "object" && typeof value.savedAt === "number" ? value : null;
-  } catch { return null; }
-}
 
 function categoryLabel(name: string): string {
   return name.replace(/^finland\s*[-:|]\s*/i, "").trim() || name;
@@ -129,18 +97,24 @@ const LiveChannelRow = memo(function LiveChannelRow({ channel, index, focused, g
 });
 
 export function LiveTv({ onMainMenu }: Props) {
+  const runtime = useRuntime();
+  const companion = useCompanion();
+  const safeGuideCache = (key: string) => readGuideCache(runtime.preferences, key);
+  const safeDnaGuideCache = (key: string, now: number) => readDnaGuideCache(runtime.preferences, key, now);
+  const safeCache = (key: string) => readLiveCache(runtime.preferences, key);
   const { language } = useContext(LanguageContext);
-  const playlistUrl = loadPlaylistUrl();
-  const client = useMemo(() => XtreamClient.fromPlaylistUrl(playlistUrl), [playlistUrl]);
-  const dnaClient = useMemo(() => new DnaGuideClient(), []);
+  const settings = useMemo(() => createDeviceSettings(runtime.preferences), [runtime.preferences]);
+  const playlistUrl = settings.loadPlaylistUrl();
+  const client = useMemo(() => XtreamClient.fromPlaylistUrl(playlistUrl, (url, init) => runtime.transport.fetch(providerRequestUrl(url), init)), [playlistUrl, runtime.transport]);
+  const dnaClient = useMemo(() => new DnaGuideClient((url) => runtime.transport.fetch(url)), [runtime.transport]);
   const nordicEpgClient = useMemo(() => {
     const sourceUrl = nordicGuideSourceUrl({
-      isTizen: isTizenRuntime(),
-      relayUrl: companionServerUrl(),
+      canFetchDirectly: runtime.capabilities.directGuideRequests,
+      relayUrl: companion.enabled ? companion.controller.getSnapshot().server : "",
       development: import.meta.env.DEV,
     });
-    return new NordicSkyShowtimeEpgClient(undefined, sourceUrl);
-  }, []);
+    return new NordicSkyShowtimeEpgClient((url) => runtime.transport.fetch(url), sourceUrl);
+  }, [runtime, companion.enabled, companion.controller.getSnapshot().server]);
   const cacheKey = client ? CACHE_PREFIX + client.pairingFingerprint() : "";
   const cached = useMemo(() => cacheKey ? safeCache(cacheKey) : null, [cacheKey]);
   const [cacheSavedAt, setCacheSavedAt] = useState(cached?.savedAt ?? 0);
@@ -174,8 +148,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const [relayPlaybackLabel, setRelayPlaybackLabel] = useState("");
   const [relayFailureMessage, setRelayFailureMessage] = useState("");
   const [relayDiagnostics, setRelayDiagnostics] = useState("");
-  const previousPlayerTeardown = useRef<Promise<void>>(Promise.resolve());
-  const subtitleSelectionManualRef = useRef(false);
+    const subtitleSelectionManualRef = useRef(false);
   const [showLiveHint, setShowLiveHint] = useState(false);
   const liveHintTimerRef = useRef<number | null>(null);
   const audioSelectionManualRef = useRef(false);
@@ -193,7 +166,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const categoriesButtonRef = useRef<HTMLButtonElement | null>(null);
   const emptyRefreshRef = useRef<HTMLButtonElement | null>(null);
   const focusListItem = (element: HTMLButtonElement | null) => {
-    if (isTizenRuntime()) focusTitleListItem(element, listViewportRef.current);
+    if (runtime.interactionProfile === "tv") focusTitleListItem(element, listViewportRef.current);
     else element?.focus();
   };
   const playerControlRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -215,32 +188,32 @@ export function LiveTv({ onMainMenu }: Props) {
     }
     let remaining = [...tracks];
     while (remaining.length) {
-      const preferred = preferredEmbeddedSubtitleTrack(remaining, loadSubtitlePreferences().languagePreference);
+      const preferred = preferredEmbeddedSubtitleTrack(remaining, settings.loadSubtitlePreferences().languagePreference);
       if (!preferred) break;
       if (player.selectEmbeddedSubtitleTrack?.(preferred.id)) {
         const language = (preferred.language ?? preferred.label).trim().toLocaleLowerCase();
-        setLiveSubtitleStatus(`Subtitles: ${language.startsWith("fi") || language.startsWith("fin") ? "Finnish" : "English"}${player instanceof TizenLiveRelayPlayer ? " · Timing test" : ""}`);
+        setLiveSubtitleStatus(`Subtitles: ${language.startsWith("fi") || language.startsWith("fin") ? "Finnish" : "English"}${player.isSubtitleTimingTestPlayer?.() ? " · Timing test" : ""}`);
         return;
       }
       remaining = remaining.filter((track) => track.id !== preferred.id);
     }
-    if (player instanceof TizenLiveRelayPlayer) {
-      setLiveSubtitleStatus(player.getRelaySubtitleStatus());
+    if (player.getLiveSubtitleServiceStatus) {
+      setLiveSubtitleStatus(player.getLiveSubtitleServiceStatus());
       return;
     }
-    if (player instanceof TizenAvPlayPlayer) {
+    if (player.getLiveDvbSubtitleStatus) {
       const status = player.getLiveDvbSubtitleStatus();
       if (status === "DVB subtitle stream unavailable") {
         setLiveSubtitleStatus("DVB subtitle stream unavailable");
         return;
       }
       if (status === "DVB subtitle scan not started" || status === "DVB subtitle feed not configured") {
-        setLiveSubtitleStatus(`AVPlay has no subtitle track · DVB scan off · ${player.getLiveAudioMetadataStatus()}`);
+        setLiveSubtitleStatus(`AVPlay has no subtitle track · DVB scan off · ${player.getLiveAudioLanguageStatus?.() ?? ""}`);
         return;
       }
     }
     player.selectEmbeddedSubtitleTrack?.("off");
-    setLiveSubtitleStatus(`Subtitles unavailable${player instanceof TizenAvPlayPlayer ? ` · ${player.getTrackDiagnostics()}` : ""}`);
+    setLiveSubtitleStatus(`Subtitles unavailable${player.getPlaybackDiagnostics ? ` · ${player.getPlaybackDiagnostics()}` : ""}`);
   }
   function reconcileAudioTracks(player: MediaPlayer | null, tracks: AudioTrack[]): void {
     if (!player) return;
@@ -250,8 +223,8 @@ export function LiveTv({ onMainMenu }: Props) {
     }
     if (audioSelectionManualRef.current) {
       setAudioTracks(tracks);
-      if (player instanceof TizenAvPlayPlayer && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
-        setAudioStatus(`Finnish audio unavailable · ${player.getLiveAudioMetadataStatus()}`);
+      if (player.getLiveAudioLanguageStatus && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
+        setAudioStatus(`Finnish audio unavailable · ${player.getLiveAudioLanguageStatus()}`);
       }
       return;
     }
@@ -264,11 +237,11 @@ export function LiveTv({ onMainMenu }: Props) {
     if (preferred && !preferred.selected && player.selectAudioTrack?.(preferred.id)) {
       setAudioTracks(tracks.map((track) => ({ ...track, selected: track.id === preferred.id })));
     } else setAudioTracks(tracks);
-    if (player instanceof TizenAvPlayPlayer && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
-      setAudioStatus(`Finnish audio unavailable · ${player.getLiveAudioMetadataStatus()}`);
+    if (player.getLiveAudioLanguageStatus && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
+      setAudioStatus(`Finnish audio unavailable · ${player.getLiveAudioLanguageStatus()}`);
     }
   }
-  const isTizen = isTizenRuntime() || __SUBSTREAM_TV_UI_PREVIEW__;
+  const isTvProfile = runtime.interactionProfile === "tv";
 
   const hideLiveHint = () => {
     if (liveHintTimerRef.current !== null) window.clearTimeout(liveHintTimerRef.current);
@@ -294,7 +267,7 @@ export function LiveTv({ onMainMenu }: Props) {
     if (categoryId && nextChannels) channelsByCategory[categoryId] = nextChannels;
     const savedAt = Date.now();
     try {
-      localStorage.setItem(cacheKey, JSON.stringify({ savedAt, categories: nextCategories, channelsByCategory } satisfies CachedLive));
+      runtime.preferences.set(cacheKey, JSON.stringify({ savedAt, categories: nextCategories, channelsByCategory } satisfies CachedLive));
       setCacheSavedAt(savedAt);
     } catch { /* cache is optional */ }
   };
@@ -419,7 +392,7 @@ export function LiveTv({ onMainMenu }: Props) {
       // one synchronous localStorage write on older TV browsers.
       const write = cacheWrites.shift();
       if (write) {
-        try { localStorage.setItem(write[0], JSON.stringify(write[1])); } catch { /* guide cache is optional */ }
+        try { runtime.preferences.set(write[0], JSON.stringify(write[1])); } catch { /* guide cache is optional */ }
       }
       if (cacheWrites.length) cacheWriteTimer = window.setTimeout(flushCacheWrites, 80);
     };
@@ -597,178 +570,85 @@ export function LiveTv({ onMainMenu }: Props) {
     setRelayFailureMessage("");
     setRelayDiagnostics("");
     let cancelled = false;
-    let player: MediaPlayer | null = null;
-    let fallingBack = false;
-    let relayRecovery: Promise<void> | null = null;
-    let relayErrorDuringRecovery: TizenLiveRelayPlayer | null = null;
-    let relayReconnects = 0;
-    let relayHasPlayed = false;
+    let directFallback = false;
     let diagnosticTimer: ReturnType<typeof setInterval> | undefined;
-    const config = loadLiveRelayConfig();
+    const config = settings.loadLiveRelayConfig();
     const hostedChannelId = config ? relayChannelId(config, selected.providerStreamId, selected.name) : null;
-    const bind = (active: MediaPlayer) => {
-      player = active;
-      playerRef.current = active;
-      active.setLiveSubtitleMode?.(true);
-      active.setEventHandlers({
-      onStateChange: (state) => {
-        if (cancelled || playerRef.current !== active) return;
-        if (state === "error" && active instanceof TizenLiveRelayPlayer) {
-          if (relayRecovery) { relayErrorDuringRecovery = active; return; }
-          if (relayHasPlayed || relayReconnects > 0) { void recoverRelay(active); return; }
-          void fallBack(active);
-          return;
+    const streamUrl = client.liveStreamUrl(selected.providerStreamId, liveSource === "hls" ? "m3u8" : "ts");
+    const controller = new LivePlaybackController({
+      directStreamUrl: streamUrl,
+      createDirect: () => runtime.playbackFactory.createDirect({
+        videoElement: videoRef.current,
+        container: objectRef.current,
+        streamUrl,
+        ...(!directFallback && liveSource === "hls" ? { transportStreamMetadataUrl: client.liveStreamUrl(selected.providerStreamId, "ts") } : {}),
+      }),
+      createRelay: () => config?.enabled && hostedChannelId && runtime.capabilities.supportsLiveRelay && runtime.capabilities.nativeVideoSurface && objectRef.current
+        ? runtime.playbackFactory.createRelay?.({ container: objectRef.current, config, channelId: hostedChannelId,
+          preferredLanguage: settings.loadSubtitlePreferences().languagePreference, mediaToPlayheadOffsetMs: config.offsetMs ?? 0 }) ?? null
+        : null,
+      onPlayer: (active) => { if (cancelled) return; playerRef.current = active; active?.setLiveSubtitleMode?.(true); },
+      onRelayState: (state) => {
+        if (cancelled) return;
+        if (state === "starting" || state === "ready") setRelayPlaybackLabel("Subtitle relay · Timing test");
+        if (state === "recovering") {
+          playbackStateRef.current = "loading";
+          setPlaybackState("loading"); setHasStartedPlayback(false); setLiveBufferWindow(null);
+          setEmbeddedSubtitleTracks([]); setAudioTracks([]); setAudioStatus(""); setLiveSubtitleStatus(""); setRelayDiagnostics("");
+          setRelayPlaybackLabel("Channel connection lost · Reconnecting…");
         }
+        if (state === "fallback") {
+          directFallback = true;
+          setRelayFailureMessage("The subtitle service could not load this channel, and direct playback failed. Select Retry or try another channel.");
+          setRelayPlaybackLabel("Subtitle service unavailable · Trying direct playback…");
+          setEmbeddedSubtitleTracks([]);
+        }
+        if (state === "unavailable") setRelayPlaybackLabel("Playing directly · Subtitles may be unavailable");
+        if (state === "cleanup-blocked") {
+          setRelayPlaybackLabel("Could not stop the previous stream");
+          setRelayFailureMessage("The previous stream could not be stopped. Wait a minute, then select Retry.");
+        }
+      },
+      onState: (state) => {
+        if (cancelled) return;
         const wasPlaying = playbackStateRef.current === "playing";
         playbackStateRef.current = state;
         setPlaybackState(state);
+        const active = playerRef.current;
         if (state === "playing") {
-          if (fallingBack) setRelayPlaybackLabel("Playing directly · Subtitles may be unavailable");
-          if (active instanceof TizenLiveRelayPlayer) relayHasPlayed = true;
           setHasStartedPlayback(true);
-          if (!wasPlaying) reconcileAudioTracks(active, active.getAudioTracks?.() ?? []);
+          if (active && !wasPlaying) reconcileAudioTracks(active, active.getAudioTracks?.() ?? []);
+          if (active) reconcileEmbeddedSubtitles(active, active.getEmbeddedSubtitleTracks?.() ?? []);
         }
-        if (state === "playing") reconcileEmbeddedSubtitles(active, active.getEmbeddedSubtitleTracks?.() ?? []);
       },
-      onProgress: () => { if (!cancelled && playerRef.current === active && active instanceof TizenLiveRelayPlayer) relayHasPlayed = true; },
-      onLiveBufferWindowChange: (value) => { if (!cancelled && playerRef.current === active) setLiveBufferWindow(value); },
-      onEmbeddedSubtitleTracksChange: (tracks) => {
-        if (cancelled || playerRef.current !== active) return;
-        setEmbeddedSubtitleTracks(tracks); reconcileEmbeddedSubtitles(active, tracks);
-      },
-      onAudioTracksChange: (tracks) => { if (!cancelled && playerRef.current === active) reconcileAudioTracks(active, tracks); },
-      });
-    };
-    const startDirect = () => {
+      onPlayerEvents: (active) => ({
+        onLiveBufferWindowChange: (value) => { if (!cancelled && playerRef.current === active) setLiveBufferWindow(value); },
+        onEmbeddedSubtitleTracksChange: (tracks) => {
+          if (cancelled || playerRef.current !== active) return;
+          setEmbeddedSubtitleTracks(tracks); reconcileEmbeddedSubtitles(active, tracks);
+        },
+        onAudioTracksChange: (tracks) => { if (!cancelled && playerRef.current === active) reconcileAudioTracks(active, tracks); },
+      }),
+    });
+    if (config?.enabled && runtime.capabilities.supportsLiveRelay && config.diagnosticsEnabled) diagnosticTimer = setInterval(() => {
+      const active = playerRef.current;
+      if (!cancelled && active?.getRelayDiagnostics) setRelayDiagnostics(active.getRelayDiagnostics());
+    }, 500);
+    void runtime.playbackRelease.waitForRelease().then(async () => {
       if (cancelled) return;
-      const direct: MediaPlayer | null = isTizenAvPlayAvailable() && objectRef.current ? new TizenAvPlayPlayer(objectRef.current, () => {})
-        : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
-      if (!direct) { setPlaybackState("error"); return; }
-      bind(direct);
-      // Avoid a second provider connection while recovering a broken live stream.
-      if (liveSource === "hls" && !fallingBack) direct.setLiveAudioMetadataUrl?.(client.liveStreamUrl(selected.providerStreamId, "ts"));
-      direct.load(client.liveStreamUrl(selected.providerStreamId, liveSource === "hls" ? "m3u8" : "ts"));
-    };
-    const makeRelay = (): TizenLiveRelayPlayer => {
-      relayHasPlayed = false;
-      const hosted = new TizenLiveRelayPlayer(objectRef.current!, config!, hostedChannelId!, {
-        mediaToPlayheadOffsetMs: config?.offsetMs ?? 0,
-        preferredLanguage: loadSubtitlePreferences().languagePreference,
-      });
-      bind(hosted);
-      if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
-      if (config?.diagnosticsEnabled) diagnosticTimer = setInterval(() => {
-        if (!cancelled && player === hosted) setRelayDiagnostics(hosted.getRelayDiagnostics());
-      }, 500);
-      return hosted;
-    };
-    const resetRelayPlaybackState = () => {
-      playbackStateRef.current = "loading";
-      setPlaybackState("loading");
-      setHasStartedPlayback(false);
-      setLiveBufferWindow(null);
-      setEmbeddedSubtitleTracks([]);
-      setAudioTracks([]);
-      setAudioStatus("");
-      setLiveSubtitleStatus("");
-      setRelayDiagnostics("");
-    };
-    async function fallBack(failed: TizenLiveRelayPlayer): Promise<void> {
-      if (cancelled || fallingBack || player !== failed) return;
-      fallingBack = true;
-      failed.setEventHandlers(null);
-      if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
-      setRelayDiagnostics("");
-      setRelayFailureMessage("The subtitle service could not load this channel, and direct playback failed. Select Retry or try another channel.");
-      setRelayPlaybackLabel("Channel connection failed · Stopping the previous stream…");
-      try { await failed.close(); }
-      catch {
-        if (!cancelled) {
-          setRelayPlaybackLabel("Could not stop the previous stream");
-          setRelayFailureMessage("The previous stream could not be stopped. Wait a minute, then select Retry.");
-          setPlaybackState("error");
-        }
-        return;
-      }
-      if (cancelled) return;
-      setRelayPlaybackLabel("Subtitle service unavailable · Trying direct playback…");
-      setEmbeddedSubtitleTracks([]);
-      startDirect();
-    }
-    async function recoverRelay(failed: TizenLiveRelayPlayer): Promise<void> {
-      if (cancelled || fallingBack || player !== failed) return;
-      if (relayRecovery) return relayRecovery;
-      relayRecovery = (async () => {
-        let current = failed;
-        while (!cancelled && relayReconnects < 2) {
-          relayReconnects += 1;
-          current.setEventHandlers(null);
-          if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
-          diagnosticTimer = undefined;
-          resetRelayPlaybackState();
-          setRelayPlaybackLabel("Channel connection lost · Reconnecting…");
-          try { await current.close(); }
-          catch {
-            if (!cancelled) {
-              setRelayPlaybackLabel("Could not stop the previous stream");
-              setRelayFailureMessage("The previous stream could not be stopped. Wait a minute, then select Retry.");
-              playbackStateRef.current = "error";
-              setPlaybackState("error");
-            }
-            return;
-          }
-          if (cancelled) return;
-          if (!config || !hostedChannelId || !isTizenAvPlayAvailable() || !objectRef.current) break;
-          try {
-            current = makeRelay();
-            await current.start();
-            if (cancelled) return;
-            if (relayErrorDuringRecovery === current) {
-              relayErrorDuringRecovery = null;
-              throw new Error("Relay playback failed while reconnecting.");
-            }
-            setRelayPlaybackLabel("Subtitle relay · Timing test");
-            return;
-          } catch {
-            // start() may report an error through its event handler as well; the
-            // recovery promise guard prevents that callback from starting a peer.
-            if (cancelled) return;
-            if (relayErrorDuringRecovery === current) relayErrorDuringRecovery = null;
-          }
-        }
-        if (!cancelled && player === current) await fallBack(current);
-        else if (!cancelled && player === failed) await fallBack(failed);
-      })().finally(() => {
-        relayRecovery = null;
-        const lateFailedRelay = relayErrorDuringRecovery;
-        relayErrorDuringRecovery = null;
-        if (lateFailedRelay && !cancelled && player === lateFailedRelay) void recoverRelay(lateFailedRelay);
-      });
-      return relayRecovery;
-    }
-    void previousPlayerTeardown.current.then(async () => {
-      if (cancelled) return;
-      if (config?.enabled && hostedChannelId && isTizenAvPlayAvailable() && objectRef.current) {
-        const hosted = makeRelay();
-        setRelayPlaybackLabel("Subtitle relay · Timing test");
-        try { await hosted.start(); }
-        catch { await fallBack(hosted); }
-      } else startDirect();
-    }).catch(() => { if (!cancelled) setPlaybackState("error"); });
+      await controller.start();
+    }).catch(() => { if (!cancelled) { setPlaybackState("error"); setRelayFailureMessage("The previous stream could not be stopped. Wait a minute, then select Retry."); } });
     return () => {
       cancelled = true;
       if (diagnosticTimer !== undefined) clearInterval(diagnosticTimer);
-      player?.setEventHandlers(null);
-      if (player instanceof TizenLiveRelayPlayer) {
-        const closing = player.close().catch(() => undefined);
-        previousPlayerTeardown.current = Promise.all([previousPlayerTeardown.current, closing, relayRecovery ?? Promise.resolve()]).then(() => undefined);
-      } else player?.destroy();
-      if (playerRef.current === player) playerRef.current = null;
+      void runtime.playbackRelease.release(() => controller.close(), () => controller.retryCleanup()).catch(() => undefined);
+      playerRef.current?.setEventHandlers(null);
+      playerRef.current = null;
     };
-  }, [client, isTizen, liveSource, retryCount, selected]);
+  }, [client, isTvProfile, liveSource, retryCount, selected, runtime, settings]);
 
   useEffect(() => {
-    if (!selected || isTizenAvPlayAvailable()) return;
+    if (!selected || runtime.capabilities.nativeVideoSurface) return;
     const startupTimer = window.setTimeout(() => {
       const video = videoRef.current;
       const playbackIsAdvancing = !!video && !video.paused && video.readyState >= 2 && video.currentTime > 0;
@@ -782,7 +662,7 @@ export function LiveTv({ onMainMenu }: Props) {
       setPlaybackState("error");
     }, BROWSER_PLAYBACK_START_TIMEOUT_MS);
     return () => window.clearTimeout(startupTimer);
-  }, [selected?.id, retryCount]);
+  }, [selected?.id, retryCount, runtime.capabilities.nativeVideoSurface]);
 
   useEffect(() => {
     if (!selected || playbackState !== "playing") return;
@@ -796,7 +676,7 @@ export function LiveTv({ onMainMenu }: Props) {
   }, [playerFullscreen, selected]);
 
   useEffect(() => {
-    if (isTizen) return;
+    if (isTvProfile) return;
     const syncFullscreen = () => {
       const isFullscreen = document.fullscreenElement === document.documentElement;
       setPlayerFullscreen(isFullscreen);
@@ -810,7 +690,7 @@ export function LiveTv({ onMainMenu }: Props) {
     };
     document.addEventListener("fullscreenchange", syncFullscreen);
     return () => document.removeEventListener("fullscreenchange", syncFullscreen);
-  }, [channels, isTizen, selected]);
+  }, [channels, isTvProfile, selected]);
 
   const tune = (channel: LiveChannel) => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
@@ -823,7 +703,7 @@ export function LiveTv({ onMainMenu }: Props) {
     showLiveHintBriefly();
     setLiveBufferWindow(null);
     setPlayerFullscreen(true);
-    if (!isTizen && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
+    if (!isTvProfile && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
     setSelected(channel);
     window.requestAnimationFrame(() => playerStageRef.current?.focus());
   };
@@ -839,7 +719,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const exitFullscreen = () => {
     setPlayerFullscreen(false);
     hideLiveHint();
-    if (!isTizen && document.fullscreenElement) {
+    if (!isTvProfile && document.fullscreenElement) {
       requestedFullscreenExitRef.current = true;
       void document.exitFullscreen().catch(() => { requestedFullscreenExitRef.current = false; });
     }
@@ -849,7 +729,7 @@ export function LiveTv({ onMainMenu }: Props) {
     else {
       setPlayerFullscreen(true);
       showLiveHintBriefly();
-      if (!isTizen && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
+      if (!isTvProfile && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
       window.requestAnimationFrame(() => playerStageRef.current?.focus());
     }
   };
@@ -868,7 +748,7 @@ export function LiveTv({ onMainMenu }: Props) {
     const player = playerRef.current;
     const tracks = player?.getAudioTracks?.() ?? [];
     if (!tracks.length) {
-      setAudioStatus(playbackState === "loading" || playbackState === "buffering" ? "Audio tracks are loading…" : `Audio tracks unavailable${player instanceof TizenAvPlayPlayer ? ` · ${player.getTrackDiagnostics()}` : ""}`);
+      setAudioStatus(playbackState === "loading" || playbackState === "buffering" ? "Audio tracks are loading…" : `Audio tracks unavailable${player?.getPlaybackDiagnostics ? ` · ${player.getPlaybackDiagnostics()}` : ""}`);
       return;
     }
     const selectedIndex = tracks.findIndex((track) => track.selected);
@@ -916,7 +796,7 @@ export function LiveTv({ onMainMenu }: Props) {
     setLiveSubtitleStatus(`Subtitles: ${next.label}`);
   };
   const toggleLiveSource = () => {
-    if (playerFullscreen || !isTizenAvPlayAvailable()) return;
+    if (playerFullscreen || !runtime.capabilities.nativeVideoSurface) return;
     setEmbeddedSubtitleTracks([]);
     setLiveSubtitleStatus("Reloading stream…");
     setLiveSubtitlesEnabled(true);
@@ -989,7 +869,7 @@ export function LiveTv({ onMainMenu }: Props) {
         const next = Math.max(0, Math.min(itemCount - 1, currentIndex + (key === "ArrowUp" ? -1 : 1)));
         selectedCategory ? setFocusIndex(next) : setCategoryFocusIndex(next);
         focusListItem(refs.current[next] ?? null);
-        if (!isTizenRuntime()) refs.current[next]?.scrollIntoView({ block: "nearest" });
+        if (runtime.interactionProfile !== "tv") refs.current[next]?.scrollIntoView({ block: "nearest" });
       } else if (key === "ArrowLeft" || key === "ArrowRight") {
         event.preventDefault();
         if (selectedCategory) (key === "ArrowLeft" ? categoriesButtonRef.current : mainMenuRef.current)?.focus();
@@ -998,7 +878,7 @@ export function LiveTv({ onMainMenu }: Props) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [categories.length, categoryFocusIndex, channels, focusIndex, onMainMenu, playerFullscreen, selected, selectedCategory]);
+  }, [categories.length, categoryFocusIndex, channels, focusIndex, onMainMenu, playerFullscreen, selected, selectedCategory, runtime.interactionProfile]);
 
   if (selected) {
     const selectedIndex = channels.findIndex((channel) => channel.id === selected.id);
@@ -1009,7 +889,7 @@ export function LiveTv({ onMainMenu }: Props) {
     return <Localized language={language}><main className={`screen player-screen live-player-screen ${playerFullscreen ? "is-fullscreen" : ""}`}>
     <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span></header>
     <div className="player-stage" ref={playerStageRef} tabIndex={-1} onClick={() => { if (playerFullscreen) showControls(); }}>
-      {isTizenAvPlayAvailable() ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
+      {runtime.capabilities.nativeVideoSurface ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
       {playbackState === "loading" || (playbackState === "buffering" && !hasStartedPlayback) ? <div className="buffering-overlay">Connecting…</div> : null}
       {playbackState === "error" && <div className="playback-error-overlay"><strong>{relayFailureMessage ? "Channel connection failed" : "Channel unavailable"}</strong><span>{relayFailureMessage || "The stream could not be played on this device."}</span></div>}
       {playerFullscreen && showLiveHint && playbackState !== "error" && <span className="live-controls-hint">Press OK or Enter for controls</span>}
@@ -1018,13 +898,16 @@ export function LiveTv({ onMainMenu }: Props) {
       <button type="button" disabled={selectedIndex <= 0} onClick={() => changeChannel(-1)} ref={(element) => { playerControlRefs.current[0] = element; }}>Previous channel</button>
       <button type="button" disabled={selectedIndex >= channels.length - 1} onClick={() => changeChannel(1)} ref={(element) => { playerControlRefs.current[1] = element; }}>Next channel</button>
       <button type="button" onClick={toggleFullscreen} ref={(element) => { playerControlRefs.current[2] = element; }}>{playerFullscreen ? "Exit full screen" : "Full screen"}</button>
-      {playbackState === "error" && <button type="button" onClick={() => { setPlaybackState("loading"); setRetryCount((count) => count + 1); }} ref={(element) => { playerControlRefs.current[3] = element; }}>Retry</button>}
+      {playbackState === "error" && <button type="button" onClick={() => {
+        setPlaybackState("loading");
+        void runtime.playbackRelease.retryRelease().then(() => setRetryCount((count) => count + 1)).catch(() => { setPlaybackState("error"); setRelayFailureMessage("The previous stream could not be stopped. Wait a minute, then select Retry."); });
+      }} ref={(element) => { playerControlRefs.current[3] = element; }}>Retry</button>}
       {hasLiveBuffer && <button type="button" disabled={bufferBehindSeconds < 1} onClick={() => playerRef.current?.seekLiveBuffer?.(liveBufferWindow!.currentSeconds - 30)} ref={(element) => { playerControlRefs.current[4] = element; }}>Rewind 30 seconds</button>}
       {hasLiveBuffer && <button type="button" disabled={atLiveEdge} onClick={() => playerRef.current?.goLive?.()} ref={(element) => { playerControlRefs.current[5] = element; }}>Go live</button>}
       <button type="button" onClick={leavePlayer} ref={(element) => { playerControlRefs.current[6] = element; }}>Back to channels</button>
       <button type="button" onClick={selectNextAudioTrack} ref={(element) => { playerControlRefs.current[7] = element; }}>{audioTracks.length ? `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}` : "Audio: unavailable"}</button>
       <button type="button" aria-pressed={liveSubtitlesEnabled} onClick={toggleLiveSubtitles} ref={(element) => { playerControlRefs.current[8] = element; }}>{`Subtitles: ${liveSubtitlesEnabled ? "On" : "Off"}`}</button>
-      {isTizenAvPlayAvailable() && !playerFullscreen && <button type="button" onClick={toggleLiveSource} ref={(element) => { playerControlRefs.current[9] = element; }}>{liveSource === "hls" ? "Try direct TS source" : "Switch back to HLS"}</button>}
+      {runtime.capabilities.nativeVideoSurface && !playerFullscreen && <button type="button" onClick={toggleLiveSource} ref={(element) => { playerControlRefs.current[9] = element; }}>{liveSource === "hls" ? "Try direct TS source" : "Switch back to HLS"}</button>}
       {embeddedSubtitleTracks.length > 1 && <button type="button" onClick={selectNextSubtitleTrack} ref={(element) => { playerControlRefs.current[10] = element; }}>Subtitle language</button>}
       {audioStatus && <span className="live-buffer-status" role="status">{audioStatus}</span>}
       <span className="playback-status" role="status" aria-live="polite">{relayPlaybackLabel === "Channel connection lost · Reconnecting…" ? relayPlaybackLabel : <>{relayPlaybackLabel || (liveSource === "hls" ? "HLS" : "Direct TS")}{" · "}{playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}{relayDiagnostics ? ` · ${relayDiagnostics}` : ""}</>}</span>
@@ -1033,7 +916,7 @@ export function LiveTv({ onMainMenu }: Props) {
   </main></Localized>;
   }
 
-  if (!selectedCategory) return <Localized language={language}><main className={`screen live-screen${isTizen ? " tv-ui tv-fixed-list-screen" : ""}`}>
+  if (!selectedCategory) return <Localized language={language}><main className={`screen live-screen${isTvProfile ? " tv-ui tv-fixed-list-screen" : ""}`}>
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV</p><h1>Finland</h1></div><ScreenNavigation onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
     <p className="hint" role="status" aria-live="polite">{status}{cacheSavedAt && Date.now() - cacheSavedAt > STALE_AFTER_MS ? " · Saved list may be out of date." : ""}</p>
     <div className="live-list fixed-list-viewport" ref={listViewportRef}>
@@ -1044,7 +927,7 @@ export function LiveTv({ onMainMenu }: Props) {
     </div>
   </main></Localized>;
 
-  return <Localized language={language}><main className={`screen live-screen${isTizen ? " tv-ui tv-fixed-list-screen" : ""}`}>
+  return <Localized language={language}><main className={`screen live-screen${isTvProfile ? " tv-ui tv-fixed-list-screen" : ""}`}>
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV · FINLAND</p><h1>{categoryLabel(selectedCategory.name)}</h1></div><ScreenNavigation onPrevious={leaveCategory} previousLabel="Categories" previousRef={categoriesButtonRef} onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
     <p className="hint" role="status" aria-live="polite">{status}</p>
     <div className="live-list fixed-list-viewport" ref={listViewportRef}>

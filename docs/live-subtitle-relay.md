@@ -1,18 +1,20 @@
 # Live subtitle relay
 
-The implementation includes a standalone relay service, a Tizen AVPlay adapter with a PNG overlay, and a platform-independent cue scheduler. Personal Tizen builds automatically route channels whose titles contain `Multi-Sub` through the relay; standard/public builds leave it disabled unless configured. Other channels retain direct playback. This service is separate from the trusted-LAN VOD/local-file companion.
+The live subtitle relay is an optional service for live channels whose video and DVB subtitles need to share one upstream connection. Tizen AVPlay receives the relayed MPEG-TS media while the service decodes timed DVB subtitle images. Direct browser playback and native AVPlay subtitle tracks remain available independently. The relay is separate from the LAN companion used for browser-to-TV commands and local-file streaming. A relay can run locally for personal testing or as a separately operated hosted HTTPS service; the relay implementation itself does not provision or monitor a hosted service.
 
-## Current status — 2026-10-03
+The service is implemented under `services/live-subtitle-relay/`; the TV client, settings, and player adapter live under `src/platform/live-relay/` and `src/platform/tizen/`. A platform-independent controller owns bounded retries and fallback. Its tests exercise retry limits, cleanup, and failed teardown; physical AVPlay timing and provider uptime still require device observation.
 
-The user tested Sky Showtime 1 and 2 on a real TV and accepted the local result as good enough for now. Showtime 1 was more stable; Showtime 2 had delivery gaps and upstream closures, with pauses also observed in direct playback. This is practical acceptance of the local implementation, not a measured timing or long-running stability certification. Diagnostics still correctly report `clock=unverified`.
+## Current status
 
-Implemented fixes include a three-segment startup reserve, an eight-second AVPlay buffer, forwarding live progress when duration is zero, retried playback acknowledgement, separate connection/body timeouts, and two automatic relay reconnect attempts before direct fallback. The initial relay killed an idle upstream after 20 seconds; this was fixed. A subsequent failure was logged as `upstream-ended`, confirming that the incoming response ended rather than reaching the new 90-second idle limit. Reconnects prepare a new session and include a playback pause; no seamless recovery is claimed.
+On 2026-10-03, the user accepted a real-TV playback check as good enough for now. The recorded check used a hosted HTTPS relay with the signed personal Tizen 3 app. Sky Showtime 1 was more stable than Sky Showtime 2; delivery gaps and upstream closure affected the latter, with pauses also observed in direct playback. This is a dated acceptance record, not a current service health check, timing measurement, sustained soak, or capacity test. Diagnostics intentionally retain `clock=unverified` until subtitle synchronization is measured.
 
-The latest code passed `npm run check` (504 tests) and `npm run build:tizen:personal`. Synthetic packaging and full local-pipeline checks also passed during implementation. No dedicated UI lifecycle test covers the new reconnect flow; it was reviewed and typechecked, and the user's final local assessment was positive. The native service is now deployed at `https://subtitles.displayofpatience.com`; HTTPS health/authentication and server synthetic checks pass. Real provider media/subtitles now pass through a Finnish Mullvad endpoint on the server. Direct server egress still returns 456; only the relay UID uses the VPN, and the hosted HTTPS lifecycle passed with four subtitle tracks/PNGs. See [operations and remaining validation](../deploy/live-subtitle-relay/OPERATIONS.md). On 2026-10-03 the signed personal Tizen 3 package was installed and the user confirmed hosted playback works on Tizen, establishing basic TV HTTPS trust/playback. The Mac relay is stopped; no local relay process or port 8790 listener remains. Sustained stability and measured timing remain unverified.
+The implementation includes a three-segment startup reserve, an eight-second AVPlay buffer, acknowledgement of initial playback progress, and up to two automatic relay reconnect attempts before direct fallback. Reconnection opens a new media/subtitle session and causes a visible preparation pause. Initial relay setup failure falls back after cleanup. Failed teardown prevents overlapping replacement playback and requires the viewer to retry after the lease window.
 
-## Test locally on this computer
+Treat the dated acceptance above as historical evidence only. No current server checks are recorded here. Check the separately maintained [deployment guide](live-subtitle-relay-deployment.md) and confirm its target state before hosted operation; a successful code test or build is not a server health check. A hosted installation should use authenticated HTTPS and the documented host controls. The local LAN instructions below are not a production hosting recipe.
 
-Use the project's Node runtime (22.18+ native TypeScript support; the deployment image uses Node 24) and FFmpeg with libx264. No provider configuration or Docker is needed for the synthetic tests.
+## Local synthetic verification
+
+The tests use generated media and synthetic responses; they do not read `.env`, fetch the private playlist, contact a real provider, or deploy a service.
 
 ```sh
 npm run relay:test
@@ -20,114 +22,60 @@ npm run relay:smoke
 npm run relay:local
 ```
 
-`relay:test` covers the protocol, session API, safety boundaries, decoder and scheduler using synthetic fixtures. `relay:smoke` generates a 12-second test-pattern video with audio and DVB pages, pipes it through the exact FFmpeg packaging arguments used by the service, then checks PNG output and display/clear times at 2/4/6/8 seconds.
+`relay:test` covers the relay service, platform client, protocol, safety limits, decoder, and scheduler using synthetic fixtures. The retry controller and player lifecycle tests are included in `npm run check`. `relay:smoke` sends a generated test pattern through the service's FFmpeg packaging path and checks generated captions. `relay:local` connects a synthetic looping transport stream to the relay and client, checking startup reserve, acknowledgement, segment delivery, subtitle images/cues, Off, heartbeat, and teardown. It binds loopback ports and may require socket access in restricted environments. It removes generated temporary files on completion.
 
-`relay:local` runs the complete pipeline on loopback ports: a looping synthetic HTTP source, the real relay/FFmpeg worker, and the actual client adapter. It checks authentication, single upstream connection, the pinned three-segment startup playlist, playback acknowledgement and rolling handoff, segment delivery, subtitle images and cues, track off, heartbeat, and teardown. Preparation can take tens of seconds; the smoke check allows up to 35 seconds for ready state and cues. It stops both servers and removes temporary files automatically. Random access credentials stay in memory and are never printed. Loopback ingestion is injected only in this test; production destination restrictions remain enabled.
+Run `npm run check` and `npm run build:tizen` for the shared code and standard TV bundle. Personal builds use `npm run build:tizen:personal`; the personal launcher reads private settings and credentials from ignored local files. Never display or commit those files, URLs, tokens, or capability-bearing media URLs.
 
-In environments that prohibit listening sockets, `relay:local` requires permission to bind loopback ports. Ordinary unit tests do not bind ports. Nothing in these commands downloads the private playlist, contacts the provider, or deploys a service.
+## How the service works
 
-## Implementation
+- One authenticated session opens one configured upstream MPEG-TS stream. Browsing channels does not start ingestion.
+- FFmpeg copies video/audio and DVB streams into finalized segments. The service decoder extracts subtitle images and publishes caption metadata against the common stream clock.
+- The TV acknowledges its initial playhead before the relay releases the pinned startup playlist. This prevents a late initial request from selecting a later segment in the sliding window.
+- After playback starts, successful video segment requests renew the video-demand deadline. Status, cue/image polling, playlists, and control heartbeats alone do not keep unused ingestion alive.
+- Session close stops FFmpeg, disconnects upstream, and removes temporary files. A lease handles client loss. The service reserves provider capacity until teardown completes.
+- Diagnostics contain bounded numeric timing/cache details and fixed error reasons. They must not contain provider URLs, tokens, response text, or media payloads.
 
-- `services/live-subtitle-relay/`: private configuration, authenticated HTTP session API, a single upstream connection piped to FFmpeg stdin, finalized MPEG-TS segment processing, timed DVB images, bounded storage and lease cleanup.
-- `src/core/live-relay/`: versioned protocol and cue scheduling against an explicitly supplied playback anchor. No arrival-time or wall-clock synchronization guesses.
-- `src/core/subtitles/live-dvb-ts-scanner.ts`: reusable transport scanner. The browser module re-exports it to preserve existing integrations.
-- `src/platform/live-relay/`: saved endpoint/device configuration, session requests, status/track/heartbeat APIs, capability image URLs, and serial polling. Chromium 47 uses abortable finite XHR requests when AbortController is unavailable.
-- `src/platform/tizen/live-relay-player.ts`: relay session lifecycle, AVPlay playback, language selection, bounded image preloading/cache, and a body-mounted subtitle overlay above the native video plane.
-- Tizen Settings: endpoint, hidden device credential, provider-stream-to-relay-channel mappings, explicit local HTTP opt-in, provisional timing offset, and diagnostics.
+Startup reserves the first three completed segments, at least eight seconds total, and uses a separate 30-second preparation deadline. The client must acknowledge startup within 60 seconds. The upstream response-header deadline is 20 seconds; after connection, socket inactivity is limited to 90 seconds. A long provider gap can still exhaust the TV's buffer. Relay retries cannot fix an unavailable or stalled provider feed.
 
-FFmpeg's HLS muxer tried to send copied DVB captions to a WebVTT muxer and rejected them in the local experiment. The service instead uses its MPEG-TS segment muxer with an M3U8 segment list, which preserved the synthetic DVB stream. Video and audio are copied without encoding in the relay. Only the synthetic test-pattern generator encodes video.
+The server has configurable limits for sessions, leases, request sizes, temporary storage, and allowed channels/origins. Channel IDs map to server-owned URLs; clients cannot submit arbitrary source URLs. Production configuration rejects private/internal destination addresses and vets redirect destinations. Keep configuration and credentials outside the checkout. The companion and live subtitle relay are different services with different protocols and data paths.
 
-Cue times are relative to the first output video PTS in each epoch. The relay prepares the first three completed segments (at least eight seconds total), then pins that initial live playlist until the app acknowledges AVPlay's first progress event. The relay AVPlay adapter requests an eight-second play/resume buffer. An unacknowledged startup expires after 60 seconds; stream preparation retains its separate 30-second limit. This prevents a late initial request from silently choosing a later sliding-window segment and provides headroom for live segment publication. Positive timing offsets display captions later. A discontinuity hides captions until a fresh session rather than guessing a new clock mapping.
-
-Upstream response headers have a separate 20-second deadline. Once connected, the live stream has a 90-second socket inactivity timeout; the connection deadline must not terminate an already-playing stream during a provider delivery gap. Relay status logs include `inputIdleMs` (time since upstream bytes arrived) and a fixed `reason` on worker failure, distinguishing upstream idle timeout, upstream errors/end, FFmpeg failure, and storage limits. These diagnostics never contain provider URLs or raw network errors. Longer source gaps can still exhaust the TV buffer even when the relay connection remains alive.
-
-After relay playback has begun, a relay failure triggers up to two automatic reconnect attempts for the selected channel before direct fallback. The app closes the old session before opening a fresh relay and resets its playback/subtitle clock; the TV shows `Subtitle relay · Reconnecting…` during recovery. Changing channel or pressing Retry starts a new attempt budget. A teardown failure stops recovery rather than opening overlapping connections. Initial setup failures still fall back directly. Direct fallback skips the extra TS audio-language probe to avoid a second provider connection. This recovery needs an updated TV build and still includes a pause while the new relay prepares; it cannot repair an unavailable upstream channel.
-
-FFmpeg's output interleave queue is capped at one second to reduce waiting for sparse DVB subtitle packets; its default limit is ten seconds. See the [FFmpeg `max_interleave_delta` documentation](https://ffmpeg.org/ffmpeg-formats.html). Video, audio, and DVB streams remain copied. This setting does not prevent upstream delivery gaps or prove that all chunk delays are gone. Startup takes longer to establish the reserve; buffering diagnostics expose `bufferEvents` to assess recurring stalls on the TV.
-
-## Run with private channel configuration
-
-For a later manual provider check, create a private JSON configuration outside the checkout. Its fields are:
-
-| Field | Value |
-| --- | --- |
-| `apiToken` | A random 32-byte credential encoded as 64 hexadecimal characters |
-| `channels` | Object mapping stable channel IDs to private direct MPEG-TS URLs |
-| `sessionRoot` | Dedicated absolute temporary-session directory; default under `/tmp/live-subtitle-relay/` |
-| `maxSessions` | Default 2 |
-| `sessionLeaseMs` | Default 60000 |
-| `prepareTimeoutMs` | Default 30000 |
-| `allowedOrigins` | Explicit browser origins allowed to use the API; `"null"` only when explicitly needed for an opaque widget origin |
-| `allowedRedirectHosts` | Explicit provider/CDN hosts permitted during redirects; defaults to configured channel hosts |
-| `allowPublicRedirects` | Default false; true permits rotating public CDN hosts without a hostname list, with public-DNS validation and pinning on every hop |
-| `maxBodyBytes` | Maximum API request body; default 8192 bytes |
-
-Keep the file private and never include it in source control, logs, screenshots, or public build assets. API calls use the device credential as bearer authorization; AVPlay media and image URLs use short-lived session capabilities. Production ingestion rejects nonpublic destinations and pins vetted DNS addresses. The service accepts channel IDs, not arbitrary client-supplied URLs.
-
-```sh
-RELAY_CONFIG_FILE=/absolute/path/to/private/config.json npm run relay:dev
-```
-
-It binds `127.0.0.1:8790` by default. `RELAY_HOST` and `RELAY_PORT` override that binding. Use HTTPS when exposing it beyond local development. A live source connection exists only while a session is active; callers must renew the lease, and close sessions when leaving playback. Logs contain fixed status messages and safe errors only.
-
-### Provider-stream lifetime guardrails
-
-The server does not ingest at startup, for health checks, or while browsing channels. An authenticated, allowlisted session creation opens one upstream. Leaving playback/channel changes close the client session; DELETE destroys the upstream connection, terminates FFmpeg (SIGTERM, then SIGKILL if needed), and removes files. The provider slot stays reserved until teardown completes, preventing replacement-stream overlap.
-
-If the client disappears or DELETE fails, the hosted 60-second heartbeat lease expires without needing another request. Preparation has a separate 30-second limit, and startup must be acknowledged within 60 seconds; both failure paths explicitly stop the worker. A create response already disconnected when the worker becomes available is discarded and stopped.
-
-After playback acknowledgement, a separate 60-second video-demand deadline is renewed only by successful authenticated-capability video segment requests. Heartbeats, status, cue/image polling and playlist requests cannot renew that deadline. This prevents a stuck control loop from keeping an unused provider stream alive indefinitely. Cleanup has a short grace period rather than promising instant detection of TV power-off. Long pauses or stalls without video requests expire the session and may require a fresh session on resume. Subtitle Off alone retains ingestion because the relay is still supplying video/audio.
-
-The hosted configuration allows one session, matching the provider account's one-connection capacity. Synthetic regression tests cover idle startup, no-demand expiry despite heartbeats, continued segment consumption, orphaned lease cleanup, and reserving capacity during teardown. The real synthetic FFmpeg lifecycle check confirms that the upstream socket closes and files are removed. These checks do not open the real provider stream.
-
-
-## Deployment preparation
-
-`deploy/live-subtitle-relay/` contains a Dockerfile, an allowlisted build context, Compose configuration, and Caddy HTTPS proxy. It is preparation for the later hosted deployment, not an already deployed service. It uses a separate secret-mounted JSON file, an unprivileged relay process, a bounded temporary filesystem, private internal networking, resource limits, and no request access logging.
-
-Provide `RELAY_DOMAIN`, `RELAY_CONFIG_PATH`, and a versioned `RELAY_IMAGE_TAG` through the deployment environment. Compose must run from `deploy/live-subtitle-relay/`, with the private configuration stored outside the checkout. Reuse an existing ingress proxy rather than starting a competing Caddy if the host already serves ports 80/443. Resolve and pin the Node/Caddy image digests and FFmpeg package version for the actual release; the checked-in defaults use major-version development tags.
-
-The container expects session data under `/tmp`, which is a 256 MiB temporary filesystem. The server config must use that location with the supplied Compose file. The secret file must be readable by container UID 1000, while remaining private on the host; verify its ownership or ACL rather than making it publicly readable. Certificate state is persisted in dedicated Caddy volumes. Container image build and physical-TV certificate trust remain release checks.
-
-## Test the Tizen integration against this Mac
+## Personal Tizen setup
 
 ### Automatic personal setup
 
-Your existing `.env` provides the IPTV account. Run:
+Existing `.env.live-relay` endpoint/token values are reused. If they select the hosted HTTPS service, building a personal package preserves that endpoint; starting the Mac launcher does not move TV playback to the Mac. For an explicit local test, privately set matching LAN defaults with LAN HTTP opt-in before building.
 
-```sh
-npm run relay:personal
-```
+For a personal build, `npm run relay:personal` starts the local relay and derives channel mappings from provider metadata using private local configuration. The launcher creates/refreshes ignored local files; keep them private and do not print their contents. It does not contact streams during discovery. A provider stream opens only when an active TV session requests a mapped channel.
 
-This creates a gitignored, owner-readable `.env.live-relay` with this Mac's LAN address and a persistent random device token, discovers **all** provider live channels whose titles contain `Multi-Sub`, and starts the server on port 8790. It regenerates the private channel allowlist at `.live-subtitle-relay/config.json` each time it starts. Discovery requests metadata only; live streams open when the TV starts a playback session. Keep this command running and the Mac awake while testing. Ctrl+C stops it.
+Build and install with the existing Tizen workflow, then check a channel marked `Multi-Sub`. Personal defaults can route marked channels automatically; stored TV settings take precedence over build defaults, including an explicit opt-out. Unmarked channels retain direct playback unless settings map them. The relay must be reachable from the TV, and the computer must remain awake while it runs.
 
-Personal mode follows provider redirects to rotating public CDN hosts automatically. Every destination is DNS-checked and pinned; private/internal destinations are still rejected. There is no CDN hostname whitelist to maintain. An explicit `LIVE_SUBTITLE_RELAY_REDIRECT_HOSTS` override opts back into a fixed host policy. The foreground server prints credential-free lifecycle events to distinguish TV connectivity/authentication, stream preparation, and playback acknowledgement.
+If manually configuring a local relay, create a private JSON config outside the checkout. The `channels` map assigns stable IDs to direct MPEG-TS URLs owned by the server. The service accepts IDs, not arbitrary client-supplied URLs.
 
-On the TV, diagnostics show `progress=local` and `ack=confirmed` when the native live playhead has been received and the relay has released its startup playlist. Live AVPlay may report duration zero; the adapter still forwards its playhead. A changing `playheadMs` is the playback clock used for captions; `clock=unverified` remains until hardware subtitle synchronization has been measured.
+| Field | Meaning and default |
+| --- | --- |
+| `apiToken` | Required random 32-byte token as 64 lowercase hexadecimal characters |
+| `channels` | Required object mapping allowed stable IDs to private source URLs |
+| `sessionRoot` | Absolute private temporary directory; default `/tmp/live-subtitle-relay/sessions` |
+| `maxSessions` | Concurrent sessions; default 2 |
+| `sessionLeaseMs` | Client lease; default 60,000 ms |
+| `prepareTimeoutMs` | Stream preparation deadline; default 30,000 ms |
+| `maxBodyBytes` | API request body cap; default 8 KiB |
+| `allowedOrigins` | Exact permitted origins; default empty. Add `null` only for a widget that actually sends an opaque origin |
+| `allowedRedirectHosts` | Redirect hostname allow-list; defaults to configured channel hosts |
+| `allowPublicRedirects` | Optional boolean. When enabled, public redirect destinations are still DNS-validated and pinned at every hop |
 
-Build the TV app with:
+Run a local server on loopback with `RELAY_CONFIG_FILE=/absolute/path/to/private/config.json npm run relay:dev`. `RELAY_HOST` and `RELAY_PORT` override the default `127.0.0.1:8790`. For a controlled LAN test, bind only where required and permit the TV to reach that host. HTTP requires explicit TV opt-in and exposes credentials to other devices on that network. TLS needs to be trusted by the TV; the app does not bypass certificate errors. Public hosting is supported only as a deliberately configured HTTPS deployment with authentication, restricted channel/origin policy, safe redirects, resource bounds, access-log controls, and operational monitoring; follow the [deployment guide](live-subtitle-relay-deployment.md), not the local command as a production recipe.
 
-```sh
-npm run build:tizen:personal
-```
+For a manually configured TV, open the live-subtitle Settings section, enable it, enter the matching endpoint and device credential, and map provider stream IDs to the server's channel IDs. HTTP needs the explicit LAN opt-in. Save settings before tuning; saved settings override bundled defaults. Mapped channels use relay media independently of the direct HLS/TS toggle.
 
-The same settings are also embedded by `prepare:tizen3:personal`, `prepare:tizen6:personal`, and personal packaging commands. Install/sign using the existing Tizen workflow. Matching channels automatically select relay playback; you do not enter an address, credential, or mappings on the TV. The `stream-<provider ID>` naming rule is shared with server discovery. Unmarked channels retain direct playback. The settings screen still permits explicit overrides or disabling the relay.
+## Troubleshooting
 
-`.env.live-relay.example` documents optional overrides. The real `.env.live-relay` and generated JSON contain private credentials and stay out of Git and public builds. Personal TV bundles contain the device credential by design, just like the other personal defaults. Stored relay settings on a TV override build defaults, including an explicit opt-out; a previous manual override therefore remains effective.
+- **No relay route:** confirm the channel is mapped or automatically marked in this build, relay is enabled, and TV settings have not overridden the build defaults.
+- **Authentication/connection failure:** verify the local endpoint and device credential without displaying them, and ensure TV-to-computer connectivity.
+- **Initial setup fails:** the client closes the partial session and tries direct playback. Direct fallback may not provide DVB subtitles.
+- **The relay fails after playback began:** the TV shows reconnecting, closes the old session, and tries up to twice to establish a fresh one before direct fallback. The change resets the subtitle clock and pauses while preparing.
+- **Retry says the previous stream could not stop:** do not start a replacement session yet. Retry cleanup after the server lease expires; this protects a one-connection provider account from overlapping streams.
+- **Captions are missing:** verify the selected feed carries active subtitle packets. A channel label or PMT descriptor alone does not show that packets are present.
+- **Captions drift or repeat:** `clock=unverified` means the device timing relationship has not been measured. Keep the stream/session diagnostics sanitized and compare several consecutive cues over a sustained physical-TV check.
 
-The following steps apply to manually configured or hosted installations instead of the automatic personal setup.
-
-1. Put one permitted direct MPEG-TS channel in the private server configuration under a stable ID such as `sky-fi`. Set `allowedOrigins` to the TV widget's actual origin; add `"null"` only if that widget sends an opaque origin. Keep the private configuration outside the checkout.
-2. Run `RELAY_HOST=0.0.0.0 RELAY_CONFIG_FILE=/absolute/path/to/private/config.json npm run relay:dev`. Keep the Mac awake and permit the TV to reach port 8790 on the trusted local network. This foreground process stops when you stop the command.
-3. Build/install the app with the existing Tizen workflow. In Settings, enter `http://<Mac-private-IPv4>:8790`, explicitly allow local HTTP, enter the server's device credential, and map the provider's stream ID to `sky-fi`, for example `{ "123": "sky-fi" }`. The numeric provider ID must be the actual channel ID from the app's catalogue; the example is synthetic.
-4. Enable hosted live subtitles, save, and open that channel. Mapped channels use the relay regardless of the direct HLS/TS source toggle. The playback label shows `Subtitle relay · Timing test`. Unmapped channels retain direct playback. Initial setup failure closes the session before direct fallback; failure after playback begins uses the bounded reconnect flow above.
-5. Check Finnish/English switching and Off, PNG placement in normal/fullscreen display, lip-sync over several minutes, buffering, channel changes, and Retry. Compare visible captions with dialogue and use the provisional offset only for a stable measured difference. Diagnostics contain numeric timing/cache information and no media URL or credential.
-
-HTTP is for this explicit local test. The public deployment uses HTTPS. The Mac test still ingests the provider's public MPEG-TS URL; production ingestion restrictions are preserved. Real-TV tests have demonstrated playback and subtitle display, but the automated synthetic test does not establish AVPlay timing, caption placement on every device, long-running stability, or public HTTPS certificate trust.
-
-The [implementation plan](live-subtitle-relay-plan.md) records completed work and remaining rollout checks. The [deployment handoff](live-subtitle-relay-deployment.md) is the starting point for the next session.
-
-
-### TV connection-failure messages
-
-When relay playback fails, the TV explains that the channel connection failed and tries direct playback after teardown. Successful fallback says it is playing directly and subtitles may be unavailable. If direct playback also fails, the overlay says: “The subtitle service could not load this channel, and direct playback failed. Select Retry or try another channel.” Failed teardown instead asks the viewer to wait a minute before Retry, allowing the server lease to expire. Reconnection is shown explicitly. These messages are translated into Finnish and English; the TV does not guess whether the cause is the provider, server network or VPN, and does not display raw errors or credentials.
+For general test scenarios, see the [verification guide](verification.md). DVB worker limits and the retired Tizen sideband-scanner rationale are in [embedded live subtitles](live-dvb-subtitles.md).

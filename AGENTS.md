@@ -16,6 +16,7 @@ Samsung Tizen IPTV live TV and VOD player. The shared core is platform-independe
 # Architecture
 
 - Code in `src/core` must not depend on browser, React, Node, or Tizen globals.
+- Shared screens use runtime ports and interaction profiles; platform detection and concrete player selection belong in bootstrap/adapters. See `docs/cross-platform-architecture.md`.
 - Preserve entries that cannot be confidently classified; label them `unknown` rather than discarding them.
 - Classification decisions must include evidence so provider-specific rules can be debugged later.
 

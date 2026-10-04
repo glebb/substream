@@ -33,7 +33,7 @@ npm run launch:tizen6 -- TV_IP
 
 Replace `tizen6` with `tizen3` for the older target. For embedded personal defaults, use `prepare:tizen6:personal` or `prepare:tizen3:personal`; [personal configuration](../README.md#personal-development) requires the playlist, OpenSubtitles key, and a TMDb credential. Keep the resulting package private.
 
-Prepare builds the web assets and records the variant. The extension must refresh its asset list and sign the new payload. Collect checks the variant marker and renames `Debug/tizen.wgt`; it does not prove that a package is fresh, so always sign immediately after preparing.
+Prepare builds the web assets and records the variant. The extension must refresh its asset list and sign the new payload. Collect checks the variant marker and renames `Debug/tizen.wgt`; it does not prove that a package is fresh, so always sign immediately after preparing. Check both signature files and that the archive contains the freshly prepared `dist` assets. If the extension emits `tizen/Substream.wgt`, verify that fresh signed output and copy it to `tizen/Debug/tizen.wgt` before collecting; the collector does not discover alternate filenames.
 
 Launch connects by IP, pushes the package, **uninstalls the existing app**, installs the replacement, and attempts to launch it. Treat saved on-device data as disposable during this workflow. If remote launch is rejected after installation succeeds, open Substream manually from the TV Apps screen; this occurred on the previously tested UE75MU8005.
 
@@ -65,13 +65,13 @@ These build and package both compatibility variants into `tizen/Debug/`. They re
 
 ### Multi-Sub live subtitle relay
 
-Personal Tizen preparation/build/packaging embeds the settings from the gitignored `.env.live-relay`. The signed personal Tizen 3 package is installed, and the user confirmed hosted playback works on Tizen on 2026-10-03. Matching `Multi-Sub` channels select the relay automatically; no manual TV address, credential or channel mapping is needed. The Mac relay is stopped and does not need to remain running for hosted playback. For explicit local development, `npm run relay:personal` creates local defaults, discovers Multi-Sub channels and starts the Mac subtitle service; avoid invoking it just to rebuild a hosted package. `dev:personal` starts the separate VOD/local-file companion.
+Personal Tizen preparation/build/packaging embeds settings from the gitignored `.env.live-relay`. The last recorded personal Tizen 3 installation was confirmed to play through hosted HTTPS on 2026-10-03; the TV and relay were not rechecked during this documentation update. Matching `Multi-Sub` channels select the relay automatically; no manual TV address, credential or channel mapping is needed. The Mac relay was stopped after hosted playback was accepted. For explicit local development, `npm run relay:personal` creates local defaults, discovers Multi-Sub channels and starts the Mac subtitle service; avoid invoking it just to rebuild a hosted package. `dev:personal` starts the separate VOD/local-file companion.
 
-Saved relay settings on the TV override bundled defaults, including an explicit opt-out. Standard/public packages do not enable or embed the personal relay credential. Personal packages remain private. See [local setup and configuration](../docs/live-subtitle-relay.md#automatic-personal-setup).
+Saved relay settings on the TV override bundled defaults, including an explicit opt-out. Standard/public packages do not enable or embed the personal relay credential. Personal packages remain private. See [local setup and configuration](../docs/live-subtitle-relay.md#automatic-personal-setup) and the [recorded hosted deployment and operations](../deploy/live-subtitle-relay/OPERATIONS.md).
 
 `Subtitle relay · Timing test` identifies relay playback. `progress=local`, `ack=confirmed`, and a changing `playheadMs` confirm the native playback clock and startup acknowledgement; `clock=unverified` remains until quantitative timing checks. `bufferEvents` counts native buffering starts. Runtime failures try two new relay sessions with `Subtitle relay · Reconnecting…` before `Relay unavailable · Direct playback`; initial setup failures go directly to fallback after teardown. Reconnection pauses are expected. The fallback does not open the extra provider TS audio-language probe.
 
-Client recovery changes require a newly prepared, signed and installed TV package. The server timeout fix only requires restarting the relay. When moving to public HTTPS, update private build defaults, disable LAN HTTP opt-in, rebuild/reinstall, and verify certificate trust on the actual TV. The [deployment handoff](../docs/live-subtitle-relay-deployment.md) records the remaining work. Local testing was accepted as good enough on 2026-10-03; sustained stability and measured subtitle timing remain unverified.
+The user reported a fresh personal TV installation after the architecture refactor on 2026-10-04. A separate hosted relay diagnostic passed; post-refactor physical-TV playback acceptance remains pending. Client changes require a newly prepared, signed and installed TV package. A server-only change may require restarting the relay, depending on the change. For hosted deployments, consult the [deployment record and operations guide](../docs/live-subtitle-relay-deployment.md). Sustained stability and measured subtitle timing remain unverified (`clock=unverified`).
 
 ### General troubleshooting
 
@@ -82,4 +82,4 @@ Client recovery changes require a newly prepared, signed and installed TV packag
 - **Stale assets or splash only:** confirm signing used the freshly built assets and the correct compatibility target.
 - **Migration blocked:** close other app/tab connections and use Try again. Do not reset the catalogue merely because an upgrade is blocked.
 
-Use the [verification guide](../docs/verification.md) for the Chromium 47 preview and physical-TV checks. Docker verifies legacy UI behavior, not Samsung APIs, AVPlay, certificates, or device playback.
+Use the [verification guide](../docs/verification.md) for the Chromium 47 preview and physical-TV checks. A browser preview does not verify Samsung APIs, AVPlay, certificates, or device playback.

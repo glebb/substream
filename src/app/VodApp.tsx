@@ -1,29 +1,28 @@
 import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FocusEvent, type FormEvent, type SetStateAction } from "react";
 import { importM3uChunks, normalizeTitle, type VodCatalogItem } from "../core/catalog/index.ts";
 import { DEFAULT_MAX_WHOLE_RESPONSE_BYTES, responseTextChunks, validateWholeResponseFallback, WholeResponseFallbackError } from "../platform/browser/fetch-chunks.ts";
-import { clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl } from "../platform/browser/playlist-config.ts";
-import { isBackKey, isRedKey, isTizenRuntime, normalizedRemoteKey, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
-import { IndexedDbCatalogOpenError, IndexedDbCatalogStore, type VodGroup, type VodSort } from "../platform/web/indexed-db-catalog.ts";
-import { HtmlVideoPlayer } from "../platform/browser/html-video-player.ts";
+
+import { isBackKey, isRedKey, normalizedRemoteKey } from "../contracts/input.ts";
+import { IndexedDbCatalogOpenError } from "../platform/web/indexed-db-catalog.ts";
+import type { AppCatalogueRepository, VodGroup, VodSort } from "../contracts/repository.ts";
 import type { AudioTrack, MediaPlayer, PlaybackProgress, VideoDisplayMode } from "../platform/media-player.ts";
-import { isTizenAvPlayAvailable, TizenAvPlayPlayer } from "../platform/tizen/avplay-player.ts";
-import { clearSavedOpenSubtitlesSettings, loadOpenSubtitlesApiKey, saveOpenSubtitlesApiKey } from "../platform/browser/opensubtitles-config.ts";
+
 import { OpenSubtitlesClient, OpenSubtitlesRequestError, type SubtitleResult } from "../platform/opensubtitles/client.ts";
 import { rankSubtitleResults } from "../core/subtitles/rank.ts";
 import { adjustSubtitleOffsetSeconds } from "../core/subtitles/timing.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { fetchProviderPlaylist } from "../platform/browser/provider-fetch.ts";
-import { clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimingOffset } from "../platform/browser/subtitle-timing-config.ts";
-import { clearSubtitlePreferences, loadSubtitlePreferences, saveLastSubtitleLanguage, saveSubtitleFontSize, saveSubtitleLanguagePreference, type SubtitleLanguage } from "../platform/browser/subtitle-preferences.ts";
-import { clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared } from "../platform/browser/catalog-preferences.ts";
-import { clearFavouriteGroups, defaultFavouriteGroupIds, hasSavedFavouriteGroupIds, loadFavouriteGroupIds, saveFavouriteGroupIds, setFavouriteGroup } from "../platform/browser/favourites-config.ts";
-import { clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, type PlaybackHistoryItem } from "../platform/browser/playback-progress-config.ts";
+
+import { type SubtitleLanguage } from "../platform/browser/subtitle-preferences.ts";
+
+import { defaultFavouriteGroupIds } from "../platform/browser/favourites-config.ts";
+import { type PlaybackHistoryItem } from "../platform/browser/playback-progress-config.ts";
 import { LatestVodLoader } from "../platform/browser/latest-vod.ts";
 import { APP_SECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, groupsWithLatest, isLatestVirtualGroup, latestVirtualGroup, sortAndPageBrowseItems, type AppSection } from "./browse.ts";
 import { formatCategoryBadge, formatGroupDisplayName } from "./display-formatting.ts";
 import { TitleMetadataExtras } from "./TitleMetadataExtras.tsx";
 import { formatRuntime, titleDetailsFor } from "./title-details.ts";
-import { clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials } from "../platform/browser/tmdb-config.ts";
+
 import { TmdbClient, type TmdbMetadata } from "../platform/tmdb/client.ts";
 import { TmdbArtworkCache, TmdbImageCache, TmdbMetadataCache } from "../platform/browser/tmdb-cache.ts";
 import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, detailsControlNavigationTarget, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, type HeldTitleKeyState, type SettingsControlKey } from "./remote-navigation.ts";
@@ -31,10 +30,10 @@ import { focusPageItem, focusTitleListItem } from "./title-list-focus.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
 import { CompanionPanel } from "./CompanionPanel.tsx";
-import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../platform/companion/search-catalog.ts";
-import { companionDeviceLabel, companionServerUrl, CompanionConnectionError, getCompanionConnection, redeemCompanionCode, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, stageLocalMedia, sendLocalCompanionPlayback, sendStopLocalCompanionPlayback, stopLocalMedia, getLocalMediaUploadStatus, getLocalMediaSubtitle, publishLocalMediaSubtitle, companionLocalMediaUrl, renewLocalMediaLease, reportLocalMediaState, isLanCompanionAddress, type BrowserCompanionConnection, type CompanionPlaybackSelection, type CompanionLocalPlayback, type CompanionLocalSubtitle, type LocalMediaUploadStatus } from "../platform/companion/client.ts";
+import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../application/integrations/search-catalog.ts";
+import { CompanionConnectionError, getCompanionConnection, redeemCompanionCode, sendCompanionPlayback, stageLocalMedia, sendLocalCompanionPlayback, sendStopLocalCompanionPlayback, stopLocalMedia, getLocalMediaUploadStatus, getLocalMediaSubtitle, publishLocalMediaSubtitle, companionLocalMediaUrl, renewLocalMediaLease, reportLocalMediaState, isLanCompanionAddress, type BrowserCompanionConnection, type CompanionPlaybackSelection, type CompanionLocalPlayback, type CompanionLocalSubtitle, type LocalMediaUploadStatus } from "../platform/companion/client.ts";
 import { LiveRelaySettings } from "./LiveRelaySettings.tsx";
-import { clearLiveRelayConfig, loadLiveRelayConfig, saveLiveRelayConfig, type NormalizedLiveRelayConfig } from "../platform/live-relay/config.ts";
+import { type NormalizedLiveRelayConfig } from "../platform/live-relay/config.ts";
 import { createAbortController } from "../platform/abort-controller.ts";
 import { LanguageContext, Localized, translate, type UiLanguage } from "./language.tsx";
 import { LocalMediaSource, classifyLocalFilename, localDisplayTitle, localSubtitleQuery } from "../platform/browser/local-media-source.ts";
@@ -42,10 +41,18 @@ import { readLocalSubtitleFile } from "../platform/browser/local-subtitle-file.t
 import { loadPreferredLocalSubtitle, type LocalSubtitleSnapshot } from "../platform/browser/local-subtitle-match.ts";
 import { ScreenNavigation } from "./ScreenNavigation.tsx";
 import { useFixedListRowHeight } from "./fixed-list-sizing.ts";
+import { useRuntime } from "./runtime.tsx";
+import { LoadingStatus } from "./LoadingStatus.tsx";
+import { createDeviceSettings } from "../bootstrap/settings.ts";
+import { useCompanion } from "./companion.tsx";
+import { searchFocusTarget, searchResultFocusTarget } from "./search-navigation.ts";
+import { providerRequestUrl } from "../platform/provider-request.ts";
+import { PlaybackSessionGuard, disposeMediaPlayer } from "../application/playback-lifecycle.ts";
 
 type ScreenState = "loading" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 16;
 const OPEN_SUBTITLES_BASE_URL = import.meta.env.DEV ? "/opensubtitles-api/api/v1" : undefined;
+const PLAYBACK_CLEANUP_MESSAGE = "The previous stream could not be stopped. Wait a minute, then select Retry.";
 const PLAYBACK_UNAVAILABLE_MESSAGE = "The provider or network did not return playable media for this title. Try another title or retry later.";
 const LOCAL_PLAYBACK_ERROR_MESSAGE = "This browser could not decode the local video. Try another file or Play on TV.";
 type BrowseMode = "local" | "provider" | "episodes" | "latest";
@@ -133,12 +140,15 @@ function artworkLookupKey(title: Pick<BrowseArtworkTarget, "title" | "searchTitl
 export type VodAppProps = { onMainMenu(): void; onPlaylistSetup(): void; settingsOnOpen?: boolean; localSource?: LocalMediaSource | null; onChooseLocalFile?(): void; browserCompanions: BrowserCompanionConnection[]; setBrowserCompanions: Dispatch<SetStateAction<BrowserCompanionConnection[]>>; selectedTvDeviceId: string; setSelectedTvDeviceId: Dispatch<SetStateAction<string>> };
 
 export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSource = null, onChooseLocalFile, browserCompanions, setBrowserCompanions, selectedTvDeviceId, setSelectedTvDeviceId }: VodAppProps) {
+  const runtime = useRuntime();
+  const { companionDeviceLabel, companionServerUrl, saveCompanionDeviceLabel, saveCompanionServerUrl, clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl, clearSavedOpenSubtitlesSettings, loadOpenSubtitlesApiKey, saveOpenSubtitlesApiKey, clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimingOffset, clearSubtitlePreferences, loadSubtitlePreferences, saveLastSubtitleLanguage, saveSubtitleFontSize, saveSubtitleLanguagePreference, clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared, clearFavouriteGroups, hasSavedFavouriteGroupIds, loadFavouriteGroupIds, saveFavouriteGroupIds, setFavouriteGroup, clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials, clearLiveRelayConfig, loadLiveRelayConfig, saveLiveRelayConfig } = useMemo(() => createDeviceSettings(runtime.preferences), [runtime.preferences]);
+  const companion = useCompanion();
   const { language, setLanguage } = useContext(LanguageContext);
+  const catalogue = runtime.catalogue;
+  const makeXtreamClient = (url: string) => XtreamClient.fromPlaylistUrl(url, (requestUrl, init) => runtime.transport.fetch(providerRequestUrl(requestUrl), init));
   const subtitleTimingAvailable = true;
-  // The Chromium 47 preview exercises the TV layout and remote flow without
-  // claiming that Tizen media APIs are present in the browser container.
-  const isTizen = isTizenRuntime() || __SUBSTREAM_TV_UI_PREVIEW__;
-  const sectionOrder = isTizen ? APP_SECTION_ORDER.filter((section) => section !== "search") : APP_SECTION_ORDER;
+  const isTvProfile = runtime.interactionProfile === "tv";
+  const sectionOrder = APP_SECTION_ORDER;
   const [state, setState] = useState<ScreenState>(settingsOnOpen || localSource ? "ready" : "loading");
   const [startupStatus, setStartupStatus] = useState("Opening catalogue…");
   const [playlistUrl, setPlaylistUrl] = useState(loadPlaylistUrl);
@@ -156,6 +166,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const [browseMode, setBrowseMode] = useState<BrowseMode>("local");
   const [browseCollection, setBrowseCollection] = useState<AppSection>("recent");
   const [searchQuery, setSearchQuery] = useState("");
+  const [editingSearchQuery, setEditingSearchQuery] = useState(false);
   const [searchRecords, setSearchRecords] = useState<SafeSearchRecord[]>([]);
   const [localSearchRecords, setLocalSearchRecords] = useState<VodCatalogItem[]>([]);
   const [localSearchSourceUrl, setLocalSearchSourceUrl] = useState("");
@@ -173,18 +184,20 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const [activeRemoteLocalMedia, setActiveRemoteLocalMedia] = useState<ActiveLocalTvSession | null>(null);
   const searchRefreshRequestRef = useRef(0);
   const searchRefreshControllerRef = useRef<AbortController | null>(null);
+  const lastProcessedCommandRef = useRef(0);
   const [favouriteGroupIds, setFavouriteGroupIds] = useState<string[]>(loadFavouriteGroupIds);
+  const makeSearchClient = (url: string) => createBrowserSearchClient({ playlistUrl: url, providerFactory: makeXtreamClient });
   const visibleGroups = useMemo(() => browseCollection === "recent" || browseCollection === "search" ? [] : browseCollection === "movies" || browseCollection === "series" ? groupsWithLatest(groups, browseCollection, favouriteGroupIds) : favouriteGroupsFirst(groups.filter((group) => favouriteGroupIds.includes(group.id)), favouriteGroupIds), [browseCollection, favouriteGroupIds, groups]);
-  const searchProviderFingerprint = XtreamClient.fromPlaylistUrl(playlistUrl)?.pairingFingerprint() ?? "";
-  const visibleSearchRecords = useMemo(() => searchProviderFingerprint
+  const searchProviderFingerprint = makeXtreamClient(playlistUrl)?.pairingFingerprint() ?? "";
+  const visibleSearchRecords = useMemo(() => browseCollection === "search" && searchProviderFingerprint
     ? searchSafeRecords(searchRecords.filter((record) => record.sourceFingerprint === searchProviderFingerprint), searchQuery)
-    : [], [searchProviderFingerprint, searchRecords, searchQuery]);
+    : [], [browseCollection, searchProviderFingerprint, searchRecords, searchQuery]);
   const visibleSearchItems = useMemo(() => [
     ...visibleSearchRecords.flatMap((record) => {
       const item = toVodCatalogItem(record);
       if (!item) return [];
       if (record.kind === "movie") {
-        const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
+        const provider = makeXtreamClient(playlistUrl);
         if (provider) item.streamUrl = provider.streamUrlFor("movie", record.id, record.extension);
       }
       return [{ key: `provider:${record.kind}:${record.id}`, title: record.title, kind: record.kind, year: record.year, category: record.category, item, record }];
@@ -209,6 +222,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const [showFullscreenControls, setShowFullscreenControls] = useState(false);
   const [videoDisplayMode, setVideoDisplayMode] = useState<VideoDisplayMode>("auto");
   const [playbackStatus, setPlaybackStatus] = useState("Loading…");
+  const [playbackCleanupBlocked, setPlaybackCleanupBlocked] = useState(false);
+  const [playbackRetryCount, setPlaybackRetryCount] = useState(0);
   const [playbackProgress, setPlaybackProgress] = useState<PlaybackProgress | null>(null);
   const [isPlaybackPaused, setIsPlaybackPaused] = useState(false);
   const [isPlaybackBuffering, setIsPlaybackBuffering] = useState(false);
@@ -284,6 +299,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const browseTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchControlRef = useRef<HTMLElement | null>(null);
+  const searchRefreshButtonRef = useRef<HTMLButtonElement | null>(null);
   const retryPlaylistRef = useRef<HTMLButtonElement | null>(null);
   const mainMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -356,6 +373,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   useEffect(() => { latestLoaderRef.current.invalidate(); latestRequestRef.current += 1; }, [playlistUrl, groups, favouriteGroupIds]);
   const remoteBrowseRef = useRef<{ key: string; items: VodCatalogItem[] } | null>(null);
   const playerRef = useRef<MediaPlayer | null>(null);
+  const playbackSessionGuardRef = useRef<PlaybackSessionGuard | null>(null);
+  if (!playbackSessionGuardRef.current) playbackSessionGuardRef.current = new PlaybackSessionGuard();
   const playbackProgressRef = useRef<PlaybackProgress | null>(null);
   const resumeStartSecondsRef = useRef(0);
   const lastPersistedAtRef = useRef(0);
@@ -385,10 +404,10 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   useEffect(() => {
     if (!tmdbCredentials.readAccessToken && !tmdbCredentials.apiKey) return;
     const hasArtwork = (id: string) => Object.prototype.hasOwnProperty.call(browseArtwork, id);
-    const pending = browseArtworkTargets.filter((item) => !hasArtwork(item.id)).slice(0, isTizen ? 8 : 16);
+    const pending = browseArtworkTargets.filter((item) => !hasArtwork(item.id)).slice(0, isTvProfile ? 8 : 16);
     if (!pending.length) return;
     let cancelled = false;
-    const client = new TmdbClient(tmdbCredentials, undefined, import.meta.env.DEV ? "/tmdb-api" : undefined);
+    const client = new TmdbClient(tmdbCredentials, (url, init) => runtime.transport.fetch(url, init), import.meta.env.DEV ? "/tmdb-api" : undefined);
     const artworkCache = new TmdbArtworkCache();
     const load = async (item: BrowseArtworkTarget) => {
       if (item.contentType === "other") return null;
@@ -431,7 +450,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       });
     });
     return () => { cancelled = true; };
-  }, [browseArtwork, browseArtworkTargets, isTizen, tmdbCredentials]);
+  }, [browseArtwork, browseArtworkTargets, isTvProfile, tmdbCredentials]);
 
   const showSubtitleOffset = () => {
     setIsSubtitleOffsetVisible(true);
@@ -486,9 +505,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
 
   const refreshCatalog = async () => {
     if (!settingsOnOpen) setState("loading");
-    let store: IndexedDbCatalogStore | undefined;
+    let store: AppCatalogueRepository | undefined;
     try {
-      store = await IndexedDbCatalogStore.open(({ stage, processedItems }) => {
+      store = await catalogue.open(({ stage, processedItems }) => {
         setStartupStatus(stage === "upgrading"
           ? "Updating saved catalogue… " + processedItems.toLocaleString() + " titles processed. Large libraries can take a few minutes; keep this page open."
           : stage === "blocked"
@@ -522,7 +541,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   };
 
   useEffect(() => {
-    registerTizenPlaybackKeys();
+    runtime.input.registerKeys();
     if (localSource) return;
     void refreshCatalog();
   }, []);
@@ -559,7 +578,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     if (apiKey && title.searchTitle) {
       const sourceUrl = localSource.url ?? "";
       const requestController = createAbortController();
-      const client = new OpenSubtitlesClient(apiKey, (url, init) => fetch(url, { ...init, signal: requestController?.signal ?? init.signal ?? null }), OPEN_SUBTITLES_BASE_URL);
+      const client = new OpenSubtitlesClient(apiKey, (url, init) => runtime.transport.fetch(url, { ...init, signal: requestController?.signal ?? init.signal ?? null }), OPEN_SUBTITLES_BASE_URL);
       const promise = loadPreferredLocalSubtitle(
         client,
         { title: title.searchTitle, year: title.year, contentType: filenameClass.contentType === "series" ? "series" : "movie", ...(filenameClass.season !== undefined ? { season: filenameClass.season } : {}), ...(filenameClass.episode !== undefined ? { episode: filenameClass.episode } : {}) },
@@ -589,9 +608,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void (async () => {
-        let store: IndexedDbCatalogStore | undefined;
+        let store: AppCatalogueRepository | undefined;
         try {
-          store = await IndexedDbCatalogStore.open();
+          store = await catalogue.open();
           const results = await store.search(searchQuery, 50);
           if (!cancelled) { setLocalSearchRecords(results); setLocalSearchSourceUrl(playlistUrl); }
         } catch {
@@ -633,14 +652,14 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setCatalogStatus("Loading Latest…");
     let sourceVersion = "";
     try {
-      const store = await IndexedDbCatalogStore.open();
+      const store = await catalogue.open();
       try {
         const metadata = await store.metadata();
         sourceVersion = `${metadata.activeGeneration ?? ""}:${metadata.importedAt ?? ""}`;
       } finally { store.close(); }
     } catch { /* provider-only categories may not have local catalogue metadata */ }
     if (request !== latestRequestRef.current) return;
-    const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
+    const provider = makeXtreamClient(playlistUrl);
     const sourceKey = `${provider?.pairingFingerprint() ?? safeSourceFingerprint(playlistUrl)}:${sourceVersion}`;
     const loaderOptions = {
       sourceKey,
@@ -656,7 +675,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             : await provider.series(group.providerCategoryId);
           return items.map((item) => ({ ...item, group: group.name }));
         }
-        const store = await IndexedDbCatalogStore.open();
+        const store = await catalogue.open();
         try { return await store.byGroupPage(group.name, 0, group.count, "playlist"); }
         finally { store.close(); }
       },
@@ -689,7 +708,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       const key = "provider:" + group.providerContentType + ":" + group.providerCategoryId;
       let items = remoteBrowseRef.current?.key === key ? remoteBrowseRef.current.items : null;
       if (!items) {
-        const client = XtreamClient.fromPlaylistUrl(playlistUrl);
+        const client = makeXtreamClient(playlistUrl);
         if (!client) {
           setCatalogStatus("Provider catalogue is unavailable. Re-import the playlist to use the M3U fallback.");
           return;
@@ -719,7 +738,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     }
     setCatalogStatus("Loading " + (isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language)) + "…");
     const result = await browseRequestRef.current.run(async () => {
-      const store = await IndexedDbCatalogStore.open();
+      const store = await catalogue.open();
       try { return await store.byGroupPage(group.name, targetPage * PAGE_SIZE, PAGE_SIZE, targetSort); }
       finally { store.close(); }
     }, "Local catalogue could not be loaded. Try again.");
@@ -737,7 +756,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   };
 
   const exitPlayerFullscreen = () => {
-    if (isTizen) {
+    if (isTvProfile) {
       setPlayerFullscreen(false);
       return;
     }
@@ -759,8 +778,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setShowFullscreenControls(false);
     // Tizen uses the app's viewport presentation. On the web, ask the browser
     // for real fullscreen while this user action is still active.
-    setPlayerFullscreen(isTizen);
-    if (!isTizen && !document.fullscreenElement) {
+    setPlayerFullscreen(isTvProfile);
+    if (!isTvProfile && !document.fullscreenElement) {
       void document.documentElement.requestFullscreen().catch(() => undefined);
     }
     setVideoDisplayMode("auto");
@@ -801,7 +820,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     const credentials = loadTmdbCredentials();
     if (credentials.readAccessToken || credentials.apiKey) {
       setDetailsMetadataStatus("Loading title details…");
-      const client = new TmdbClient(credentials, undefined, import.meta.env.DEV ? "/tmdb-api" : undefined);
+      const client = new TmdbClient(credentials, (url, init) => runtime.transport.fetch(url, init), import.meta.env.DEV ? "/tmdb-api" : undefined);
       const mediaType = title.contentType === "series" ? "tv" : "movie";
       try {
       const normalized = normalizeTitle(title.title);
@@ -822,7 +841,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       setDetailsMetadata(metadata);
       setDetailsMetadataStatus("");
       if (metadata.posterUrl) {
-        const image = await new TmdbImageCache().getOrFetch(metadata.posterUrl, (url) => fetch(url));
+      const image = await new TmdbImageCache().getOrFetch(metadata.posterUrl, (url) => runtime.transport.fetch(url));
         if (image && request === detailsRequestRef.current) setDetailsPosterUrl(image);
       }
       } catch {
@@ -833,7 +852,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     if (subtitleKey) {
       try {
         const normalized = normalizeTitle(title.title);
-        const results = await new OpenSubtitlesClient(subtitleKey, undefined, OPEN_SUBTITLES_BASE_URL).search({
+        const results = await new OpenSubtitlesClient(subtitleKey, (url, init) => runtime.transport.fetch(url, init), OPEN_SUBTITLES_BASE_URL).search({
           query: normalized.searchTitle || title.searchTitle,
           languages: ["fi", "en"],
           ...(title.year ?? normalized.year ? { year: title.year ?? normalized.year! } : {}),
@@ -847,8 +866,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   };
 
   const companionOrigin = () => {
-    try { return companionServerUrl() || (!isTizen && import.meta.env.DEV ? window.location.origin : ""); }
-    catch { return !isTizen && import.meta.env.DEV ? window.location.origin : ""; }
+    try { return companionServerUrl() || (!isTvProfile && import.meta.env.DEV ? window.location.origin : ""); }
+    catch { return !isTvProfile && import.meta.env.DEV ? window.location.origin : ""; }
   };
 
   const publishLocalSubtitleSnapshot = (snapshot: Omit<CompanionLocalSubtitle, "version">) => {
@@ -891,7 +910,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       }
       existing?.cancel();
       const requestController = createAbortController();
-      const client = new OpenSubtitlesClient(apiKey, (url, init) => fetch(url, { ...init, signal: requestController?.signal ?? init.signal ?? null }), OPEN_SUBTITLES_BASE_URL);
+      const client = new OpenSubtitlesClient(apiKey, (url, init) => runtime.transport.fetch(url, { ...init, signal: requestController?.signal ?? init.signal ?? null }), OPEN_SUBTITLES_BASE_URL);
       promise = loadPreferredLocalSubtitle(
         client,
         {
@@ -1040,7 +1059,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     }
     try {
       const active = await getCompanionConnection(server, browserCompanion.browserCredential);
-      const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
+      const provider = makeXtreamClient(playlistUrl);
       if (active.expiresAt <= Date.now()) setWebTvConnectionStatus("TV connection has expired. Reconnect Substream on the TV.");
       else if (!active.sourceFingerprint && active.capabilities.localMedia) setWebTvConnectionStatus("TV is connected and ready for local file playback.");
       else if (!provider || active.sourceFingerprint !== provider.pairingFingerprint()) setWebTvConnectionStatus("TV is connected, but its provider does not match this browser playlist.");
@@ -1076,7 +1095,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   };
 
   const openSearchRecord = (record: SafeSearchRecord, index: number) => {
-    const client = XtreamClient.fromPlaylistUrl(playlistUrl);
+    const client = makeXtreamClient(playlistUrl);
     if (!client || record.sourceFingerprint !== client.pairingFingerprint()) {
       setSearchStatus("This result belongs to a different provider connection.");
       return;
@@ -1101,11 +1120,11 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     const record = detailsSearchRecord ?? (providerMatch ? {
       kind: providerMatch[1] as "movie" | "series", id: providerMatch[2], title: title.title,
       year: title.year ?? null, extension: extensionFromUrl ?? "mkv", category: title.group,
-      sourceFingerprint: XtreamClient.fromPlaylistUrl(playlistUrl)?.pairingFingerprint() ?? "",
+      sourceFingerprint: makeXtreamClient(playlistUrl)?.pairingFingerprint() ?? "",
       searchTitle: title.searchTitle ?? title.title,
     } : null);
     const server = companionOrigin();
-    const provider = XtreamClient.fromPlaylistUrl(playlistUrl);
+    const provider = makeXtreamClient(playlistUrl);
     if (!server) {
       setTvPlaybackStatus("Set the LAN relay address in Settings before sending playback to TV.");
       return;
@@ -1184,7 +1203,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         setBrowseCollection("search");
         setFocusIndex(index);
         tileRefs.current[index]?.focus();
-      } else if (activeGroup && isTizen) focusTitleListItem(tileRefs.current[focusIndex] ?? null, titleListViewportRef.current);
+      } else if (activeGroup && isTvProfile) focusTitleListItem(tileRefs.current[focusIndex] ?? null, titleListViewportRef.current);
       else tileRefs.current[focusIndex]?.focus();
     });
   };
@@ -1250,7 +1269,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setSearchRefreshLoading(true);
     setSearchStatus("Loading the provider catalogue…");
     try {
-      const result = await createBrowserSearchClient({ playlistUrl }).refresh({
+      const result = await makeSearchClient(playlistUrl).refresh({
         ...(controller ? { signal: controller.signal } : {}),
         onProgress: ({ completed, total }) => {
           if (request === searchRefreshRequestRef.current && latestPlaylistUrlRef.current === playlistUrl) setSearchStatus(`Loading ${completed} of ${total} categories…`);
@@ -1261,7 +1280,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       setSearchStatus(`${result.records.length.toLocaleString()} titles loaded from your provider.`);
     } catch {
       if (request !== searchRefreshRequestRef.current || latestPlaylistUrlRef.current !== playlistUrl) return;
-      const cached = await createBrowserSearchClient({ playlistUrl }).loadCached(searchProviderFingerprint);
+      const cached = await makeSearchClient(playlistUrl).loadCached(searchProviderFingerprint);
       if (request !== searchRefreshRequestRef.current || latestPlaylistUrlRef.current !== playlistUrl) return;
       setSearchRecords(cached);
       setSearchStatus(cached.length ? `Provider refresh failed. Searching ${cached.length.toLocaleString()} saved titles.` : "Provider catalogue could not be loaded. Check the playlist and browser network access.");
@@ -1274,12 +1293,15 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   };
 
   useEffect(() => {
-    if (state !== "ready" || !searchProviderFingerprint) return;
-    void createBrowserSearchClient({ playlistUrl }).loadCached(searchProviderFingerprint).then((cached) => {
+    if (browseCollection !== "search" || state !== "ready" || !searchProviderFingerprint) return;
+    let cancelled = false;
+    void makeSearchClient(playlistUrl).loadCached(searchProviderFingerprint).then((cached) => {
+      if (cancelled) return;
       if (cached.length) setSearchRecords(cached);
       setSearchStatus(cached.length ? `Searching ${cached.length.toLocaleString()} saved provider titles. Refresh to update.` : "Search your imported M3U titles or refresh the Xtream catalogue.");
     }).catch(() => undefined);
-  }, [playlistUrl, searchProviderFingerprint, state]);
+    return () => { cancelled = true; };
+  }, [browseCollection, playlistUrl, searchProviderFingerprint, state]);
 
   const followingEpisodeFor = (title: VodCatalogItem): VodCatalogItem | null => {
     if (title.season === undefined) return null;
@@ -1315,7 +1337,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
 
   const chooseSeriesEpisodes = async (title: VodCatalogItem) => {
     if (!title.providerSeriesId) { playFromDetails(title); return; }
-    const client = XtreamClient.fromPlaylistUrl(playlistUrl);
+    const client = makeXtreamClient(playlistUrl);
     if (!client) {
       setEpisodeStatus("Episodes are unavailable. Re-import the playlist and try again.");
       return;
@@ -1337,7 +1359,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     // action button changes from "Choose season and episode" to "Play selected
     // episode" after the fetch, so leaving focus on it makes the next Action
     // start playback without ever exposing the picker.
-    if (isTizen) {
+    if (isTvProfile) {
       const seasons = [...new Set(episodes.map((episode) => episode.season).filter((season): season is number => season !== undefined))].sort((a, b) => a - b);
       setEpisodePickerSeason(seasons[0]);
       setEpisodePickerLevel(seasons.length > 1 ? "seasons" : "episodes");
@@ -1357,12 +1379,12 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
 
   const openHistoryEntry = async (history: PlaybackHistoryItem) => {
     try {
-      const store = await IndexedDbCatalogStore.open();
+      const store = await catalogue.open();
       let item: VodCatalogItem | undefined;
       try { item = (await store.byIds([history.id]))[0]; }
       finally { store.close(); }
       if (!item && history.providerKind && history.providerId) {
-        const client = XtreamClient.fromPlaylistUrl(playlistUrl);
+        const client = makeXtreamClient(playlistUrl);
         if (!client || (history.providerSourceId && client.sourceFingerprint() !== history.providerSourceId)) {
           setCatalogStatus("This provider title cannot be resumed. Change the playlist in Settings and try again.");
           return;
@@ -1480,8 +1502,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     const focusBrowseIndex = (index: number) => {
       setFocusIndex(index);
       const tile = tileRefs.current[index];
-      if (activeGroup && isTizen) focusTitleListItem(tile ?? null, titleListViewportRef.current);
-      else if (isTizen) focusPageItem(tile ?? null);
+      if (activeGroup && isTvProfile) focusTitleListItem(tile ?? null, titleListViewportRef.current);
+      else if (isTvProfile) focusPageItem(tile ?? null);
       else {
         tile?.focus();
         tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -1525,6 +1547,12 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         return;
       }
       if (isBackKey(event)) {
+        if (editingSearchQuery) {
+          event.preventDefault();
+          setEditingSearchQuery(false);
+          window.requestAnimationFrame(() => searchControlRef.current?.focus());
+          return;
+        }
         if (editingSort) {
           event.preventDefault();
           setSortDraft(sort);
@@ -1779,7 +1807,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           return;
         }
         // Keep details navigation in the same order as the other remote views:
-        // header, Play here, Play on TV, then the episode selector.
+        // header, Play, Play on TV, then the episode selector.
         const controls = [detailsControlsRef.current[0], detailsControlsRef.current[2] ?? detailsControlsRef.current[1], detailsControlsRef.current[3], ...(detailsTitle.providerSeriesId && detailsEpisodes.length ? [detailsEpisodeControlRef.current] : []), ...(detailsOrigin?.kind === "local" ? [detailsControlsRef.current[4], detailsControlsRef.current[5]] : [])].filter((control): control is HTMLElement => Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled));
         if (controls.length === 0) return;
         const activeIndex = controls.indexOf(document.activeElement as HTMLElement);
@@ -1788,8 +1816,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           // Native selects need the first Up/Down press for changing the
           // selected episode. After that change, the next arrow leaves the
           // select so web users can reach Play using only arrow keys.
-          if (!isTizen && (key === "ArrowUp" || key === "ArrowDown") && !webEpisodeSelectionChangedRef.current) return;
-          if (isTizen && !editingDetailsEpisode) return;
+          if (!isTvProfile && (key === "ArrowUp" || key === "ArrowDown") && !webEpisodeSelectionChangedRef.current) return;
+          if (isTvProfile && !editingDetailsEpisode) return;
           event.preventDefault();
           webEpisodeSelectionChangedRef.current = false;
           setEditingDetailsEpisode(false);
@@ -1798,7 +1826,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           return;
         }
         if (document.activeElement === detailsEpisodeSelectRef.current && key === "Enter") {
-          if (isTizen) {
+          if (isTvProfile) {
             event.preventDefault();
             const selectedIndex = Math.max(0, detailsEpisodes.findIndex((episode) => episode.id === detailsEpisodeId));
             const selectedEpisode = detailsEpisodes[selectedIndex];
@@ -1826,7 +1854,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         return;
       }
       if (settingsConfirmation || showSettings) {
-        if (isTizen && event.target instanceof HTMLSelectElement) {
+        if (isTvProfile && event.target instanceof HTMLSelectElement) {
           // Once explicitly opened, a select owns its arrow keys so options
           // can change. OK commits and returns to its navigation trigger.
           if (key === "Enter") {
@@ -1851,7 +1879,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           confirmationOpen: Boolean(settingsConfirmation),
           apiKeyEditorOpen: showSettingsApiKeyEditor,
           hasSubtitleKey,
-          liveRelayControlsVisible: isTizen,
+          companionControlsVisible: isTvProfile && runtime.capabilities.supportsCompanion,
+          liveRelayControlsVisible: isTvProfile && runtime.capabilities.supportsLiveRelay,
         });
         const visibleOrder = order.filter((controlKey) => {
           const control = settingsControlsRef.current[controlKey];
@@ -1890,7 +1919,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           || (editingSubtitleType && event.target === subtitleSearchTypeRef.current)
           || (editingSubtitleSeason && event.target === subtitleSearchSeasonRef.current)
           || (editingSubtitleEpisode && event.target === subtitleSearchEpisodeRef.current);
-        const editableAction = remoteEditableKeyAction(key, editingRemoteField, isTizen);
+        const editableAction = remoteEditableKeyAction(key, editingRemoteField, isTvProfile);
         if (editableAction === "leave-edit") {
           event.preventDefault();
           if (event.target === subtitleSearchInputRef.current) setEditingSubtitleQuery(false);
@@ -1907,7 +1936,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           fullscreen: playerFullscreen,
           fullscreenControlsVisible: showFullscreenControls,
           editableTarget: isEditableTarget,
-          tizen: isTizen,
+          tizen: isTvProfile,
         })) {
           event.preventDefault();
           togglePlayback();
@@ -1989,13 +2018,22 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         return;
       }
       if (event.target === searchInputRef.current) {
-        if (key === "ArrowDown" && tileRefs.current[0]) {
+        if (key === "Enter") {
           event.preventDefault();
-          setFocusIndex(0);
-          tileRefs.current[0]?.focus();
-        } else if (key === "ArrowUp") {
+          if (event.repeat) return;
+          setEditingSearchQuery(false);
+          window.requestAnimationFrame(() => searchControlRef.current?.focus());
+          return;
+        }
+        const destination = searchFocusTarget("editor", key, visibleSearchItems.length > 0);
+        if (destination === "refresh") {
           event.preventDefault();
-          browseTabRefs.current[sectionOrder.indexOf("search")]?.focus();
+          setEditingSearchQuery(false);
+          window.requestAnimationFrame(() => searchRefreshButtonRef.current?.focus());
+        } else if (destination === "tab") {
+          event.preventDefault();
+          setEditingSearchQuery(false);
+          window.requestAnimationFrame(() => browseTabRefs.current[sectionOrder.indexOf("search")]?.focus());
         }
         return;
       }
@@ -2013,7 +2051,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         if (event.target === sortSelectRef.current && nestedScreenSettingsTarget(key, 0) && (previousButtonRef.current || mainMenuButtonRef.current)) {
           event.preventDefault();
           (previousButtonRef.current ?? mainMenuButtonRef.current)?.focus();
-        } else if (activeGroup && isTizen && (key === "ArrowUp" || key === "ArrowDown")
+        } else if (activeGroup && isTvProfile && (key === "ArrowUp" || key === "ArrowDown")
           && event.repeat && heldTitleKeyRef.current?.key === key) {
           event.preventDefault();
         } else if (key === "ArrowRight") {
@@ -2021,7 +2059,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           backToGroupsRef.current?.focus();
         } else if (key === "Enter") {
           window.requestAnimationFrame(() => {
-            if (activeGroup && isTizen) focusBrowseIndex(focusIndex);
+            if (activeGroup && isTvProfile) focusBrowseIndex(focusIndex);
             else tileRefs.current[focusIndex]?.focus();
           });
         }
@@ -2044,6 +2082,32 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         } else if (key === "Enter") {
           event.preventDefault();
           targetButton.click();
+        }
+        return;
+      }
+      if (targetButton && (targetButton === searchControlRef.current || targetButton === searchRefreshButtonRef.current)) {
+        if (key === "Enter") {
+          event.preventDefault();
+          if (!event.repeat) targetButton.click();
+          return;
+        }
+        const from = targetButton === searchControlRef.current ? "trigger" : "refresh";
+        const destination = searchFocusTarget(from, key, visibleSearchItems.length > 0);
+        if (destination === "tab") {
+          event.preventDefault();
+          browseTabRefs.current[sectionOrder.indexOf("search")]?.focus();
+        } else if (destination === "refresh") {
+          event.preventDefault();
+          searchRefreshButtonRef.current?.focus();
+        } else if (destination === "trigger") {
+          event.preventDefault();
+          searchControlRef.current?.focus();
+        } else if (destination === "results") {
+          event.preventDefault();
+          focusBrowseIndex(Math.max(0, Math.min(focusIndex, visibleSearchItems.length - 1)));
+        } else if (destination === "main-menu") {
+          event.preventDefault();
+          mainMenuButtonRef.current?.focus();
         }
         return;
       }
@@ -2074,7 +2138,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         if (key === "ArrowDown") {
           if (browseCollection === "search") {
             event.preventDefault();
-            searchInputRef.current?.focus();
+            searchControlRef.current?.focus();
             return;
           }
           const itemCount = browseCollection === "recent" ? continueHistory.length * 2 : visibleGroups.length;
@@ -2106,7 +2170,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         }
         if (key === "ArrowDown" && index <= 2) {
           event.preventDefault();
-          if (activeGroup && isTizen) focusBrowseIndex(0);
+          if (activeGroup && isTvProfile) focusBrowseIndex(0);
           else {
             setFocusIndex(0);
             tileRefs.current[0]?.focus();
@@ -2115,9 +2179,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         }
         if (key === "ArrowUp" && (targetButton === previousPageRef.current || targetButton === nextPageRef.current)) {
           event.preventDefault();
-          const columns = isTizen ? 4 : browseGridColumnCount(true, window.innerWidth <= 800, window.innerWidth < 520);
+          const columns = isTvProfile ? 4 : browseGridColumnCount(true, window.innerWidth <= 800, window.innerWidth < 520);
           const lastTitleIndex = Math.floor(Math.max(0, titles.length - 1) / columns) * columns;
-          if (isTizen) focusBrowseIndex(lastTitleIndex);
+          if (isTvProfile) focusBrowseIndex(lastTitleIndex);
           else {
             setFocusIndex(lastTitleIndex);
             tileRefs.current[lastTitleIndex]?.focus();
@@ -2128,9 +2192,20 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       }
       if (targetButton && key === "Enter") return;
       const continueActionCount = browseCollection === "recent" ? continueHistory.length * 2 : 0;
-      const itemCount = activeGroup ? titles.length : browseCollection === "search" ? visibleSearchRecords.length : continueActionCount + visibleGroups.length;
+      const itemCount = activeGroup ? titles.length : browseCollection === "search" ? visibleSearchItems.length : continueActionCount + visibleGroups.length;
       if (itemCount === 0) return;
-      if (activeGroup && isTizen && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
+      if (!activeGroup && browseCollection === "search" && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
+        event.preventDefault();
+        const columns = browseGridColumnCount(false, window.innerWidth <= 800, window.innerWidth < 520);
+        const activeIndex = tileRefs.current.indexOf(targetButton);
+        const currentIndex = activeIndex >= 0 ? activeIndex : Math.min(focusIndex, itemCount - 1);
+        const target = searchResultFocusTarget(key, currentIndex, itemCount, columns);
+        if (target === "refresh") {
+          if (!event.repeat) searchRefreshButtonRef.current?.focus();
+        } else if (target !== null) focusBrowseIndex(target);
+        return;
+      }
+      if (activeGroup && isTvProfile && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
         event.preventDefault();
         const verticalKey = key === "ArrowUp" || key === "ArrowDown";
         if (event.repeat) {
@@ -2149,7 +2224,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         event.preventDefault();
         const compactViewport = window.innerWidth <= 800;
         const narrowViewport = window.innerWidth < 520;
-        const homeColumns = browseGridColumnCount(false, compactViewport, narrowViewport, isTizen && window.innerWidth <= 1400);
+        const homeColumns = browseGridColumnCount(false, compactViewport, narrowViewport, isTvProfile && window.innerWidth <= 1400);
         const targetIndex = activeGroup
           ? gridNavigationTarget(key, focusIndex, itemCount, browseGridColumnCount(true, compactViewport, narrowViewport))
           : browseCollection === "recent"
@@ -2204,7 +2279,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingCompanionServer, editingDetailsEpisode, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, editingUiLanguage, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, nextEpisode, page, pendingHistoryRemoval, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, settingsFocusKey, showPlayerApiKeyEditor, showPlayerTools, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
+  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingCompanionServer, editingDetailsEpisode, editingSearchQuery, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, editingUiLanguage, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTvProfile, nextEpisode, page, pendingHistoryRemoval, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, settingsFocusKey, showPlayerApiKeyEditor, showPlayerTools, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups, visibleSearchItems]);
 
   useEffect(() => {
     const onKeyUp = (event: KeyboardEvent) => {
@@ -2227,14 +2302,14 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     if (transition === "menu") {
       const tab = browseTabRefs.current[sectionOrder.indexOf(browseCollection)];
       if (tab) {
-        if (isTizen) { window.scrollTo(0, 0); focusPageItem(tab); }
+        if (isTvProfile) { window.scrollTo(0, 0); focusPageItem(tab); }
         else tab.focus();
       }
       return;
     }
-    const itemCount = browseCollection === "recent" ? continueHistory.length * 2 : browseCollection === "search" ? visibleSearchRecords.length : visibleGroups.length;
+    const itemCount = browseCollection === "recent" ? continueHistory.length * 2 : browseCollection === "search" ? visibleSearchItems.length : visibleGroups.length;
     if (browseCollection === "search") {
-      window.requestAnimationFrame(() => searchInputRef.current?.focus());
+      window.requestAnimationFrame(() => searchControlRef.current?.focus());
       return;
     }
     const target = browseCollectionFocusTarget(itemCount > 0, Boolean(browseEmptyRecoveryRef.current));
@@ -2249,7 +2324,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       const focusFirstTile = () => {
         const tile = tileRefs.current[targetIndex];
         if (!tile) return false;
-        if (isTizen) { window.scrollTo(0, 0); focusPageItem(tile); }
+        if (isTvProfile) { window.scrollTo(0, 0); focusPageItem(tile); }
         else { tile.focus(); tile.scrollIntoView({ block: "nearest", inline: "nearest" }); }
         return true;
       };
@@ -2260,7 +2335,20 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     if (target === "recovery") {
       browseEmptyRecoveryRef.current?.focus();
     }
-  }, [activeGroup, browseCollection, continueHistory.length, detailsTitle, isTizen, resumeChoice, selectedTitle, settingsConfirmation, showSettings, visibleGroups.length]);
+  }, [activeGroup, browseCollection, continueHistory.length, detailsTitle, isTvProfile, resumeChoice, selectedTitle, settingsConfirmation, showSettings, visibleGroups.length]);
+
+  useLayoutEffect(() => {
+    if (browseCollection !== "search" || activeGroup || selectedTitle || detailsTitle || resumeChoice || showSettings || settingsConfirmation || editingSearchQuery) return;
+    const index = Math.max(0, Math.min(focusIndex, visibleSearchItems.length - 1));
+    if (index !== focusIndex) setFocusIndex(index);
+    // Async search/refresh may remove the focused card. Keep navigation on
+    // the remaining results, without pulling focus away from search or menus.
+    const active = document.activeElement;
+    if (active !== document.body && !active?.classList.contains("tile")) return;
+    const target = visibleSearchItems.length ? tileRefs.current[index] : searchControlRef.current;
+    if (isTvProfile) focusPageItem(target ?? null);
+    else target?.focus();
+  }, [activeGroup, browseCollection, detailsTitle, editingSearchQuery, focusIndex, isTvProfile, resumeChoice, selectedTitle, settingsConfirmation, showSettings, visibleSearchItems]);
 
   useEffect(() => {
     if (selectedTitle || detailsTitle || resumeChoice || showSettings || settingsConfirmation) return;
@@ -2275,7 +2363,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         browseReturnFocusPendingRef.current = false;
         const frame = window.requestAnimationFrame(() => {
           const tile = tileRefs.current[browseReturnFocusIndexRef.current];
-          if (isTizen) focusPageItem(tile ?? null);
+          if (isTvProfile) focusPageItem(tile ?? null);
           else { tile?.focus(); tile?.scrollIntoView({ block: "nearest", inline: "nearest" }); }
         });
         return () => window.cancelAnimationFrame(frame);
@@ -2289,7 +2377,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           : activeElement?.classList.contains("tile") ? "tile" : "other";
       const focusTarget = homeBrowseFocusTarget(activeFocus, Boolean(tile));
       if (focusTarget === "tile" && tile) {
-        if (isTizen) focusPageItem(tile);
+        if (isTvProfile) focusPageItem(tile);
         else { tile.focus(); tile.scrollIntoView({ block: "nearest", inline: "nearest" }); }
         return;
       }
@@ -2300,19 +2388,20 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       return;
     }
     const tile = tileRefs.current[focusIndex];
-    if (isTizen) {
+    if (isTvProfile) {
       if (document.activeElement !== tile) focusTitleListItem(tile ?? null, titleListViewportRef.current);
     }
     else {
       tile?.focus();
       tile?.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
-  }, [activeGroup, browseCollection, detailsTitle, focusIndex, groups.length, isTizen, page, resumeChoice, selectedTitle, settingsConfirmation, showSettings, state, titles.length, continueHistory.length]);
+  }, [activeGroup, browseCollection, detailsTitle, focusIndex, groups.length, isTvProfile, page, resumeChoice, selectedTitle, settingsConfirmation, showSettings, state, titles.length, continueHistory.length]);
 
   useEffect(() => {
     if (!detailsTitle) return;
-    setDetailsFocusIndex(0);
-    window.requestAnimationFrame(() => detailsControlsRef.current[0]?.focus());
+    setDetailsFocusIndex(1);
+    const frame = window.requestAnimationFrame(() => detailsControlsRef.current[2]?.focus());
+    return () => window.cancelAnimationFrame(frame);
   }, [detailsTitle]);
 
   useEffect(() => {
@@ -2367,7 +2456,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   }, [playerFullscreen, selectedTitle]);
 
   useEffect(() => {
-    if (isTizen) return;
+    if (isTvProfile) return;
     const syncFullscreenState = () => {
       const isPlayerFullscreen = document.fullscreenElement === document.documentElement;
       setPlayerFullscreen(isPlayerFullscreen);
@@ -2375,7 +2464,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     };
     document.addEventListener("fullscreenchange", syncFullscreenState);
     return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
-  }, [isTizen]);
+  }, [isTvProfile]);
 
   useEffect(() => {
     playerRef.current?.setDisplayMode(videoDisplayMode);
@@ -2396,120 +2485,171 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     }
     const initialSubtitleOffset = selectedTitleSource === "local" ? 0 : loadSubtitleTimingOffset(selectedTitle.id);
     setSubtitleTimingOffsetSeconds(initialSubtitleOffset);
-    const player = isTizenAvPlayAvailable() && avPlayContainerRef.current
-      ? new TizenAvPlayPlayer(avPlayContainerRef.current, setVisibleSubtitle)
-      : videoRef.current ? new HtmlVideoPlayer(videoRef.current) : null;
-    if (!player) return;
-    playerRef.current = player;
-    player.setSubtitleTimingOffset?.(initialSubtitleOffset);
+    let cancelled = false;
+    let stopPlayer: (() => void) | undefined;
     const persistCurrentProgress = (value: PlaybackProgress | null) => {
       if (selectedTitleSource === "local" || !value || value.currentTimeSeconds <= 0 || value.durationSeconds <= 0) return;
       const providerSourceId = selectedTitle.id.startsWith("xtream:")
-        ? XtreamClient.fromPlaylistUrl(playlistUrl)?.sourceFingerprint()
+        ? makeXtreamClient(playlistUrl)?.sourceFingerprint()
         : undefined;
       savePlaybackProgress(playbackHistoryItem(selectedTitle, value, providerSourceId));
       lastPersistedAtRef.current = Date.now();
       setContinueHistory(loadPlaybackHistory());
     };
-    player.setEventHandlers({
-      onStateChange: (playbackState) => {
-        const status: Record<typeof playbackState, string> = {
-          loading: "Loading…",
-          buffering: "Buffering…",
-          playing: "Playing",
-          paused: "Paused",
-          ended: "Ended",
-          error: selectedTitleSource === "local" ? LOCAL_PLAYBACK_ERROR_MESSAGE : PLAYBACK_UNAVAILABLE_MESSAGE,
-        };
-        setPlaybackStatus(status[playbackState]);
-        const remoteMedia = remoteLocalMediaRef.current;
-        if (remoteMedia && selectedTitle.id === `companion-local-${remoteMedia.media.sessionId}`) {
-          const remoteState = playbackState === "playing" ? "playing"
-            : playbackState === "paused" ? "paused"
-              : playbackState === "ended" ? "ended"
-                : playbackState === "error" ? "failed" : "preparing";
-          const nextRemote = { ...remoteMedia, playbackState: remoteState as ActiveLocalTvSession["playbackState"] };
-          remoteLocalMediaRef.current = nextRemote;
-          setActiveRemoteLocalMedia(nextRemote);
-          void reportLocalMediaState(remoteMedia.server, remoteMedia.tvCredential, remoteMedia.media.sessionId, remoteState).catch(() => undefined);
+    const initializePlayer = () => {
+      let ownedPlayer: MediaPlayer | null = null;
+      let pageHideListener: (() => void) | null = null;
+      let cleanupStarted = false;
+      const cleanup = () => {
+        if (cleanupStarted) return;
+        cleanupStarted = true;
+        subtitleRequestRef.current += 1;
+        playbackSessionGuardRef.current?.invalidate();
+        if (skipFeedbackTimerRef.current !== null) {
+          window.clearTimeout(skipFeedbackTimerRef.current);
+          skipFeedbackTimerRef.current = null;
         }
-        if (playbackState === "playing") setAudioTracks(player.getAudioTracks?.() ?? []);
-        setIsPlaybackBuffering(playbackState === "buffering");
-        setIsPlaybackPaused(playbackState === "paused" || playbackState === "ended" || playbackState === "error");
-        if (playbackState === "error") setShowFullscreenControls(true);
-        if (playbackState === "paused") persistCurrentProgress(playbackProgressRef.current);
-        if (playbackState === "ended") {
-          if (selectedTitleSource !== "local") {
-            removePlaybackProgress(selectedTitle.id);
-            setContinueHistory(loadPlaybackHistory());
-          }
-          if (nextEpisode) startPlayback(nextEpisode, 0, followingEpisodeFor(nextEpisode));
+        if (subtitleOffsetTimerRef.current !== null) {
+          window.clearTimeout(subtitleOffsetTimerRef.current);
+          subtitleOffsetTimerRef.current = null;
         }
-      },
-      onProgress: (value) => {
-        playbackProgressRef.current = value;
-        setPlaybackProgress(value);
-        if (value.durationSeconds > 0 && Date.now() - lastPersistedAtRef.current >= 10_000) {
-          persistCurrentProgress(value);
+        try { persistCurrentProgress(playbackProgressRef.current); } catch { /* persistence remains optional during release */ }
+        if (pageHideListener) window.removeEventListener("pagehide", pageHideListener);
+        const releasingPlayer = ownedPlayer;
+        ownedPlayer = null;
+        if (playerRef.current === releasingPlayer) playerRef.current = null;
+        if (releasingPlayer) {
+          void runtime.playbackRelease.release(
+            () => disposeMediaPlayer(releasingPlayer),
+            () => disposeMediaPlayer(releasingPlayer),
+          ).catch(() => {
+            if (!cancelled) {
+              setPlaybackCleanupBlocked(true);
+              setPlaybackStatus(PLAYBACK_CLEANUP_MESSAGE);
+              setShowFullscreenControls(true);
+            }
+          });
         }
-      },
-    });
-    // Persist the latest known playhead when the app is backgrounded or the
-    // player screen is torn down. Progress callbacks are throttled, so relying
-    // on the periodic save alone loses the final interval on quick exits.
-    const persistOnPageHide = () => persistCurrentProgress(playbackProgressRef.current);
-    window.addEventListener("pagehide", persistOnPageHide);
-    player.load(selectedTitle.streamUrl);
-    if (selectedTitleSource === "local" && localSubtitleSnapshotRef.current) {
-      const snapshot = localSubtitleSnapshotRef.current;
-      void player.setSubtitle(snapshot.text, snapshot.label, snapshot.language).then((attachment) => {
-        if (playerRef.current !== player || selectedTitleSource !== "local") return;
-        if (!attachment.enabled) {
-          setSubtitleStatus("The preferred subtitle could not be attached. " + (attachment.reason ?? "Try another subtitle file."));
-          return;
-        }
-        player.setSubtitleTimingOffset?.(snapshot.offsetSeconds);
-        player.setSubtitleEnabled(snapshot.enabled);
-        setIsSubtitleAttached(true);
-        setIsSubtitleEnabled(snapshot.enabled);
-        setSubtitleStatus("Subtitle enabled: " + snapshot.language.toUpperCase());
-      }).catch(() => setSubtitleStatus("The preferred subtitle could not be attached. Try another subtitle file."));
-    }
-    if (resumeStartSecondsRef.current > 0) player.seekTo?.(resumeStartSecondsRef.current);
-    resumeStartSecondsRef.current = 0;
-    if (selectedTitleSource === "local") setSubtitleStatus("Search subtitles when you choose, or open an SRT/WebVTT subtitle file.");
-    else if (openSubtitlesApiKey.trim()) void findSubtitles(true);
-    else setSubtitleStatus("Add an OpenSubtitles API key below to search automatically.");
-    return () => {
-      subtitleRequestRef.current += 1;
-      if (skipFeedbackTimerRef.current !== null) {
-        window.clearTimeout(skipFeedbackTimerRef.current);
-        skipFeedbackTimerRef.current = null;
-      }
-      if (subtitleOffsetTimerRef.current !== null) {
-        window.clearTimeout(subtitleOffsetTimerRef.current);
-        subtitleOffsetTimerRef.current = null;
-      }
-      persistCurrentProgress(playbackProgressRef.current);
-      window.removeEventListener("pagehide", persistOnPageHide);
-      playerRef.current = null;
-      player.setEventHandlers(null);
-      player.destroy();
-      if (selectedTitleSource === "local" && selectedTitle.id.startsWith("companion-local-")) {
-        const sessionId = selectedTitle.id.slice("companion-local-".length);
-        const previous = pendingRemoteLocalStopsRef.current.get(sessionId)
-          ?? (remoteLocalMediaRef.current?.media.sessionId === sessionId ? remoteLocalMediaRef.current : null);
-        if (previous) {
-          void reportLocalMediaState(previous.server, previous.tvCredential, sessionId, "stopped").catch(() => undefined);
-          pendingRemoteLocalStopsRef.current.delete(sessionId);
-          if (remoteLocalMediaRef.current?.media.sessionId === sessionId) {
-            remoteLocalMediaRef.current = null;
-            setActiveRemoteLocalMedia(null);
+        if (selectedTitleSource === "local" && selectedTitle.id.startsWith("companion-local-")) {
+          const sessionId = selectedTitle.id.slice("companion-local-".length);
+          const previous = pendingRemoteLocalStopsRef.current.get(sessionId)
+            ?? (remoteLocalMediaRef.current?.media.sessionId === sessionId ? remoteLocalMediaRef.current : null);
+          if (previous) {
+            void reportLocalMediaState(previous.server, previous.tvCredential, sessionId, "stopped").catch(() => undefined);
+            pendingRemoteLocalStopsRef.current.delete(sessionId);
+            if (remoteLocalMediaRef.current?.media.sessionId === sessionId) {
+              remoteLocalMediaRef.current = null;
+              setActiveRemoteLocalMedia(null);
+            }
           }
         }
+      };
+      try {
+        const player = runtime.playbackFactory.createDirect({
+          streamUrl: selectedTitle.streamUrl,
+          videoElement: runtime.capabilities.nativeVideoSurface ? null : videoRef.current,
+          container: runtime.capabilities.nativeVideoSurface ? avPlayContainerRef.current : null,
+          onSubtitleCue: setVisibleSubtitle,
+        }) ?? null;
+        ownedPlayer = player;
+        if (!player) { setPlaybackStatus(PLAYBACK_UNAVAILABLE_MESSAGE); setIsPlaybackPaused(true); return cleanup; }
+        const playerSession = playbackSessionGuardRef.current!.next();
+        playerRef.current = player;
+        player.setSubtitleTimingOffset?.(initialSubtitleOffset);
+        player.setEventHandlers({
+          onStateChange: (playbackState) => {
+            if (!playbackSessionGuardRef.current?.isCurrent(playerSession)) return;
+            const status: Record<typeof playbackState, string> = {
+              loading: "Loading…",
+              buffering: "Buffering…",
+              playing: "Playing",
+              paused: "Paused",
+              ended: "Ended",
+              error: selectedTitleSource === "local" ? LOCAL_PLAYBACK_ERROR_MESSAGE : PLAYBACK_UNAVAILABLE_MESSAGE,
+            };
+            setPlaybackStatus(status[playbackState]);
+            const remoteMedia = remoteLocalMediaRef.current;
+            if (remoteMedia && selectedTitle.id === `companion-local-${remoteMedia.media.sessionId}`) {
+              const remoteState = playbackState === "playing" ? "playing"
+                : playbackState === "paused" ? "paused"
+                  : playbackState === "ended" ? "ended"
+                    : playbackState === "error" ? "failed" : "preparing";
+              const nextRemote = { ...remoteMedia, playbackState: remoteState as ActiveLocalTvSession["playbackState"] };
+              remoteLocalMediaRef.current = nextRemote;
+              setActiveRemoteLocalMedia(nextRemote);
+              void reportLocalMediaState(remoteMedia.server, remoteMedia.tvCredential, remoteMedia.media.sessionId, remoteState).catch(() => undefined);
+            }
+            if (playbackState === "playing") setAudioTracks(player.getAudioTracks?.() ?? []);
+            setIsPlaybackBuffering(playbackState === "buffering");
+            setIsPlaybackPaused(playbackState === "paused" || playbackState === "ended" || playbackState === "error");
+            if (playbackState === "error") setShowFullscreenControls(true);
+            if (playbackState === "paused") persistCurrentProgress(playbackProgressRef.current);
+            if (playbackState === "ended") {
+              if (selectedTitleSource !== "local") {
+                removePlaybackProgress(selectedTitle.id);
+                setContinueHistory(loadPlaybackHistory());
+              }
+              if (nextEpisode) startPlayback(nextEpisode, 0, followingEpisodeFor(nextEpisode));
+            }
+          },
+          onProgress: (value) => {
+            if (!playbackSessionGuardRef.current?.isCurrent(playerSession)) return;
+            playbackProgressRef.current = value;
+            setPlaybackProgress(value);
+            if (value.durationSeconds > 0 && Date.now() - lastPersistedAtRef.current >= 10_000) {
+              persistCurrentProgress(value);
+            }
+          },
+        });
+        // Persist the latest known playhead when the app is backgrounded or the
+        // player screen is torn down. Progress callbacks are throttled, so relying
+        // on the periodic save alone loses the final interval on quick exits.
+        pageHideListener = () => persistCurrentProgress(playbackProgressRef.current);
+        window.addEventListener("pagehide", pageHideListener);
+        player.load(selectedTitle.streamUrl);
+        if (selectedTitleSource === "local" && localSubtitleSnapshotRef.current) {
+          const snapshot = localSubtitleSnapshotRef.current;
+          void player.setSubtitle(snapshot.text, snapshot.label, snapshot.language).then((attachment) => {
+            if (!playbackSessionGuardRef.current?.isCurrent(playerSession) || playerRef.current !== player || selectedTitleSource !== "local") return;
+            if (!attachment.enabled) {
+              setSubtitleStatus("The preferred subtitle could not be attached. " + (attachment.reason ?? "Try another subtitle file."));
+              return;
+            }
+            player.setSubtitleTimingOffset?.(snapshot.offsetSeconds);
+            player.setSubtitleEnabled(snapshot.enabled);
+            setIsSubtitleAttached(true);
+            setIsSubtitleEnabled(snapshot.enabled);
+            setSubtitleStatus("Subtitle enabled: " + snapshot.language.toUpperCase());
+          }).catch(() => { if (!cancelled && playbackSessionGuardRef.current?.isCurrent(playerSession)) setSubtitleStatus("The preferred subtitle could not be attached. Try another subtitle file."); });
+        }
+        if (resumeStartSecondsRef.current > 0) player.seekTo?.(resumeStartSecondsRef.current);
+        resumeStartSecondsRef.current = 0;
+        if (selectedTitleSource === "local") setSubtitleStatus("Search subtitles when you choose, or open an SRT/WebVTT subtitle file.");
+        else if (openSubtitlesApiKey.trim()) void findSubtitles(true);
+        else setSubtitleStatus("Add an OpenSubtitles API key below to search automatically.");
+        return cleanup;
+      } catch {
+        cleanup();
+        setPlaybackStatus(selectedTitleSource === "local" ? LOCAL_PLAYBACK_ERROR_MESSAGE : PLAYBACK_UNAVAILABLE_MESSAGE);
+        setIsPlaybackPaused(true);
+        setShowFullscreenControls(true);
+        return cleanup;
       }
     };
-  }, [selectedTitle, selectedTitleSource, nextEpisode]);
+    setPlaybackCleanupBlocked(false);
+    void runtime.playbackRelease.waitForRelease().then(() => {
+      if (cancelled) return;
+      stopPlayer = initializePlayer();
+    }).catch(() => {
+      if (cancelled) return;
+      setPlaybackCleanupBlocked(true);
+      setPlaybackStatus(PLAYBACK_CLEANUP_MESSAGE);
+      setIsPlaybackPaused(true);
+      setShowFullscreenControls(true);
+    });
+    return () => { cancelled = true; stopPlayer?.(); };
+
+  }, [selectedTitle, selectedTitleSource, nextEpisode, playbackRetryCount, runtime]);
 
   // Delayed release survives React StrictMode's development-only effect replay.
   // The player lifecycle effect above detaches media before this reference is released.
@@ -2603,7 +2743,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     try {
       setOpenSubtitlesApiKey(apiKey);
       saveOpenSubtitlesApiKey(apiKey);
-      const client = new OpenSubtitlesClient(apiKey, undefined, OPEN_SUBTITLES_BASE_URL);
+      const client = new OpenSubtitlesClient(apiKey, (url, init) => runtime.transport.fetch(url, init), OPEN_SUBTITLES_BASE_URL);
       const titleForSearch = normalizeTitle(selectedTitle.title);
       const defaultSearchTitle = titleForSearch.searchTitle || selectedTitle.searchTitle;
       const resolvedTitle = subtitleSearchQuery.trim() || defaultSearchTitle;
@@ -2691,7 +2831,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     const requestId = ++subtitleRequestRef.current;
     setSubtitleStatus("Downloading subtitle…");
     try {
-      const client = new OpenSubtitlesClient(apiKey, undefined, OPEN_SUBTITLES_BASE_URL);
+      const client = new OpenSubtitlesClient(apiKey, (url, init) => runtime.transport.fetch(url, init), OPEN_SUBTITLES_BASE_URL);
       const download = await client.download(subtitle.fileId);
       const text = await client.fetchSubtitleText(download.link);
       if (requestId !== subtitleRequestRef.current || playerRef.current !== player) return;
@@ -2767,7 +2907,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   };
 
   const toggleFullscreen = () => {
-    if (isTizen) {
+    if (isTvProfile) {
       setPlayerFullscreen((current) => !current);
     } else if (document.fullscreenElement) {
       exitPlayerFullscreen();
@@ -2778,7 +2918,17 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setPlayerFocusIndex(videoAreaFocusIndex);
   };
 
+  const retryPlaybackCleanup = async () => {
+    try {
+      await runtime.playbackRelease.retryRelease();
+      setPlaybackRetryCount((count) => count + 1);
+    } catch {
+      setPlaybackCleanupBlocked(true);
+      setPlaybackStatus(PLAYBACK_CLEANUP_MESSAGE);
+    }
+  };
   const restartVideo = () => {
+    if (!playerRef.current) { void retryPlaybackCleanup(); return; }
     if (selectedTitle && selectedTitleSource !== "local") {
       removePlaybackProgress(selectedTitle.id);
       setContinueHistory(loadPlaybackHistory());
@@ -2908,9 +3058,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       return;
     }
 
-    let store: IndexedDbCatalogStore | undefined;
+    let store: AppCatalogueRepository | undefined;
     try {
-      store = await IndexedDbCatalogStore.open();
+      store = await catalogue.open();
       await store.clearCatalog();
       setGroups([]);
       setActiveGroup(null);
@@ -2965,13 +3115,13 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       setPlaylistUrl(url);
       savePlaylistUrl(url);
       clearCatalogClearedMarker();
-      const provider = XtreamClient.fromPlaylistUrl(url);
+      const provider = makeXtreamClient(url);
       if (provider) {
         updateImportStage("Checking the provider catalogue…");
         try {
           const categories = await provider.categories();
           if (categories.length > 0) {
-            const store = await IndexedDbCatalogStore.open();
+            const store = await catalogue.open();
             try {
               await store.replaceProviderGroups(categories.map((category) => ({
                 id: "provider:" + category.contentType + ":" + category.id,
@@ -2993,7 +3143,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           updateImportStage("Provider catalogue unavailable. Falling back to M3U import…");
         }
       }
-      const response = await fetchProviderPlaylist(url);
+      const response = await fetchProviderPlaylist(url, {}, (requestUrl, init) => runtime.transport.fetch(requestUrl, init));
       if (!response.ok) {
         updateImportStage("Playlist server responded with HTTP " + response.status);
         throw new Error("Playlist request failed");
@@ -3002,14 +3152,14 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         validateWholeResponseFallback(response);
       }
       updateImportStage("Playlist connection succeeded (HTTP " + response.status + "). Opening local storage…");
-      const store = await IndexedDbCatalogStore.open();
+      const store = await catalogue.open();
       try {
         updateImportStage("Local storage is ready. Reading playlist data…");
         const result = await importM3uChunks(responseTextChunks(response, {
           maxWholeResponseBytes: DEFAULT_MAX_WHOLE_RESPONSE_BYTES,
           onWholeResponseFallback: () => updateImportStage("TV streaming support is unavailable. Checking and reading responses up to 8 MiB in memory…"),
         }), store, {
-          batchSize: isTizenAvPlayAvailable() ? 2_000 : 500,
+          batchSize: runtime.capabilities.nativeVideoSurface ? 2_000 : 500,
           progressInterval: 5_000,
           onProgress: ({ processedEntries, importedItems }) => {
             setProgress(processedEntries.toLocaleString() + " entries scanned · " + importedItems.toLocaleString() + " VOD items saved");
@@ -3092,9 +3242,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const pickerOptions = episodePickerLevel === "seasons" ? pickerSeasons : pickerEpisodes;
   episodePickerOptionRefs.current.length = pickerOptions.length;
 
-  const isTvTitleBrowse = state === "ready" && isTizen && Boolean(activeGroup) && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice;
-  const isTvCategoryBrowse = state === "ready" && isTizen && !activeGroup && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice && (browseCollection === "movies" || browseCollection === "series" || browseCollection === "favourites");
-  const categoryRowStyle = useFixedListRowHeight(titleListViewportRef, Math.ceil(visibleGroups.length / browseGridColumnCount(false, window.innerWidth <= 800, window.innerWidth < 520, isTizen && window.innerWidth <= 1400)), { minHeight: 90, maxHeight: 160, spacing: 28 }, isTvCategoryBrowse);
+  const isTvTitleBrowse = state === "ready" && isTvProfile && Boolean(activeGroup) && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice;
+  const isTvCategoryBrowse = state === "ready" && isTvProfile && !activeGroup && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice && (browseCollection === "movies" || browseCollection === "series" || browseCollection === "favourites");
+  const categoryRowStyle = useFixedListRowHeight(titleListViewportRef, Math.ceil(visibleGroups.length / browseGridColumnCount(false, window.innerWidth <= 800, window.innerWidth < 520, isTvProfile && window.innerWidth <= 1400)), { minHeight: 90, maxHeight: 160, spacing: 28 }, isTvCategoryBrowse);
 
   const screenHeader = <header className="app-header" onFocusCapture={() => { if (detailsTitle) setDetailsFocusIndex(0); if (selectedTitle) setPlayerFocusIndex(0); }}><div><p className="eyebrow">{settingsOnOpen ? "SUBSTREAM · SETTINGS" : "SUBSTREAM · VIDEO-ON-DEMAND"}</p><h1>{settingsOnOpen ? "Settings" : state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
       {!episodePickerOpen && !(selectedTitle && playerFullscreen) && <ScreenNavigation
@@ -3106,18 +3256,12 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       />}
     </header>;
 
-  if (state === "loading") return <Localized language={language}><main className="screen">{screenHeader}<p role="status" aria-live="polite">{startupStatus}</p><div className="groups skeleton-grid" aria-hidden="true">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-tile" key={index} />)}</div></main></Localized>;
-  if (state === "storage-error" && !settingsOnOpen) return <Localized language={language}><main className="screen">
-    {screenHeader}<h2>Catalogue unavailable</h2>
-    <p role="alert">{error}</p>
-    <button type="button" ref={retryPlaylistRef} autoFocus onClick={() => void refreshCatalog()}>Try again</button>
-  </main></Localized>;
-  if (state === "importing" || state === "auto-import") return <Localized language={language}><main className="screen">{screenHeader}<h2>Importing library</h2><p role="status" aria-live="polite">{progress}</p></main></Localized>;
 
   const openCompanionTitle = (title: VodCatalogItem, source: "catalogue" | "local" = "catalogue") => {
     // A paired companion is a global input source. Its selection must win over
     // whatever transient TV screen is open, including the player.
     setSettingsConfirmation(null);
+    setState("ready");
     setShowSettings(false);
     setResumeChoice(null);
     setSelectedTitle(null);
@@ -3133,6 +3277,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     try { streamUrl = companionLocalMediaUrl(server, media); }
     catch { setTvPlaybackStatus("The TV received an invalid local media session. Update the app and try again."); return; }
     const normalized = normalizeTitle(media.title);
+    setState("ready");
     const title: VodCatalogItem = {
       id: `companion-local-${media.sessionId}`,
       title: media.title,
@@ -3162,7 +3307,28 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setShowFullscreenControls(false);
     setPlaybackStatus("");
   };
-  return <Localized language={language}><main className={"screen" + (isTizen ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen tv-fixed-list-screen" : isTvCategoryBrowse ? " tv-fixed-list-screen" : "")}>
+  useEffect(() => {
+    if (!(["ready", "storage-error", "error"] as ScreenState[]).includes(state)) return;
+    const pending = companion.commands.filter((item) => item.id > lastProcessedCommandRef.current);
+    if (!pending.length) return;
+    for (const item of pending) {
+      const command = item.command;
+      if (command.kind === "play" || command.kind === "select") openCompanionTitle(command.title);
+      else if (command.kind === "play-local") openCompanionLocalMedia(command.media, command.server, command.tvCredential);
+      else if (command.kind === "stop-local") stopCompanionLocalMedia(command.sessionId);
+      lastProcessedCommandRef.current = item.id;
+    }
+    companion.consumeCommands(lastProcessedCommandRef.current);
+  }, [companion.commands, companion.consumeCommands, state]);
+  if (state === "loading") return <Localized language={language}><main className="screen" aria-busy="true">{screenHeader}<LoadingStatus>{startupStatus}</LoadingStatus><div className="groups skeleton-grid" aria-hidden="true">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-tile" key={index} />)}</div></main></Localized>;
+  if (state === "storage-error" && !settingsOnOpen) return <Localized language={language}><main className="screen">
+    {screenHeader}<h2>Catalogue unavailable</h2>
+    <p role="alert">{error}</p>
+    <button type="button" ref={retryPlaylistRef} autoFocus onClick={() => void refreshCatalog()}>Try again</button>
+  </main></Localized>;
+  if (state === "importing" || state === "auto-import") return <Localized language={language}><main className="screen" aria-busy="true">{screenHeader}<h2>Importing library</h2><LoadingStatus>{progress || startupStatus}</LoadingStatus></main></Localized>;
+
+  return <Localized language={language}><main className={"screen" + (isTvProfile ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen tv-fixed-list-screen" : isTvCategoryBrowse ? " tv-fixed-list-screen" : "")}>
     {screenHeader}
     {state !== "ready" && state === "error" && <section className="setup-recovery">
       <p className="error" role="alert">{error || "The saved playlist could not be imported."}</p>
@@ -3187,18 +3353,18 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         </section></div> : <>
           <h2>Settings</h2>
           <p className="hint">Playlist URLs and subtitle keys are masked on entry and are never displayed on this screen. The LAN relay address is not a credential.</p>
-          {isTizen && <CompanionPanel playlistUrl={playlistUrl} onPlay={openCompanionTitle} onLocalPlay={openCompanionLocalMedia} onLocalStop={stopCompanionLocalMedia} editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTizen} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
-          {isTizen && <LiveRelaySettings config={liveRelayConfig} language={language} onSave={(config) => { const saved = saveLiveRelayConfig(config); setLiveRelayConfig(saved); setSettingsStatus("Live subtitle relay settings saved."); }} onRemove={() => { clearLiveRelayConfig(); setLiveRelayConfig(null); setSettingsStatus("Saved live subtitle relay settings removed."); }} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
+          {isTvProfile && runtime.capabilities.supportsCompanion && <CompanionPanel editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTvProfile} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
+          {isTvProfile && runtime.capabilities.supportsLiveRelay && <LiveRelaySettings config={liveRelayConfig} language={language} onSave={(config) => { const saved = saveLiveRelayConfig(config); setLiveRelayConfig(saved); setSettingsStatus("Live subtitle relay settings saved."); }} onRemove={() => { clearLiveRelayConfig(); setLiveRelayConfig(null); setSettingsStatus("Saved live subtitle relay settings removed."); }} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
           <section className="settings-section">
             <h3>{language === "fi" ? "Käyttöliittymän kieli" : "Interface language"}</h3>
-            <RemoteEditable label={language === "fi" ? "Kieli" : "Language"} value={language === "fi" ? "Suomi" : "English"} editing={editingUiLanguage} remoteMode={isTizen} className={settingsFocusClass("ui-language")} controlRef={(element) => { uiLanguageControlRef.current = element; registerSettingsControl("ui-language", element); }} onBeginEdit={() => { setEditingUiLanguage(true); window.requestAnimationFrame(() => uiLanguageControlRef.current?.focus()); }} renderEditor={(controlRef) => <label htmlFor="ui-language">{language === "fi" ? "Kieli" : "Language"}<select className={settingsFocusClass("ui-language")} data-settings-focus="ui-language" id="ui-language" value={language} ref={(element) => { uiLanguageControlRef.current = element; registerSettingsControl("ui-language", element); controlRef(element); }} onChange={(event) => setLanguage(event.target.value as UiLanguage)}><option value="fi">Suomi</option><option value="en">English</option></select></label>} />
+            <RemoteEditable label={language === "fi" ? "Kieli" : "Language"} value={language === "fi" ? "Suomi" : "English"} editing={editingUiLanguage} remoteMode={isTvProfile} className={settingsFocusClass("ui-language")} controlRef={(element) => { uiLanguageControlRef.current = element; registerSettingsControl("ui-language", element); }} onBeginEdit={() => { setEditingUiLanguage(true); window.requestAnimationFrame(() => uiLanguageControlRef.current?.focus()); }} renderEditor={(controlRef) => <label htmlFor="ui-language">{language === "fi" ? "Kieli" : "Language"}<select className={settingsFocusClass("ui-language")} data-settings-focus="ui-language" id="ui-language" value={language} ref={(element) => { uiLanguageControlRef.current = element; registerSettingsControl("ui-language", element); controlRef(element); }} onChange={(event) => setLanguage(event.target.value as UiLanguage)}><option value="fi">Suomi</option><option value="en">English</option></select></label>} />
           </section>
           <section className="settings-section">
             <h3>Navigation and playlist</h3>
             <p className="hint">Your playlist URL is stored locally and remains masked.</p>
             <button className={settingsFocusClass("playlist")} data-settings-focus="playlist" type="button" ref={(element) => registerSettingsControl("playlist", element)} onClick={changePlaylist}>Change playlist URL</button>
           </section>
-          {!isTizen && <section className="settings-section">
+          {!isTvProfile && <section className="settings-section">
             <h3>TV connection</h3>
             <p className="hint">Pair each TV once, then choose the named target before sending playback. On Vite development, an empty relay address uses the local /api proxy.</p>
             <label htmlFor="web-tv-relay-url">LAN relay address</label>
@@ -3225,7 +3391,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           <section className="settings-section">
             <h3>Subtitle language</h3>
             <p className="hint">Search and ranking prefer this language, then fall back to the other supported language.</p>
-            <RemoteEditable label="Preferred subtitle language" value={subtitleLanguagePreference === "fi" ? "Finnish (then English)" : "English (then Finnish)"} editing={editingSubtitleLanguage} remoteMode={isTizen} className={settingsFocusClass("subtitle-language")} controlRef={(element) => { subtitleLanguageControlRef.current = element; registerSettingsControl("subtitle-language", element); }} onBeginEdit={() => { setEditingSubtitleLanguage(true); window.requestAnimationFrame(() => (subtitleLanguageControlRef.current as HTMLSelectElement | null)?.focus()); }} renderEditor={(controlRef) => <label htmlFor="subtitle-language-preference">Preferred subtitle language<select className={settingsFocusClass("subtitle-language")} data-settings-focus="subtitle-language" id="subtitle-language-preference" value={subtitleLanguagePreference} ref={(element) => { controlRef(element); subtitleLanguageControlRef.current = element; registerSettingsControl("subtitle-language", element); }} onChange={(event) => { const value = event.target.value as SubtitleLanguage; setSubtitleLanguagePreference(value); saveSubtitleLanguagePreference(value); }}><option value="fi">Finnish (then English)</option><option value="en">English (then Finnish)</option></select></label>} />
+            <RemoteEditable label="Preferred subtitle language" value={subtitleLanguagePreference === "fi" ? "Finnish (then English)" : "English (then Finnish)"} editing={editingSubtitleLanguage} remoteMode={isTvProfile} className={settingsFocusClass("subtitle-language")} controlRef={(element) => { subtitleLanguageControlRef.current = element; registerSettingsControl("subtitle-language", element); }} onBeginEdit={() => { setEditingSubtitleLanguage(true); window.requestAnimationFrame(() => (subtitleLanguageControlRef.current as HTMLSelectElement | null)?.focus()); }} renderEditor={(controlRef) => <label htmlFor="subtitle-language-preference">Preferred subtitle language<select className={settingsFocusClass("subtitle-language")} data-settings-focus="subtitle-language" id="subtitle-language-preference" value={subtitleLanguagePreference} ref={(element) => { controlRef(element); subtitleLanguageControlRef.current = element; registerSettingsControl("subtitle-language", element); }} onChange={(event) => { const value = event.target.value as SubtitleLanguage; setSubtitleLanguagePreference(value); saveSubtitleLanguagePreference(value); }}><option value="fi">Finnish (then English)</option><option value="en">English (then Finnish)</option></select></label>} />
           </section>
           <section className="settings-section">
             <h3>OpenSubtitles</h3>
@@ -3244,8 +3410,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             <p className="hint">Read Access Token is preferred; the API key is an optional fallback. Credentials stay hidden.</p>
             <p className="hint" role="status">Read Access Token: {tmdbCredentials.readAccessToken ? "Configured (hidden)" : "Not configured"} · API key: {tmdbCredentials.apiKey ? "Configured (hidden)" : "Not configured"}</p>
             <div className="settings-key-fields">
-              <RemoteEditable label="TMDb Read Access Token" value={tmdbCredentials.readAccessToken ? "Configured (hidden)" : "Not configured"} editing={editingTmdbToken} remoteMode={isTizen} className={settingsFocusClass("tmdb-token-input")} controlRef={(element) => { tmdbTokenControlRef.current = element; registerSettingsControl("tmdb-token-input", element); }} onBeginEdit={() => { setEditingTmdbToken(true); window.requestAnimationFrame(() => settingsControlsRef.current["tmdb-token-input"]?.focus()); }} renderEditor={(controlRef) => <label htmlFor="tmdb-read-token">TMDb Read Access Token<input className={settingsFocusClass("tmdb-token-input")} data-settings-focus="tmdb-token-input" id="tmdb-read-token" type="password" placeholder="New Read Access Token" value={tmdbTokenDraft} onChange={(event) => setTmdbTokenDraft(event.target.value)} autoComplete="off" ref={(element) => { tmdbTokenControlRef.current = element; registerSettingsControl("tmdb-token-input", element); controlRef(element); }} /></label>} />
-              <RemoteEditable label="TMDb API key fallback" value={tmdbCredentials.apiKey ? "Configured (hidden)" : "Not configured"} editing={editingTmdbApiKey} remoteMode={isTizen} className={settingsFocusClass("tmdb-key-input")} controlRef={(element) => { tmdbApiKeyControlRef.current = element; registerSettingsControl("tmdb-key-input", element); }} onBeginEdit={() => { setEditingTmdbApiKey(true); window.requestAnimationFrame(() => settingsControlsRef.current["tmdb-key-input"]?.focus()); }} renderEditor={(controlRef) => <label htmlFor="tmdb-api-key">TMDb API key fallback<input className={settingsFocusClass("tmdb-key-input")} data-settings-focus="tmdb-key-input" id="tmdb-api-key" type="password" placeholder="Optional API key fallback" value={tmdbApiKeyDraft} onChange={(event) => setTmdbApiKeyDraft(event.target.value)} autoComplete="off" ref={(element) => { tmdbApiKeyControlRef.current = element; registerSettingsControl("tmdb-key-input", element); controlRef(element); }} /></label>} />
+              <RemoteEditable label="TMDb Read Access Token" value={tmdbCredentials.readAccessToken ? "Configured (hidden)" : "Not configured"} editing={editingTmdbToken} remoteMode={isTvProfile} className={settingsFocusClass("tmdb-token-input")} controlRef={(element) => { tmdbTokenControlRef.current = element; registerSettingsControl("tmdb-token-input", element); }} onBeginEdit={() => { setEditingTmdbToken(true); window.requestAnimationFrame(() => settingsControlsRef.current["tmdb-token-input"]?.focus()); }} renderEditor={(controlRef) => <label htmlFor="tmdb-read-token">TMDb Read Access Token<input className={settingsFocusClass("tmdb-token-input")} data-settings-focus="tmdb-token-input" id="tmdb-read-token" type="password" placeholder="New Read Access Token" value={tmdbTokenDraft} onChange={(event) => setTmdbTokenDraft(event.target.value)} autoComplete="off" ref={(element) => { tmdbTokenControlRef.current = element; registerSettingsControl("tmdb-token-input", element); controlRef(element); }} /></label>} />
+              <RemoteEditable label="TMDb API key fallback" value={tmdbCredentials.apiKey ? "Configured (hidden)" : "Not configured"} editing={editingTmdbApiKey} remoteMode={isTvProfile} className={settingsFocusClass("tmdb-key-input")} controlRef={(element) => { tmdbApiKeyControlRef.current = element; registerSettingsControl("tmdb-key-input", element); }} onBeginEdit={() => { setEditingTmdbApiKey(true); window.requestAnimationFrame(() => settingsControlsRef.current["tmdb-key-input"]?.focus()); }} renderEditor={(controlRef) => <label htmlFor="tmdb-api-key">TMDb API key fallback<input className={settingsFocusClass("tmdb-key-input")} data-settings-focus="tmdb-key-input" id="tmdb-api-key" type="password" placeholder="Optional API key fallback" value={tmdbApiKeyDraft} onChange={(event) => setTmdbApiKeyDraft(event.target.value)} autoComplete="off" ref={(element) => { tmdbApiKeyControlRef.current = element; registerSettingsControl("tmdb-key-input", element); controlRef(element); }} /></label>} />
             </div>
             <div className="settings-actions settings-key-actions">
               <button className={settingsFocusClass("tmdb-save")} data-settings-focus="tmdb-save" type="button" ref={(element) => registerSettingsControl("tmdb-save", element)} onClick={saveTmdbSettings}>Save TMDb settings</button>
@@ -3267,15 +3433,15 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       </section>
       {!showSettings && (detailsTitle && details ? <section className="title-details" aria-labelledby="title-details-heading">
         <div className="details-actions">
-          <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} disabled={Boolean(detailsTitle.providerSeriesId && detailsEpisodes.length && !detailsEpisodeId)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsOrigin?.kind === "local" ? "Play on this computer" : detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : "Play here"}</button>
-          {detailsOrigin?.kind === "local" && !isTizen && <button className={detailsFocusIndex === 2 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(2)} onClick={() => {
+          <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} disabled={Boolean(detailsTitle.providerSeriesId && detailsEpisodes.length && !detailsEpisodeId)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsOrigin?.kind === "local" ? "Play on this computer" : detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : "Play"}</button>
+          {detailsOrigin?.kind === "local" && !isTvProfile && <button className={detailsFocusIndex === 2 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(2)} onClick={() => {
             if (localUpload.state === "uploading" || localUpload.state === "preparing") cancelLocalUpload();
             else if (localUpload.session && ["playing", "paused", "preparing", "accepted"].includes(localUpload.session.playbackState ?? "")) void stopLocalTvPlayback();
             else void playLocalOnTv();
           }}>{localUpload.state === "preparing" ? "Cancel TV preparation" : localUpload.state === "uploading" ? `Cancel upload (${Math.floor(localUpload.sentBytes * 100 / Math.max(1, localUpload.totalBytes))}%)` : localUpload.session && ["playing", "paused", "preparing", "accepted"].includes(localUpload.session.playbackState ?? "") ? "Stop TV playback" : "Play on TV"}</button>}
-          {detailsOrigin?.kind === "local" && !isTizen && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[4] = element; }} onFocus={() => setDetailsFocusIndex(3)} onClick={() => setShowSettings(true)}>TV settings and pairing</button>}
+          {detailsOrigin?.kind === "local" && !isTvProfile && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[4] = element; }} onFocus={() => setDetailsFocusIndex(3)} onClick={() => setShowSettings(true)}>TV settings and pairing</button>}
           {detailsOrigin?.kind === "local" && onChooseLocalFile && <button className={detailsFocusIndex === 4 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[5] = element; }} onFocus={() => setDetailsFocusIndex(4)} onClick={onChooseLocalFile}>Choose another file</button>}
-          {!isTizen && detailsOrigin?.kind !== "local" && (detailsSearchRecord || /^xtream:(movie|series):\d{1,20}$/.test(detailsTitle.id)) && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(3)} disabled={Boolean(detailsTitle.providerSeriesId && (!detailsEpisodes.length || !detailsEpisodeId))} onClick={() => void playSearchResultOnTv(detailsTitle.providerSeriesId ? (detailsEpisodes.find((episode) => episode.id === detailsEpisodeId) ?? detailsTitle) : detailsTitle)}>Play on TV</button>}
+          {!isTvProfile && detailsOrigin?.kind !== "local" && (detailsSearchRecord || /^xtream:(movie|series):\d{1,20}$/.test(detailsTitle.id)) && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(3)} disabled={Boolean(detailsTitle.providerSeriesId && (!detailsEpisodes.length || !detailsEpisodeId))} onClick={() => void playSearchResultOnTv(detailsTitle.providerSeriesId ? (detailsEpisodes.find((episode) => episode.id === detailsEpisodeId) ?? detailsTitle) : detailsTitle)}>Play on TV</button>}
         </div>
         {tvPlaybackStatus && <p className="hint" role="status" aria-live="polite">{tvPlaybackStatus}</p>}
         {episodeStatus && <p className="hint" role="status" aria-live="polite">{episodeStatus}</p>}
@@ -3297,10 +3463,10 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             {detailsOrigin?.kind === "local" && (tmdbCredentials.readAccessToken || tmdbCredentials.apiKey) && <button type="button" onClick={() => void openTitle(detailsTitle, { kind: "local", focusIndex: detailsFocusIndex })}>Search details again</button>}
             {details.subtitleLanguages.length > 0 ? <p className="hint">Subtitles available: {details.subtitleLanguages.join(", ")}</p> : <p className="hint">Subtitle languages will appear after searching OpenSubtitles.</p>}
             {detailsHistory && <p className="details-resume" role="status">Resume available at {formatPlaybackTime(detailsHistory.currentTimeSeconds)} of {formatPlaybackTime(detailsHistory.durationSeconds)}</p>}
-            {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" translateValue={false} value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `${translate("Season", language)} ${episode.season}, ` : ""}${episode.episode !== undefined ? `${translate("Episode", language)} ${episode.episode}` : episode.title}` : translate("Choose episode", language); })()} editing={editingDetailsEpisode} remoteMode={isTizen} className={detailsFocusIndex === 1 ? "remote-focused" : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? "remote-focused" : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => { setDetailsFocusIndex(1); webEpisodeSelectionChangedRef.current = false; }} value={detailsEpisodeId} onChange={(event) => { webEpisodeSelectionChangedRef.current = true; setDetailsEpisodeId(event.target.value); setDetailsFocusIndex(2); window.requestAnimationFrame(() => { webEpisodeSelectionChangedRef.current = false; detailsControlsRef.current[2]?.focus(); }); }} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id} translate={episode.episode === undefined ? "no" : undefined}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
+            {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" translateValue={false} value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `${translate("Season", language)} ${episode.season}, ` : ""}${episode.episode !== undefined ? `${translate("Episode", language)} ${episode.episode}` : episode.title}` : translate("Choose episode", language); })()} editing={editingDetailsEpisode} remoteMode={isTvProfile} className={detailsFocusIndex === 1 ? "remote-focused" : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? "remote-focused" : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => { setDetailsFocusIndex(1); webEpisodeSelectionChangedRef.current = false; }} value={detailsEpisodeId} onChange={(event) => { webEpisodeSelectionChangedRef.current = true; setDetailsEpisodeId(event.target.value); setDetailsFocusIndex(2); window.requestAnimationFrame(() => { webEpisodeSelectionChangedRef.current = false; detailsControlsRef.current[2]?.focus(); }); }} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id} translate={episode.episode === undefined ? "no" : undefined}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
           </div>
         </div>
-        {episodePickerOpen && isTizen && <div className="episode-picker-backdrop" role="presentation">
+        {episodePickerOpen && isTvProfile && <div className="episode-picker-backdrop" role="presentation">
           <section className="episode-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="episode-picker-heading">
             <header className="app-header"><h3 id="episode-picker-heading">{episodePickerLevel === "seasons" ? "Choose a season" : translate("Choose an episode (Season {{season}})", language).replace("{{season}}", String(episodePickerSeason ?? "—"))}</h3><ScreenNavigation onPrevious={goToPreviousScreen} previousLabel={episodePickerLevel === "episodes" && pickerSeasons.length > 1 ? "Seasons" : "Back to details"} onMainMenu={onMainMenu} previousRef={previousButtonRef} mainMenuRef={mainMenuButtonRef} /></header>
             <p className="hint">{episodePickerLevel === "seasons" ? translate("Use arrows to move, Action to select, Back to close.", language) : translate("Use arrows to move, Action to select, Back to", language) + ` ${pickerSeasons.length > 1 ? translate("return to seasons", language) : translate("close", language)}.`}</p>
@@ -3362,12 +3528,12 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           tabIndex={0}
           onClick={() => playerStageRef.current?.focus()}
         >
-          {isTizenAvPlayAvailable()
+          {runtime.capabilities.nativeVideoSurface
             ? <object className="player tizen-player" ref={avPlayContainerRef} type="application/avplayer" aria-label="Video player" />
             : <video className="player" autoPlay ref={videoRef} />}
           {playerFullscreen && isPlaybackBuffering && <div className="buffering-overlay" role="status" aria-live="polite">Buffering…</div>}
           {playerFullscreen && playbackStatus === "Paused" && <div className="paused-title-overlay">{selectedTitle.title}</div>}
-          {(playbackStatus === PLAYBACK_UNAVAILABLE_MESSAGE || playbackStatus === LOCAL_PLAYBACK_ERROR_MESSAGE) && <div className="playback-error-overlay" role="alert"><strong>Video unavailable</strong><span>{playbackStatus}</span></div>}
+          {(playbackStatus === PLAYBACK_UNAVAILABLE_MESSAGE || playbackStatus === LOCAL_PLAYBACK_ERROR_MESSAGE || playbackStatus === PLAYBACK_CLEANUP_MESSAGE) && <div className="playback-error-overlay" role="alert"><strong>Video unavailable</strong><span>{playbackStatus}</span></div>}
           {showVideoInfo && <aside className="video-info-overlay" role="status" aria-live="polite"><strong>Video information</strong><span>Resolution: {videoResolution}</span></aside>}
           {visibleSubtitle && <p className="subtitle-overlay" aria-live="off" style={{ fontSize: subtitleFontSize + "rem" }}><span translate="no">{visibleSubtitle}</span></p>}
           {subtitleTimingAvailable && isSubtitleAttached && isSubtitleOffsetVisible && <div className="subtitle-offset-overlay" aria-live="polite">Subtitle offset {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</div>}
@@ -3379,7 +3545,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         </div>}
         <div className="player-controls" aria-label="Playback controls">
           <button className={playerFocusIndex === playbackToggleFocusIndex ? "remote-focused" : ""} type="button" onClick={togglePlayback} aria-label={isPlaybackPaused ? "Play video" : "Pause video"} aria-pressed={!isPlaybackPaused} ref={playerTogglePlaybackButtonRef}>{isPlaybackPaused ? "Play" : "Pause"}</button>
-          <button className={playerFocusIndex === restartFocusIndex ? "remote-focused" : ""} type="button" onClick={restartVideo} ref={playerRestartButtonRef}>Restart</button>
+          <button className={playerFocusIndex === restartFocusIndex ? "remote-focused" : ""} type="button" onClick={restartVideo} ref={playerRestartButtonRef}>{playbackCleanupBlocked ? "Retry" : "Restart"}</button>
           {nextEpisode && <button className={playerFocusIndex === playerNextEpisodeFocusIndex ? "remote-focused" : ""} type="button" onClick={() => startPlayback(nextEpisode, 0, followingEpisodeFor(nextEpisode))} ref={playerNextEpisodeButtonRef}>Play next episode</button>}
           <button className={playerFocusIndex === fullscreenFocusIndex ? "remote-focused" : ""} type="button" onClick={toggleFullscreen} ref={playerFullscreenButtonRef}>{playerFullscreen ? "Exit full screen" : "Full screen"}</button>
           <button className={playerFocusIndex === subtitleToggleFocusIndex ? "remote-focused" : ""} type="button" onClick={isSubtitleAttached ? toggleSubtitles : () => { setShowPlayerTools(true); setPlayerFocusIndex(infoFocusIndex); window.requestAnimationFrame(() => playerInfoButtonRef.current?.focus()); }} aria-label={isSubtitleAttached ? "Subtitles" : "Find subtitles"} aria-pressed={isSubtitleAttached ? isSubtitleEnabled : undefined} ref={subtitleToggleButtonRef}>{isSubtitleAttached ? `Subtitles: ${isSubtitleEnabled ? "On" : "Off"}` : "Find subtitles"}</button>
@@ -3391,7 +3557,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             <button className={playerFocusIndex === subtitleSmallerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(-.2)} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
             <button className={playerFocusIndex === subtitleLargerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(.2)} ref={subtitleLargerButtonRef}>Subtitle A+</button>
           </>}
-          <span className={"playback-status " + ([PLAYBACK_UNAVAILABLE_MESSAGE, LOCAL_PLAYBACK_ERROR_MESSAGE].includes(playbackStatus) ? "error" : "")} role="status" aria-live="polite">{playbackStatus}</span>
+          <span className={"playback-status " + ([PLAYBACK_UNAVAILABLE_MESSAGE, LOCAL_PLAYBACK_ERROR_MESSAGE, PLAYBACK_CLEANUP_MESSAGE].includes(playbackStatus) ? "error" : "")} role="status" aria-live="polite">{playbackStatus}</span>
         </div>
         {showPlayerTools && <section className="subtitles">
           <h3>Subtitles</h3>
@@ -3411,16 +3577,16 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             </div>
           </div>}
           {!hasSubtitleKey && <div className="subtitle-actions">
-            <RemoteEditable label="OpenSubtitles API key" value="Not configured" editing={showPlayerApiKeyEditor} remoteMode={isTizen} className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleKeyControlRef.current = element; }} onBeginEdit={showPlayerApiKeySetup} renderEditor={(controlRef) => <label htmlFor="opensubtitles-api-key">OpenSubtitles API key<input id="opensubtitles-api-key" type="password" value={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={(element) => { openSubtitlesApiKeyRef.current = element; subtitleKeyInputRef.current = element; controlRef(element); }} /></label>} />
+            <RemoteEditable label="OpenSubtitles API key" value="Not configured" editing={showPlayerApiKeyEditor} remoteMode={isTvProfile} className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleKeyControlRef.current = element; }} onBeginEdit={showPlayerApiKeySetup} renderEditor={(controlRef) => <label htmlFor="opensubtitles-api-key">OpenSubtitles API key<input id="opensubtitles-api-key" type="password" value={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={(element) => { openSubtitlesApiKeyRef.current = element; subtitleKeyInputRef.current = element; controlRef(element); }} /></label>} />
             {showPlayerApiKeyEditor && <button className={playerFocusIndex === subtitleFocus.saveKey ? "remote-focused" : ""} type="button" onClick={saveSubtitleSettings} ref={subtitleSaveButtonRef}>Save settings</button>}
           </div>}
           <p className="subtitle-search-heading">Subtitle search</p>
           <div className="subtitle-search-options">
-            <RemoteEditable label="Title" value={subtitleSearchQuery} translateValue={false} editing={editingSubtitleQuery} remoteMode={isTizen} className={`subtitle-search-query ${playerFocusIndex === subtitleSearchFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleQuery(true); window.requestAnimationFrame(() => subtitleSearchInputRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-query" htmlFor="subtitle-search-query">Title<input id="subtitle-search-query" type="search" value={subtitleSearchQuery} onChange={(event) => setSubtitleSearchQuery(event.target.value)} autoComplete="off" enterKeyHint="search" aria-label="Subtitle search term" ref={(element) => { subtitleSearchInputRef.current = element; controlRef(element); }} /></label>} />
-            <RemoteEditable label="Type" value={subtitleSearchType === "movie" ? "Movie" : "Series"} editing={editingSubtitleType} remoteMode={isTizen} className={playerFocusIndex === subtitleSearchTypeFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleSearchTypeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleType(true); window.requestAnimationFrame(() => subtitleSearchTypeRef.current?.focus()); }} renderEditor={(controlRef) => <label htmlFor="subtitle-search-type">Type<select id="subtitle-search-type" value={subtitleSearchType} onChange={(event) => setSubtitleSearchType(event.target.value as SubtitleSearchType)} ref={(element) => { subtitleSearchTypeRef.current = element; controlRef(element); }}><option value="movie">Movie</option><option value="series">Series</option></select></label>} />
+            <RemoteEditable label="Title" value={subtitleSearchQuery} translateValue={false} editing={editingSubtitleQuery} remoteMode={isTvProfile} className={`subtitle-search-query ${playerFocusIndex === subtitleSearchFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleQuery(true); window.requestAnimationFrame(() => subtitleSearchInputRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-query" htmlFor="subtitle-search-query">Title<input id="subtitle-search-query" type="search" value={subtitleSearchQuery} onChange={(event) => setSubtitleSearchQuery(event.target.value)} autoComplete="off" enterKeyHint="search" aria-label="Subtitle search term" ref={(element) => { subtitleSearchInputRef.current = element; controlRef(element); }} /></label>} />
+            <RemoteEditable label="Type" value={subtitleSearchType === "movie" ? "Movie" : "Series"} editing={editingSubtitleType} remoteMode={isTvProfile} className={playerFocusIndex === subtitleSearchTypeFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleSearchTypeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleType(true); window.requestAnimationFrame(() => subtitleSearchTypeRef.current?.focus()); }} renderEditor={(controlRef) => <label htmlFor="subtitle-search-type">Type<select id="subtitle-search-type" value={subtitleSearchType} onChange={(event) => setSubtitleSearchType(event.target.value as SubtitleSearchType)} ref={(element) => { subtitleSearchTypeRef.current = element; controlRef(element); }}><option value="movie">Movie</option><option value="series">Series</option></select></label>} />
             {subtitleSearchType === "series" && <>
-              <RemoteEditable label="Season" value={subtitleSearchSeason} editing={editingSubtitleSeason} remoteMode={isTizen} className={`subtitle-search-number ${playerFocusIndex === subtitleSeasonFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchSeasonControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleSeason(true); window.requestAnimationFrame(() => subtitleSearchSeasonRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-season">Season<input id="subtitle-search-season" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchSeason} onChange={(event) => setSubtitleSearchSeason(event.target.value)} ref={(element) => { subtitleSearchSeasonRef.current = element; controlRef(element); }} /></label>} />
-              <RemoteEditable label="Episode" value={subtitleSearchEpisode} editing={editingSubtitleEpisode} remoteMode={isTizen} className={`subtitle-search-number ${playerFocusIndex === subtitleEpisodeFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleEpisode(true); window.requestAnimationFrame(() => subtitleSearchEpisodeRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-episode">Episode<input id="subtitle-search-episode" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchEpisode} onChange={(event) => setSubtitleSearchEpisode(event.target.value)} ref={(element) => { subtitleSearchEpisodeRef.current = element; controlRef(element); }} /></label>} />
+              <RemoteEditable label="Season" value={subtitleSearchSeason} editing={editingSubtitleSeason} remoteMode={isTvProfile} className={`subtitle-search-number ${playerFocusIndex === subtitleSeasonFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchSeasonControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleSeason(true); window.requestAnimationFrame(() => subtitleSearchSeasonRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-season">Season<input id="subtitle-search-season" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchSeason} onChange={(event) => setSubtitleSearchSeason(event.target.value)} ref={(element) => { subtitleSearchSeasonRef.current = element; controlRef(element); }} /></label>} />
+              <RemoteEditable label="Episode" value={subtitleSearchEpisode} editing={editingSubtitleEpisode} remoteMode={isTvProfile} className={`subtitle-search-number ${playerFocusIndex === subtitleEpisodeFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleEpisode(true); window.requestAnimationFrame(() => subtitleSearchEpisodeRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-episode">Episode<input id="subtitle-search-episode" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchEpisode} onChange={(event) => setSubtitleSearchEpisode(event.target.value)} ref={(element) => { subtitleSearchEpisodeRef.current = element; controlRef(element); }} /></label>} />
             </>}
             <button className={`subtitle-search-submit ${playerFocusIndex === findSubtitleFocusIndex ? "remote-focused" : ""}`} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
           </div>
@@ -3448,10 +3614,10 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           </label>} />}
           {browseMode === "latest" && <button className={browseControlFocus === "latest-refresh" ? "remote-focused" : ""} type="button" ref={latestRefreshRef} onFocus={() => setBrowseControlFocus("latest-refresh")} onBlur={() => setBrowseControlFocus(null)} onClick={() => void openLatest(activeGroup?.contentType === "series" ? "series" : "movie", true)}>Refresh Latest</button>}
         </div>
-        {isTizen && <p className="remote-key-hint tv-title-list-hint">{browseMode === "latest" ? "Use the arrow keys to browse titles · Up from the first row returns to refresh" : "Use the arrow keys to browse titles · Up from the first row returns to sorting"}</p>}
-        <div className={isTizen ? "tv-title-list-viewport fixed-list-viewport" : ""} ref={isTizen ? titleListViewportRef : undefined}>
+        {isTvProfile && <p className="remote-key-hint tv-title-list-hint">{browseMode === "latest" ? "Use the arrow keys to browse titles · Up from the first row returns to refresh" : "Use the arrow keys to browse titles · Up from the first row returns to sorting"}</p>}
+        <div className={isTvProfile ? "tv-title-list-viewport fixed-list-viewport" : ""} ref={isTvProfile ? titleListViewportRef : undefined}>
         {catalogStatus && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
-        <div className={"groups title-grid" + (isTizen ? " tv-title-list" : "")}>
+        <div className={"groups title-grid" + (isTvProfile ? " tv-title-list" : "")}>
           {titles.map((title, index) => <button className={"tile title-card " + (index === focusIndex ? "focused remote-focused" : "")} key={title.id} onClick={() => { setFocusIndex(index); void openTitle(title); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
             <BrowseArtwork title={title.title} image={browseArtwork[title.id]} /><span className="tile-copy"><strong><span translate="no">{title.title}</span></strong><span className="tile-meta">{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span>{browseMode === "latest" && <span className="tile-meta" translate="no">{formatCategoryBadge(title.group, language)}</span>}</span>
           </button>)}
@@ -3459,8 +3625,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         </div>
         </div>
         <div className="pagination">
-          <button aria-label={isTizen ? "Previous page (Left)" : "Previous page"} className={browseControlFocus === "previous-page" ? "remote-focused" : ""} disabled={page === 0} ref={previousPageRef} onFocus={() => setBrowseControlFocus("previous-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page - 1)} type="button">{isTizen ? "Previous page · ←" : "Previous"}</button>
-          <button aria-label={isTizen ? "Next page (Right)" : "Next page"} className={browseControlFocus === "next-page" ? "remote-focused" : ""} disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onFocus={() => setBrowseControlFocus("next-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page + 1)} type="button">{isTizen ? "Next page · →" : "Next"}</button>
+          <button aria-label={isTvProfile ? "Previous page (Left)" : "Previous page"} className={browseControlFocus === "previous-page" ? "remote-focused" : ""} disabled={page === 0} ref={previousPageRef} onFocus={() => setBrowseControlFocus("previous-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page - 1)} type="button">{isTvProfile ? "Previous page · ←" : "Previous"}</button>
+          <button aria-label={isTvProfile ? "Next page (Right)" : "Next page"} className={browseControlFocus === "next-page" ? "remote-focused" : ""} disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onFocus={() => setBrowseControlFocus("next-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page + 1)} type="button">{isTvProfile ? "Next page · →" : "Next"}</button>
         </div>
       </> : <>
         <nav className="browse-tabs" role="tablist" aria-label="Browse your library">
@@ -3497,12 +3663,16 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         {browseCollection === "search" && <section className="catalog-search" aria-labelledby="catalog-search-heading">
           <div className="collection-heading"><h2 id="catalog-search-heading">Search your catalogue</h2><p className="hint">Search your imported M3U titles and the full catalogue from your Xtream playlist.</p></div>
           <div className="catalog-search-form">
-            <label htmlFor="catalog-search-input">Title</label>
-            <div className="catalog-search-controls"><input id="catalog-search-input" ref={searchInputRef} type="search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search movies and series" autoComplete="off" /><button type="button" disabled={!searchProviderFingerprint || searchRefreshLoading} onClick={() => void refreshSearchCatalogue()}>{searchProviderFingerprint ? searchRefreshLoading ? "Refreshing catalogue…" : "Refresh Xtream catalogue" : "M3U catalogue is local"}</button></div>
+            <div className="catalog-search-controls">
+              <RemoteEditable label="Title" value={searchQuery} translateValue={false} editing={editingSearchQuery}
+                controlRef={(element) => { searchControlRef.current = element; }} onBeginEdit={() => setEditingSearchQuery(true)}
+                renderEditor={(controlRef) => <label htmlFor="catalog-search-input">Title<input id="catalog-search-input" ref={(element) => { searchInputRef.current = element; controlRef(element); }} type="search" value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setFocusIndex(0); }} onBlur={() => setEditingSearchQuery(false)} placeholder="Search movies and series" autoComplete="off" /> </label>} />
+              <button type="button" ref={searchRefreshButtonRef} aria-disabled={!searchProviderFingerprint || searchRefreshLoading} onClick={() => { if (searchProviderFingerprint && !searchRefreshLoading) void refreshSearchCatalogue(); }}>{searchProviderFingerprint ? searchRefreshLoading ? "Refreshing catalogue…" : "Refresh Xtream catalogue" : "M3U catalogue is local"}</button>
+            </div>
           </div>
           <p className="hint" role="status" aria-live="polite">{searchStatus || (searchProviderFingerprint ? "Search is available without a TV connection. Refresh the Xtream catalogue when needed." : "Searching titles saved on this device. Add an Xtream playlist to refresh a full provider catalogue.")}</p>
           <div className="groups search-results">
-            {visibleSearchItems.map((result, index) => <button className={`tile title-card ${index === focusIndex ? "focused remote-focused" : ""}`} key={result.key} ref={(element) => { tileRefs.current[index] = element; }} type="button" onClick={() => result.record ? openSearchRecord(result.record, index) : openLocalSearchItem(result.item, index)}>
+            {visibleSearchItems.map((result, index) => <button className={`tile title-card ${index === focusIndex ? "focused remote-focused" : ""}`} key={result.key} ref={(element) => { tileRefs.current[index] = element; }} type="button" onFocus={() => setFocusIndex(index)} onClick={() => result.record ? openSearchRecord(result.record, index) : openLocalSearchItem(result.item, index)}>
               <BrowseArtwork title={result.title} image={browseArtwork[result.item.id]} /><span className="tile-copy"><strong><span translate="no">{result.title}</span></strong><span className="tile-meta">{result.kind === "series" ? "Series" : result.kind === "movie" ? "Movie" : "Other"}{result.year ? ` · ${result.year}` : ""}{result.category ? <span translate="no">{` · ${formatCategoryBadge(result.category, language)}`}</span> : ""}</span></span>
             </button>)}
             {!visibleSearchItems.length && searchQuery.trim().length >= 2 && <p className="empty-state">No matching titles found.</p>}
@@ -3511,10 +3681,10 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         </section>}
         {browseCollection !== "recent" && browseCollection !== "search" && <>
           <div className="collection-heading"><h2>{browseCollection === "favourites" ? "Favourite groups" : browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">{browseCollection === "favourites" ? "Your saved movie genres and series categories." : "Choose a group to browse its titles. Provider groups load when selected."}</p><p className="remote-key-hint">Press the red remote key to toggle the focused group as a favourite.</p>{favouriteStatus && <p className="hint" role="status" aria-live="polite">{favouriteStatus}</p>}</div>
-          <div className={isTizen ? "groups group-grid fixed-list-viewport" : "groups group-grid"} ref={isTizen ? titleListViewportRef : undefined}>
-          {visibleGroups.map((group, index) => <div className={"favourite-tile" + (isTizen ? " fixed-list-item" : "")} key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} style={isTizen ? categoryRowStyle : undefined} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
+          <div className={isTvProfile ? "groups group-grid fixed-list-viewport" : "groups group-grid"} ref={isTvProfile ? titleListViewportRef : undefined}>
+          {visibleGroups.map((group, index) => <div className={"favourite-tile" + (isTvProfile ? " fixed-list-item" : "")} key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} style={isTvProfile ? categoryRowStyle : undefined} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
             <strong translate="no" title={(isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language))}>{(isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language))}</strong><span>{isLatestVirtualGroup(group) ? (group.contentType === "series" ? "Recently updated shows" : "Recently added movies") : group.providerCategoryId ? "Select to load titles" : `${group.count.toLocaleString()} titles`}</span>{!isLatestVirtualGroup(group) && favouriteGroupIds.includes(group.id) && <span className="favourite-indicator">★ Favourite</span>}
-          </button>{!isLatestVirtualGroup(group) && <button className="quiet-button favourite-toggle" type="button" tabIndex={isTizen ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTizen) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => toggleFavouriteForGroup(group)}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button>}</div>)}
+          </button>{!isLatestVirtualGroup(group) && <button className="quiet-button favourite-toggle" type="button" tabIndex={isTvProfile ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTvProfile) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => toggleFavouriteForGroup(group)}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button>}</div>)}
           {!visibleGroups.length && <div className="empty-state"><h2>{browseCollection === "favourites" ? "No favourite groups yet" : `No ${browseCollection === "movies" ? "movie" : "series"} groups found`}</h2><p>{browseCollection === "favourites" ? "Use the red remote key on a group, or the button on a card, to save it on this device." : `Import a library with ${browseCollection === "movies" ? "movies" : "series"} to browse titles here.`}</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = "content"; setBrowseCollection("recent"); setFocusIndex(0); }}>Browse recent</button></div>}
           </div>
         </>}

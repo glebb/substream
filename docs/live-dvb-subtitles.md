@@ -1,83 +1,39 @@
 # Embedded live subtitles
 
-The [historical Tizen 3 experiment](live-dvb-subtitles-plan.md) records why continuous TV-side direct-TS scanning was ruled out. The implemented replacement is the [live subtitle relay](live-subtitle-relay.md), accepted locally on a real TV on 2026-10-03. Public deployment is the next task; see the [deployment handoff](live-subtitle-relay-deployment.md).
+Embedded subtitles are optional to live playback. The app supports browser-side DVB bitmap decoding from HLS fragments and uses native AVPlay text tracks on Tizen when the device exposes them. A separate live subtitle relay is available for configured channels, including personal-build routing for channels marked `Multi-Sub`. Setup and relay behavior are described in the [live subtitle relay guide](live-subtitle-relay.md); validation steps are in the [verification guide](verification.md).
 
-## Release behavior
+## Current behavior
 
-Live TV enables embedded subtitles in normal browser and Tizen builds. The
-browser HLS adapter scans MPEG-TS media in a dedicated worker and draws DVB
-bitmap cues on a canvas over the video. Tizen uses AVPlay's native `TEXT`
-tracks when available. The separate continuous TV-side TS subtitle feed is
-disabled after it disrupted playback; personal Tizen builds instead route
-`Multi-Sub` channels through a server that relays media and decodes PNG captions
-from the same upstream connection. Both prefer Finnish, then English; other languages remain off by
-default. The browser offers a DVB track only after packets appear on its
-advertised transport PID. A PMT descriptor alone does not make an empty track
-selectable.
+In browsers using hls.js, MPEG-TS fragments are scanned in a worker. DVB subtitle PES is decoded to bounded RGBA frames and drawn in an overlay. A DVB track becomes selectable only after packets are observed on the advertised PID; a PMT descriptor without subtitle packets is not a usable track. When hls.js is unavailable but native HLS playback exists, video may still play, though fragment-based DVB discovery is unavailable.
 
-The subtitle path is optional to playback. If worker creation, parsing,
-rendering, or acknowledgement fails, the browser removes its worker and canvas
-while video continues. Browser HLS keeps WebVTT, IMSC1, and CEA-708 decoding
-disabled because enabling those hls.js decoders made an affected provider
-stream unresponsive. Browser-native `TextTrack` support is not assumed for DVB
-bitmap subtitles.
-When hls.js is unavailable but the browser supports native HLS, live video
-falls back to native playback. Native tracks may still be exposed by that
-browser; fragment-based DVB worker discovery requires hls.js.
+Tizen uses AVPlay tracks when available. The separate continuous TV-side TS scanner remains disabled. The optional live subtitle relay provides an alternate single-upstream route for configured channels; it keeps video and subtitle timing on the same relayed stream and displays decoded images above AVPlay. Both direct embedded-track selection and the relay prefer Finnish and then English when available. Availability depends on provider packets and device support.
 
-## Browser safety boundaries
+Browser subtitle processing is isolated from video playback. Worker startup, parsing, rendering, or acknowledgement failures release subtitle resources while video continues. Browser HLS disables WebVTT, IMSC1, and CEA-708 hls.js decoders because they made an affected provider stream unresponsive. Native browser `TextTrack` support is not assumed for DVB bitmap subtitles.
+
+## Why continuous TV-side scanning stays disabled
+
+The historical Tizen 3 investigation established that AVPlay does not expose its MPEG-TS bytes to JavaScript and did not expose DVB PIDs as native `TEXT` tracks on the tested TV. A second direct-TS request was therefore needed for JavaScript decoding alongside AVPlay's HLS request. On that Chromium 47 device, the progressive XHR retained response text, and starting, ending, or reconnecting the side request interfered with video playback. The sustained test stopped playback after roughly 35 seconds and showed a large subtitle-to-playhead offset. Caption display proved that scanning and decoding could work, but not that this two-source design was safe or synchronized.
+
+The relay route was chosen to avoid the second high-bitrate TV request: one server-side upstream connection supplies both AVPlay media and subtitle extraction. This is a separate optional service with its own availability, network, and upstream limits. Do not re-enable the retired scanner as a fallback.
+
+## Browser resource limits
 
 | Boundary | Limit or behavior |
 | --- | --- |
-| Source fragment | One active MPEG-TS fragment and two pending fragments, each up to 20 MiB; when full, the oldest pending fragment is replaced |
-| Worker transfer | Consecutive, TS-packet-aligned windows of at most 512 KiB, advanced after acknowledgement |
-| Worker backpressure | At most two unacknowledged fragment messages; the current player normally sends one at a time |
-| Watchdog | Eight seconds without completing worker work disposes only subtitle resources |
-| PES reconstruction | 128 KiB maximum; malformed or unrelated private PES is rejected before the decoder |
-| Decoder | At most 256 retained cues; bitmap rendering is limited to one frame per 200 ms |
+| Source fragments | One active MPEG-TS fragment and two pending fragments, up to 20 MiB each; the oldest pending fragment is replaced when full |
+| Worker transfer | Packet-aligned windows up to 512 KiB, advanced after acknowledgement |
+| Worker backpressure | At most two unacknowledged fragment messages |
+| Watchdog | Eight seconds without completing worker work disposes subtitle resources |
+| PES reconstruction | 128 KiB maximum; malformed or unrelated private PES is rejected |
+| Decoder | At most 256 retained cues; bitmap rendering at most once per 200 ms |
 | Canvas frame | At most 4 MiB RGBA with dimensions and bounds checked before painting |
 
-Only capped RGBA bitmap data crosses from the worker to the UI. The worker owns TS
-scanning and the `libbitsub` WebAssembly parser. The overlay reuses its canvas
-and clears the previous cue bounds. Worker, HLS listeners, overlay, and retained
-fragments are released on a channel change or player teardown. DVB cue times
-are referenced to the first video PES timestamp in the media fragment when
-available, preserving the cue's offset within that fragment. The older
-main-thread transport parser has been removed.
+Only validated, capped RGBA data crosses from the worker to the UI. The worker owns TS scanning and the `libbitsub` WebAssembly parser. HLS listeners, worker, overlay, and retained fragments are released on channel change or player teardown. Cue timestamps use the first video PES timestamp in the fragment when available, preserving the cue's relative position within that fragment.
 
-The worker and WebAssembly are separate build assets. The browser path requires
-worker and media capabilities available in its runtime. If they are missing,
-the subtitle path fails locally and playback remains available.
+## Verification and observations
 
-## Verification
+Synthetic tests cover descriptor discovery, packet activity, selected-page PES filtering, bounded fragment capture, oversized fragments, worker backpressure, invalid frame rejection, cleanup, and playback-failure isolation. Run `npm run check`; run the browser and Tizen builds before packaging. These checks do not replace sustained browser or physical-TV playback.
 
-Synthetic tests cover descriptor discovery, packet-activity gating, selected
-page PES filtering, complete bounded-fragment capture, oversized fragments,
-worker backpressure, invalid frame rejection, subtitle cleanup, and playback
-failure isolation. Run `npm run check`, `npm run build`, and
-`npm run build:tizen` before packaging. Production activation does not replace
-a long-running browser or physical-TV smoke test.
+Historical provider observations are time-limited and are not guarantees about current feeds. Local Chrome checks displayed Finnish DVB captions on TV5 FHD. Sampled Yle TV1, TV2, and Teema Fem variants lacked active packets or decoded bitmaps. The V Film Premiere FHD Multi-Sub feed produced HLS fragments around 12.8 MB; this prompted raising the old 10 MiB fragment limit to 20 MiB. Development diagnostics report numeric sizes and backlog information only.
 
-## Historical provider observations
-
-Earlier local Chrome checks displayed Finnish DVB captions on TV5 FHD. Sampled Yle TV1, TV2 and Teema Fem variants either lacked active subtitle packets or did not produce decoded bitmaps; an active standard TV2 PID still needs a recheck after the PES header fix. These were time-limited observations, not guarantees about current provider feeds. Video remained responsive in the later Teema Fem check and the canvas was removed on exit.
-
-A track advertised in the PMT may carry no packets. Record packet activity and decoder output separately when diagnosing missing captions; do not infer subtitle support from a channel name. Keep media URLs, credentials and transport payloads out of diagnostics.
-
-In September 2026, the V Film Premiere FHD multi-sub feed produced HLS
-fragments around 12.8 MB. The earlier 10 MiB source-fragment limit skipped
-most of them, causing intermittent missing captions. The limit is now 20 MiB;
-`?mediaDebug` in a development build logs only numeric fragment sizes, backlog
-counts, and whether a fragment exceeded the limit.
-
-## Remaining release checks
-
-- Run a sustained modern-browser smoke test on a stream with active DVB
-  packets, including channel changes, subtitle selection, and worker failure.
-- Verify AVPlay native Finnish/English track selection where available. For Multi-Sub channels, use the [relay verification checklist](verification.md#hosted-live-subtitle-relay); do not resume the retired continuous TV-side scanner experiment.
-- Recheck standard Yle TV2's active DVB PID and any future Yle provider feed
-  whose subtitle packets become available.
-
-If a provider feed omits subtitle packets, the player cannot reconstruct them
-from another provider's broadcast. The feed must carry a usable subtitle
-track for the browser worker or AVPlay to display it.
+When captions are missing, distinguish an advertised PID from observed packet activity and decoder output. If the provider feed has no usable subtitle packets, the app cannot reconstruct captions from another broadcast. Keep media URLs, credentials, transport payloads, and caption text out of diagnostics.

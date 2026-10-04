@@ -563,4 +563,8 @@ export const fi: Record<keyof typeof en, string> = {
   "No series groups found": "Sarjaryhmiä ei löytynyt",
   "Import a library with movies to browse titles here.": "Tuo elokuvia sisältävä kirjasto selataksesi nimikkeitä täällä.",
   "Import a library with series to browse titles here.": "Tuo sarjoja sisältävä kirjasto selataksesi nimikkeitä täällä.",
+  "Enable companion connection": "Ota oheislaiteyhteys käyttöön",
+  "Enter a valid companion service address without credentials.": "Anna kelvollinen oheislaitepalvelun osoite ilman tunnuksia.",
+  "Connect this TV, then pair its one-time code in the web app. The companion is optional for ordinary TV playback.": "Yhdistä tämä TV ja syötä kertakäyttöinen koodi verkkosovellukseen. Tavallinen TV-toisto toimii ilman oheislaitetta.",
+  "The selected title belongs to a different provider connection or is unavailable.": "Valittu nimike kuuluu eri palveluntarjoajan yhteyteen tai ei ole saatavilla.",
 };

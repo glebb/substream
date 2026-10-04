@@ -99,6 +99,13 @@ export interface MediaPlayer {
   goLive?(): void;
   /** Returns source dimensions only; adapters must not expose stream metadata or URLs. */
   getVideoResolution?(): string | null;
+  /** Safe player diagnostics for live audio/subtitle status UI. */
+  getPlaybackDiagnostics?(): string;
+  getLiveAudioLanguageStatus?(): string;
+  getLiveDvbSubtitleStatus?(): string;
+  getLiveSubtitleServiceStatus?(): string;
+  getRelayDiagnostics?(): string;
+  isSubtitleTimingTestPlayer?(): boolean;
   /** Lists embedded audio tracks when the playback engine makes them available. */
   getAudioTracks?(): AudioTrack[];
   /** Selects a previously listed audio track. Returns false when unsupported or rejected. */
@@ -117,9 +124,44 @@ export interface MediaPlayer {
   /** Repositions a platform video surface after its container changes size. */
   resize(): void;
   destroy(): void;
+  /** Idempotently releases platform resources. Resolves only after exclusive playback is released. */
+  dispose?(): Promise<void>;
   setSubtitle(subtitleText: string, label: string, language: string): Promise<SubtitleAttachment>;
   /** Enables or hides the currently attached subtitle without replacing its data. */
   setSubtitleEnabled(enabled: boolean): void;
   /** Shifts attached subtitle cues; positive values display later and negative values earlier. */
   setSubtitleTimingOffset?(offsetSeconds: number): void;
+}
+
+/** Shared web UI request; the factory binds the available platform video surface. */
+export interface DirectPlayerRequest {
+  /** Browser video node, when the runtime uses HTML media playback. */
+  videoElement?: HTMLVideoElement | null;
+  /** Platform-owned video container, such as a Tizen AVPlay object element. */
+  container?: HTMLElement | null;
+  streamUrl: string;
+  transportStreamMetadataUrl?: string;
+  onSubtitleCue?: (text: string) => void;
+}
+
+export interface RelayPlayerRequest {
+  container: HTMLElement;
+  config: import("./live-relay/config.ts").LiveRelayConfig;
+  channelId: string;
+  preferredLanguage?: string;
+  mediaToPlayheadOffsetMs?: number;
+}
+
+/** Marker contract for a relay-backed live player with asynchronous startup and close. */
+export interface RelayMediaPlayer extends MediaPlayer {
+  start(): Promise<void>;
+  close(): Promise<void>;
+  getRelayDiagnostics?(): string;
+  getRelaySubtitleStatus?(): string;
+}
+
+/** Platform adapter chooses a player based on its native surface and capabilities. */
+export interface PlaybackPlayerFactory {
+  createDirect(request: DirectPlayerRequest): MediaPlayer | null;
+  createRelay?(request: RelayPlayerRequest): RelayMediaPlayer | null;
 }

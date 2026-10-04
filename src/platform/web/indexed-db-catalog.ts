@@ -2,6 +2,8 @@ import { classifyM3uEntry } from "../../core/m3u/classifier.ts";
 import type { M3uEntry } from "../../core/m3u/types.ts";
 import type { CatalogImportSummary, UnknownCatalogEntry, VodCatalogItem, VodContentType } from "../../core/catalog/index.ts";
 import { normalizeTitle, searchTerms } from "../../core/catalog/index.ts";
+import type { CatalogMetadata, VodGroup, VodSort } from "../../contracts/repository.ts";
+export type { CatalogMetadata, VodGroup, VodSort } from "../../contracts/repository.ts";
 
 const DATABASE_NAME = "substream-catalog";
 const DATABASE_VERSION = 7;
@@ -13,28 +15,6 @@ const UNKNOWN_STORE = "unknown-entries-v7";
 const META_STORE = "catalog-meta";
 const GROUPS_STORE = "vod-groups-v7";
 const METADATA_KEY = "current";
-
-export interface CatalogMetadata {
-  key: "current";
-  status: "empty" | "importing" | "ready" | "failed";
-  importedAt: number | null;
-  itemCount: number;
-  groupCount: number;
-  unknownCount: number;
-  activeGeneration?: number;
-  pendingGeneration?: number;
-}
-
-export interface VodGroup {
-  id: string;
-  name: string;
-  count: number;
-  contentType: VodContentType | "mixed";
-  providerCategoryId?: string;
-  providerContentType?: "movie" | "series";
-}
-
-export type VodSort = "title" | "playlist" | "year";
 
 export interface CatalogImportProgress {
   imported: number;

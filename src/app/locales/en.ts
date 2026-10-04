@@ -560,4 +560,8 @@ export const en = {
   "No series groups found": "No series groups found",
   "Import a library with movies to browse titles here.": "Import a library with movies to browse titles here.",
   "Import a library with series to browse titles here.": "Import a library with series to browse titles here.",
+  "Enable companion connection": "Enable companion connection",
+  "Enter a valid companion service address without credentials.": "Enter a valid companion service address without credentials.",
+  "Connect this TV, then pair its one-time code in the web app. The companion is optional for ordinary TV playback.": "Connect this TV, then pair its one-time code in the web app. The companion is optional for ordinary TV playback.",
+  "The selected title belongs to a different provider connection or is unavailable.": "The selected title belongs to a different provider connection or is unavailable.",
 } as const;

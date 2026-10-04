@@ -387,6 +387,9 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     }
   }
 
+  getPlaybackDiagnostics(): string { return this.getTrackDiagnostics(); }
+  getLiveAudioLanguageStatus(): string { return this.getLiveAudioMetadataStatus(); }
+
   selectAudioTrack(id: string): boolean {
     const index = Number(id);
     const player = avplay();

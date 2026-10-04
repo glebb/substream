@@ -16,3 +16,6 @@ tizen/**/*.wgt
 coverage/
 .DS_Store
 *.log
+
+# Generated editor code-count reports
+.VSCodeCounter/

@@ -2,7 +2,7 @@ import { useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { normalizeLiveRelayConfig, type NormalizedLiveRelayConfig } from "../platform/live-relay/config.ts";
 import type { SettingsControlKey } from "./remote-navigation.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
-import { normalizedRemoteKey } from "../platform/tizen/remote.ts";
+import { normalizedRemoteKey } from "../contracts/input.ts";
 
 type Props = {
   config: NormalizedLiveRelayConfig | null;

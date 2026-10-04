@@ -1,22 +1,12 @@
-import { useContext, useEffect, useRef, useState } from "react";
-import { XtreamClient } from "../platform/xtream/client.ts";
-import { acknowledgeCompanionEvents, companionDeviceIdentity, companionEvents, companionSelectionTitle, companionServerUrl, connectCompanionService, resetCompanionPairing, storedCompanionTvCredential, storeCompanionTvCredential, type CompanionConnection, type CompanionLocalPlayback } from "../platform/companion/client.ts";
-import type { VodCatalogItem } from "../core/catalog/index.ts";
+import { useContext, useState } from "react";
 import type { SettingsControlKey } from "./remote-navigation.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
 import { LanguageContext, Localized } from "./language.tsx";
-import { createAbortController } from "../platform/abort-controller.ts";
+import { useCompanion, useCompanionSnapshot } from "./companion.tsx";
 
-export function companionRetryDelay(attempt: number): number {
-  return Math.min(2_000 * 2 ** Math.max(0, attempt), 30_000);
-}
+export { companionRetryDelay } from "../application/companion-controller.ts";
 
 type CompanionPanelProps = {
-  playlistUrl: string;
-  onSelected?: (title: VodCatalogItem) => void;
-  onPlay: (title: VodCatalogItem) => void;
-  onLocalPlay?: (media: CompanionLocalPlayback, server: string, tvCredential: string) => void;
-  onLocalStop?: (sessionId: string) => void;
   editingServer: boolean;
   onEditingServerChange: (editing: boolean) => void;
   remoteMode: boolean;
@@ -24,219 +14,36 @@ type CompanionPanelProps = {
   focusClass?: (key: SettingsControlKey) => string;
 };
 
-/** TV-side LAN companion connection. Only a provider item ID crosses back from the companion. */
-export function CompanionPanel({ playlistUrl, onSelected, onPlay, onLocalPlay, onLocalStop, editingServer, onEditingServerChange, remoteMode, registerControl, focusClass = () => "" }: CompanionPanelProps) {
+/** Settings view only; the application owns registration, polling and commands. */
+export function CompanionPanel({ editingServer, onEditingServerChange, remoteMode, registerControl, focusClass = () => "" }: CompanionPanelProps) {
   const { language } = useContext(LanguageContext);
-  const [server, setServer] = useState(companionServerUrl());
-  const [draft, setDraft] = useState(companionServerUrl());
-  const [identity] = useState(companionDeviceIdentity);
-  const [connection, setConnection] = useState<CompanionConnection | null>(null);
-  const [paired, setPaired] = useState(false);
-  const [status, setStatus] = useState("");
+  const companion = useCompanion();
+  const snapshot = useCompanionSnapshot();
+  const [draft, setDraft] = useState(snapshot.server);
   const [error, setError] = useState("");
-  const sequence = useRef(0);
-  const renewalInFlight = useRef(false);
-  const retryRenewalAt = useRef(0);
-  const connectInFlight = useRef<{ server: string; promise: Promise<CompanionConnection>; sequence: number; applied: boolean } | null>(null);
-  const connectSequence = useRef(0);
-  const onPlayRef = useRef(onPlay);
-  const onSelectedRef = useRef(onSelected);
-  const onLocalPlayRef = useRef(onLocalPlay);
-  const onLocalStopRef = useRef(onLocalStop);
-  const sourceFingerprint = XtreamClient.fromPlaylistUrl(playlistUrl)?.pairingFingerprint() ?? "";
-  onPlayRef.current = onPlay;
-  onSelectedRef.current = onSelected;
-  onLocalPlayRef.current = onLocalPlay;
-  onLocalStopRef.current = onLocalStop;
-
-  useEffect(() => {
-    if (!connection) return;
-    let cancelled = false;
-    const controller = createAbortController();
-    let retryTimer: number | undefined;
-    let resolveRetry: (() => void) | undefined;
-    let failures = 0;
-    const pause = (ms: number) => new Promise<void>((resolve) => {
-      resolveRetry = resolve;
-      retryTimer = window.setTimeout(() => { retryTimer = undefined; resolveRetry = undefined; resolve(); }, ms);
-    });
-    const poll = async () => {
-      while (!cancelled) {
-        try {
-          if (Date.now() >= connection.expiresAt - 120_000 && Date.now() >= retryRenewalAt.current && !renewalInFlight.current) {
-            renewalInFlight.current = true;
-            retryRenewalAt.current = Date.now() + 10_000;
-            try { await connect(true); } finally { renewalInFlight.current = false; }
-            if (!cancelled) await pause(500);
-            continue;
-          }
-          if (!paired && Date.now() >= connection.pairingExpiresAt) {
-            await connect(true);
-            if (!cancelled) await pause(2_000);
-            continue;
-          }
-          const response = await companionEvents(server, connection.tvCredential, sequence.current, controller ? { signal: controller.signal } : {});
-          failures = 0;
-          setPaired(response.paired);
-          if (response.retentionGap) {
-            const { throughSequence, firstAvailableSequence } = response.retentionGap;
-            await acknowledgeCompanionEvents(server, connection.tvCredential, throughSequence);
-            sequence.current = throughSequence;
-          }
-          let processedThrough = sequence.current;
-          for (const event of response.events) {
-            if (event.action === "stop-local") {
-              onLocalStopRef.current?.(event.sessionId);
-              setStatus("Local TV playback stopped by the browser.");
-              processedThrough = event.sequence;
-              continue;
-            }
-            if (event.action === "play-local") {
-              if (event.localMedia && onLocalPlayRef.current) {
-                setStatus(`${event.localMedia.title} is preparing on this TV.`);
-                onLocalPlayRef.current(event.localMedia, server, connection.tvCredential);
-              } else setError("This TV app needs an update to play local companion media.");
-              processedThrough = event.sequence;
-              continue;
-            }
-            const client = XtreamClient.fromPlaylistUrl(playlistUrl);
-            if (!client || event.selection.sourceFingerprint !== client.pairingFingerprint()) {
-              setError("The selected title belongs to a different provider connection.");
-              processedThrough = event.sequence;
-              continue;
-            }
-            const candidate = companionSelectionTitle(event.selection);
-            if (!candidate) { processedThrough = event.sequence; continue; }
-            const streamKind = candidate.contentType === "movie" ? "movie" : "series";
-            candidate.streamUrl = client.streamUrlFor(streamKind, event.selection.id, event.selection.extension);
-            if (event.action === "play") {
-              setStatus(`${candidate.title} sent to TV playback.`);
-              onPlayRef.current(candidate);
-            } else if (onSelectedRef.current) {
-              setStatus(`${candidate.title} received from companion.`);
-              onSelectedRef.current(candidate);
-            }
-            processedThrough = event.sequence;
-          }
-          if (processedThrough > sequence.current) {
-            await acknowledgeCompanionEvents(server, connection.tvCredential, processedThrough);
-            sequence.current = processedThrough;
-          }
-          if (response.retentionGap) {
-            setStatus(`Relay queue gap: commands through sequence ${response.retentionGap.throughSequence} expired; replay resumed at ${response.retentionGap.firstAvailableSequence}.`);
-          }
-        } catch (cause) {
-          if (cancelled || controller?.signal.aborted) break;
-          failures += 1;
-          const message = cause instanceof Error && cause.message === "Companion connection expired."
-            ? cause.message
-            : "TV connection was interrupted. Reconnecting…";
-          setError(message);
-          if (message === "Companion connection expired." && !renewalInFlight.current) {
-            renewalInFlight.current = true;
-            retryRenewalAt.current = Date.now() + 10_000;
-            await pause(5_000);
-            if (!cancelled) await connect(true).finally(() => { renewalInFlight.current = false; });
-            continue;
-          }
-          await pause(companionRetryDelay(failures - 1));
-        }
-      }
-    };
-    void poll();
-    return () => {
-      cancelled = true;
-      controller?.abort();
-      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
-      resolveRetry?.();
-    };
-  }, [connection, paired, playlistUrl, server]);
-
-  const connect = async (silent = false) => {
-    if (!silent) { setError(""); setStatus("Connecting to companion service…"); }
-    let attempt: typeof connectInFlight.current = null;
-    try {
-      const normalized = new URL((silent ? server : draft).trim()).origin;
-      attempt = connectInFlight.current;
-      if (silent && attempt && attempt.server !== normalized) { attempt = null; return; }
-      if (!attempt || attempt.server !== normalized) {
-        attempt = {
-          server: normalized,
-          sequence: ++connectSequence.current,
-          applied: false,
-          promise: connectCompanionService(normalized, sourceFingerprint, identity, connection?.tvCredential || storedCompanionTvCredential(normalized)),
-        };
-        connectInFlight.current = attempt;
-      }
-      // A manual press joins automatic registration, so its outcome is visible.
-      // Editing the address starts a new attempt; old results cannot overwrite it.
-      const result = await attempt.promise;
-      if (attempt.sequence !== connectSequence.current || attempt.applied) return;
-      attempt.applied = true;
-      storeCompanionTvCredential(normalized, result.tvCredential);
-      setServer(normalized); setConnection(result); sequence.current = 0; setPaired(result.paired);
-      setStatus(result.paired ? "This TV is paired and ready." : "Pair this TV in the web app using the code below.");
-    } catch (cause) {
-      if (!silent && (!attempt || attempt.sequence === connectSequence.current)) {
-        setStatus(""); setError(cause instanceof Error ? cause.message : "Companion service connection failed.");
-      }
-    } finally {
-      if (attempt && connectInFlight.current === attempt) connectInFlight.current = null;
-    }
+  const connect = () => {
+    try { companion.connect(draft); setError(""); }
+    catch { setError("Enter a valid companion service address without credentials."); }
   };
-
-  const resetPairing = async () => {
-    if (!connection) return;
-    try {
-      const result = await resetCompanionPairing(server, connection.tvCredential);
-      setConnection({ ...connection, pairingCode: result.pairingCode, pairingExpiresAt: result.pairingExpiresAt, paired: false });
-      setPaired(false);
-      setStatus("Pair this TV again in the web app using the new code.");
-      setError("");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not reset TV pairing.");
-    }
-  };
-
-  useEffect(() => {
-    if (connection || !server.trim()) return;
-    let cancelled = false;
-    let attempt = 0;
-    let timer: number | undefined;
-    const retry = async () => {
-      if (cancelled) return;
-      await connect(true);
-      if (cancelled || connection) return;
-      timer = window.setTimeout(() => {
-        attempt += 1;
-        void retry();
-      }, companionRetryDelay(attempt));
-    };
-    void retry();
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  // Startup and recovery are best-effort; Settings retains explicit Connect for draft addresses.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection, sourceFingerprint, server]);
-
   return <Localized language={language}><section className="settings-section companion-panel">
     <h3>TV connection</h3>
-    <p className="hint">Connect this TV, then pair its one-time code in the web app. Name each TV there so you can choose the playback target. Stream URLs stay on this TV.</p>
-    <RemoteEditable
-      label="LAN service address"
-      value={draft}
-      editing={editingServer}
-      remoteMode={remoteMode}
-      className={focusClass("companion-url")}
-      controlRef={(element) => registerControl?.("companion-url", element)}
+    <p className="hint">Connect this TV, then pair its one-time code in the web app. The companion is optional for ordinary TV playback.</p>
+    <label><input type="checkbox" checked={companion.enabled} onChange={(event) => companion.setEnabled(event.target.checked)}
+      className={focusClass("companion-enabled")} data-settings-focus="companion-enabled"
+      ref={(element) => registerControl?.("companion-enabled", element)} /> Enable companion connection</label>
+    <RemoteEditable label="LAN service address" value={draft} editing={editingServer} remoteMode={remoteMode}
+      className={focusClass("companion-url")} controlRef={(element) => registerControl?.("companion-url", element)}
       onBeginEdit={() => onEditingServerChange(true)}
-      renderEditor={(controlRef) => <label htmlFor="companion-url">LAN service address<input className={focusClass("companion-url")} data-settings-focus="companion-url" id="companion-url" type="url" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="http://192.168.1.50:8787" autoComplete="off" ref={(element) => { controlRef(element); registerControl?.("companion-url", element); }} /></label>}
-    />
-    <button className={focusClass("companion-start")} data-settings-focus="companion-start" type="button" ref={(element) => registerControl?.("companion-start", element)} onClick={() => void (paired ? resetPairing() : connect())} disabled={!draft.trim()}>{connection ? paired ? "Reset browser pairing" : "Reconnect TV connection" : "Connect TV"}</button>
-    {connection && <p className="companion-code" role="status"><span className="hint">Connected to {server}.{paired ? " Browser paired successfully." : " Enter this one-time code in the web app before it expires:"}</span>{!paired && <><br /><strong aria-label={`Pairing code ${connection.pairingCode}`}>{connection.pairingCode}</strong></>}</p>}
-    {status && <p className="hint" role="status" aria-live="polite">{status}</p>}
-    {error && <p className="error" role="alert">{error}</p>}
+      renderEditor={(controlRef) => <label htmlFor="companion-url">LAN service address<input className={focusClass("companion-url")}
+        data-settings-focus="companion-url" type="url" id="companion-url" value={draft} onChange={(event) => setDraft(event.target.value)}
+        placeholder="http://192.168.1.50:8787" autoComplete="off" ref={(element) => { controlRef(element); registerControl?.("companion-url", element); }} /></label>} />
+    <button className={focusClass("companion-start")} data-settings-focus="companion-start" type="button"
+      ref={(element) => registerControl?.("companion-start", element)}
+      onClick={() => void (snapshot.paired && snapshot.state === "available" ? companion.controller.resetPairing() : connect())}
+      disabled={!draft.trim()}>{snapshot.state === "available" ? snapshot.paired ? "Reset browser pairing" : "Reconnect TV connection" : "Connect TV"}</button>
+    {snapshot.state === "available" && <p className="companion-code" role="status"><span className="hint">Connected to {snapshot.server}.{snapshot.paired ? " Browser paired successfully." : " Enter this one-time code in the web app before it expires:"}</span>
+      {!snapshot.paired && <><br /><strong aria-label={`Pairing code ${snapshot.pairingCode}`}>{snapshot.pairingCode}</strong></>}</p>}
+    {snapshot.status && <p className="hint" role="status" aria-live="polite">{snapshot.status}</p>}
+    {(error || snapshot.error) && <p className="error" role="alert">{error || snapshot.error}</p>}
   </section></Localized>;
 }

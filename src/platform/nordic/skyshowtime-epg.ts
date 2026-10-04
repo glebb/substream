@@ -19,8 +19,8 @@ export const NORDIC_SKYSHOWTIME_EPG_URL = "https://epgshare01.online/epgshare01/
  * depend on the optional web-to-TV companion. Browsers can use that relay as a
  * CORS bridge when it is explicitly configured.
  */
-export function nordicGuideSourceUrl(options: { isTizen: boolean; relayUrl?: string; development: boolean }): string {
-  if (options.isTizen) return NORDIC_SKYSHOWTIME_EPG_URL;
+export function nordicGuideSourceUrl(options: { canFetchDirectly?: boolean; isTizen?: boolean; relayUrl?: string; development: boolean }): string {
+  if (options.canFetchDirectly ?? options.isTizen) return NORDIC_SKYSHOWTIME_EPG_URL;
   if (options.relayUrl) return `${options.relayUrl}/api/nordic-epg`;
   return options.development ? "/api/nordic-epg" : NORDIC_SKYSHOWTIME_EPG_URL;
 }

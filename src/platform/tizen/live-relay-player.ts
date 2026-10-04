@@ -588,6 +588,9 @@ export class TizenLiveRelayPlayer implements MediaPlayer {
     return `relay ${state} tracks=${this.relayTracks.length} selected=${this.selectedRelayTrackId ? 1 : 0} clock=${this.timingInvalidated ? "invalidated" : "unverified"} progress=${this.playbackStarted ? "local" : "pending"} ack=${this.playbackStartedAck}`;
   }
 
+  getLiveSubtitleServiceStatus(): string { return this.getRelaySubtitleStatus(); }
+  isSubtitleTimingTestPlayer(): boolean { return true; }
+
   close(): Promise<void> {
     if (this.closing) return this.closing;
     if (!this.disposed) {

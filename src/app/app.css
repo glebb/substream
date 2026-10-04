@@ -23,6 +23,12 @@ body { margin: 0; overflow-x: hidden; }
 .route-transition { align-items: center; display: flex; justify-content: center; }
 .route-transition-content { box-sizing: border-box; max-width: 42rem; padding: 2rem; text-align: center; width: 100%; }
 .route-transition-content p { margin: 0 0 1.5rem; }
+.loading-status { align-items: center; display: flex; margin: 1.5rem 0; }
+.loading-status p { margin: 0; }
+.loading-spinner { animation: loading-spin 1s linear infinite; border: 4px solid #273349; border-top-color: #82b7ff; border-radius: 50%; box-sizing: border-box; display: inline-block; flex: 0 0 auto; height: 2rem; margin-right: 1rem; width: 2rem; }
+.route-transition-content .loading-status { justify-content: center; }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading-spinner { animation: none; } }
 .home-cards { display: flex; justify-content: center; margin: 0 auto; padding: 0 2rem; }
 .home-cards > * + * { margin-left: 1.4rem; }
 .home-card { align-items: center; background: rgba(17,23,34,.94); border: 2px solid #6d839f; color: #f4f7ff; display: flex; justify-content: center; min-height: 5.25rem; padding: 1rem 2.5rem; text-align: center; width: 19rem; }
@@ -173,7 +179,8 @@ input:focus, button:focus, select:focus { box-shadow: 0 0 0 3px var(--page), 0 0
 input:focus-visible, button:focus-visible, select:focus-visible { box-shadow: 0 0 0 3px var(--page), 0 0 0 7px var(--focus); outline: 0; }
 .secondary-button, .app-header button, .player-heading button, .settings-primary-actions button { background: var(--panel-raised); border-color: var(--border); color: var(--text); }
 .quiet-button { background: transparent; border-color: var(--border-soft); color: var(--muted); }
-.remote-focused { background: var(--focus) !important; box-shadow: 0 0 0 3px var(--page), 0 0 0 8px #fff2a8, 0 0 0 12px var(--focus) !important; color: #080a10 !important; outline: 0; transform: scale(1.025); }
+/* Keep focus colors literal so legacy TV browsers never depend on CSS variables. */
+.remote-focused { background: #ffd54a !important; box-shadow: 0 0 0 3px #080a10, 0 0 0 8px #fff2a8, 0 0 0 12px #ffd54a !important; color: #080a10 !important; outline: 0; transform: scale(1.025); }
 button:disabled { cursor: default; opacity: .45; }
 .hint { color: var(--muted); line-height: 1.45; }
 .error { color: #ff9b9b; }
@@ -324,6 +331,16 @@ button:disabled { cursor: default; opacity: .45; }
 .title-grid .tile strong { line-height: 1.35; overflow-wrap: anywhere; word-wrap: break-word; }
 .tile-meta { background: rgba(130, 183, 255, .1); border: 1px solid rgba(130, 183, 255, .25); border-radius: 999px; color: var(--muted); flex: 0 0 auto; font-size: .78rem; padding: .2rem .5rem; text-align: right; }
 .tile, .remote-focused { transition: background-color .14s ease, box-shadow .14s ease, transform .14s ease; }
+/* Home focus moves before React commits the selection class. Paint directly
+ * from DOM focus too, without animated color/shadow changes on old TVs. */
+.home-card { transition: none; }
+.home-card.remote-focused, .home-card:focus {
+  background: #ffd54a !important;
+  box-shadow: 0 0 0 3px #080a10, 0 0 0 8px #fff2a8, 0 0 0 12px #ffd54a !important;
+  color: #080a10 !important;
+  outline: 0;
+  transition: none;
+}
 .browse-status { grid-column: 1 / -1; margin: 0; }
 .empty-state { background: var(--panel); border: 1px dashed var(--border); border-radius: .75rem; color: var(--muted); grid-column: 1 / -1; line-height: 1.5; margin: .5rem 0 1.25rem; max-width: 46rem; padding: 1.35rem 1.5rem; }
 .empty-state h2 { color: #f4f7ff; font-size: 1.15rem; margin: 0 0 .35rem; }
@@ -442,7 +459,7 @@ button:disabled { cursor: default; opacity: .45; }
   .groups > .favourite-tile { padding: .35rem; }
   .layout-section { margin-top: 2rem; }
   .settings-section { margin-top: 1.25rem; padding: 1rem 1.15rem; }
-  .remote-focused { box-shadow: 0 0 0 3px var(--page), 0 0 0 7px var(--focus) !important; }
+  .remote-focused { box-shadow: 0 0 0 3px #080a10, 0 0 0 7px #ffd54a !important; }
 }
 
 @media (max-width: 800px) {
@@ -622,7 +639,7 @@ button:disabled { cursor: default; opacity: .45; }
 .tv-ui .details-copy > p { margin-bottom: 6px; }
 .tv-ui .details-copy > .remote-editable-trigger { margin-top: 8px; }
 .tv-ui .details-section-heading { margin-top: 8px; margin-bottom: 6px; }
-.tv-ui .details-actions { margin-bottom: 12px; }
+.tv-ui .details-actions { margin-bottom: 24px; }
 .tv-ui .details-actions > button { margin-bottom: 0; }
 .tv-ui .details-extra-sections { margin-bottom: 8px; }
 .tv-ui .details-cast-list > li, .tv-ui .details-production-list > div { margin-bottom: 8px; }

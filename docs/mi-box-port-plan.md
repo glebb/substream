@@ -1,6 +1,6 @@
 # Xiaomi Mi Box S port and USB deployment plan
 
-Status: planned; Android support and APK build commands are not implemented yet.
+Status: deferred. Android support and APK build commands are not implemented. The shared runtime, input, player factory, repository ports and optional companion lifecycle are already in place; see [shared architecture](cross-platform-architecture.md). This document is a future implementation proposal, not installation instructions for an existing APK.
 
 ## Target and approach
 
@@ -29,11 +29,12 @@ Exit criterion: the prototype installs by USB, appears in the TV launcher, and p
 - Keep ordinary Android packages free of private `.env` defaults, provider credentials, API credentials, relay tokens, and signed media URLs. Enter configuration on-device; do not assume local storage is a secret vault.
 - Define a stable application ID and release signing key. Keep signing material and passwords out of Git and generated logs.
 
-### 3. Separate TV behavior from Tizen detection
+### 3. Supply Android adapters for the shared runtime
 
-- Introduce runtime/platform capabilities and a shared player factory. Use capabilities for TV navigation, editable controls, fullscreen behavior, and video surfaces.
-- Audit `App.tsx`, `LiveTv.tsx`, `VodApp.tsx`, `remote-navigation.ts`, and `remote-editable.tsx`: several TV behaviors currently depend on `isTizenRuntime()`.
-- Keep Samsung key registration, AVPlay, and exit handling in Tizen adapters. Add Android adapters under `src/platform/android/`.
+- Reuse `src/contracts/runtime.ts`, `src/bootstrap/runtime.ts` and the TV interaction profile. Shared screens already use a player factory and injected catalogue/preferences/transport rather than selecting Tizen players.
+- Add Android adapters under `src/platform/android/` and extend runtime identity only when the Android host exists. Keep Samsung registration and AVPlay in their existing adapters.
+- Replace DOM-bound playback surface requests with a suitable native surface seam where needed; do not duplicate shared player controls or navigation.
+- Reuse the playback release barrier and stale-session guards; add actual native lifecycle/engine capabilities rather than relying solely on live/VOD request kind.
 - Preserve unknown catalogue entries and classification evidence throughout the port.
 
 ### 4. Implement native playback
@@ -51,14 +52,14 @@ Exit criterion: the prototype installs by USB, appears in the TV launcher, and p
 - Define the HTTP policy for provider and trusted-LAN endpoints explicitly, while retaining TLS validation for HTTPS.
 - Restrict native bridge access to trusted bundled content, validate messages, and prevent remote pages or frames from obtaining native capabilities. Do not disable WebView security globally to resolve CORS.
 - Verify IndexedDB/local settings persistence across restarts and APK updates. Keep credentials out of diagnostics, backup exports, and logs.
-- Normalize D-pad, OK, Back, and available media keys without double-dispatching native and web events. Preserve focus after dialogs and playback return.
+- Map native input into the shared logical input contract: D-pad, OK, Back, and available media keys without double-dispatching native and web events. Preserve focus after dialogs and playback return.
 - Make favourites and other Samsung colour-key shortcuts available through visible controls. Verify search, settings entry, and the TV keyboard using only the Mi Box remote.
 
 ### 6. Port subtitles and companion playback
 
 - Support external SRT/WebVTT subtitles, preferred Finnish/English language, size, enable/disable, and timing offset. Select one rendering owner to avoid duplicate native/web captions.
 - Test embedded subtitle and audio tracks on actual media/device combinations; do not assume every DVB subtitle stream is exposed by the native player.
-- Reuse the hosted Multi-Sub relay where required. Replace AVPlay-specific playback/PNG-overlay integration and verify cue timing against Media3's playhead, including buffering, reconnects, and discontinuities.
+- Keep relay and companion optional; direct provider browsing/playback must work with both disabled. Reuse the Multi-Sub relay when configured. Replace AVPlay-specific playback/PNG-overlay integration and verify cue timing against Media3's playhead, including buffering, reconnects, and discontinuities.
 - Ensure channel changes, exits, and background transitions close relay sessions and stop unused ingest.
 - Verify optional companion pairing, VOD commands, and computer-to-box local-file playback. Preserve the requirement that the companion computer stays available for its local media sessions.
 
