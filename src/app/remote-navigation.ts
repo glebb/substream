@@ -48,6 +48,13 @@ export function nestedScreenSettingsTarget(key: string, currentIndex: number): "
   return key === "ArrowUp" && currentIndex === 0 ? "settings" : null;
 }
 
+/** Horizontal movement follows the shared previous-action, main-menu header order. */
+export function screenNavigationTarget(key: string, current: "previous" | "main-menu", hasPrevious: boolean): "previous" | "main-menu" | null {
+  if (key === "ArrowRight" && current === "previous") return "main-menu";
+  if (key === "ArrowLeft" && current === "main-menu" && hasPrevious) return "previous";
+  return null;
+}
+
 /** Keeps keyboard focus synchronized with home-grid movement without stealing it from the tab row. */
 export function homeBrowseFocusTarget(activeFocus: "body" | "tab" | "tile" | "other", selectedTileAvailable: boolean): "tab" | "tile" | "stay" {
   // On the initial ready render the browser may still have body focus.  If
@@ -176,10 +183,10 @@ export function gridNavigationTarget(key: string, currentIndex: number, itemCoun
 }
 
 /** Mirrors the explicit app.css responsive grid breakpoints without parsing computed CSS. */
-export function browseGridColumnCount(isTitleGrid: boolean, compactViewport: boolean, narrowViewport = false): number {
+export function browseGridColumnCount(isTitleGrid: boolean, compactViewport: boolean, narrowViewport = false, mediumTvViewport = false): number {
   if (isTitleGrid) return compactViewport ? 1 : 2;
   if (narrowViewport) return 1;
-  return compactViewport ? 2 : 4;
+  return compactViewport ? 2 : mediumTvViewport ? 3 : 4;
 }
 
 /**
@@ -229,6 +236,14 @@ export function actionRowNavigationTarget(key: string, currentIndex: number, ite
   if (itemCount <= 0 || !["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(key)) return null;
   const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
   return Math.max(0, Math.min(itemCount - 1, currentIndex + delta));
+}
+
+/** Moves through the linear controls on a title-details screen. */
+export function detailsControlNavigationTarget(key: string, currentIndex: number, controlCount: number): number | null {
+  if (controlCount <= 0 || currentIndex < 0 || currentIndex >= controlCount) return null;
+  if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return null;
+  const delta = key === "ArrowUp" || key === "ArrowLeft" ? -1 : 1;
+  return Math.max(0, Math.min(controlCount - 1, currentIndex + delta));
 }
 
 /** Lets editable player controls retain typing and cursor keys, while Up/Down leave the field on a TV remote. */

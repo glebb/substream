@@ -1,4 +1,4 @@
-import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { preferredAudioTrackIndex } from "../core/media/audio.ts";
@@ -15,6 +15,8 @@ import { createAbortController } from "../platform/abort-controller.ts";
 import { NordicSkyShowtimeEpgClient, nordicGuideSourceUrl, skyShowtimeNordicXmltvId } from "../platform/nordic/skyshowtime-epg.ts";
 import { companionServerUrl } from "../platform/companion/client.ts";
 import { focusTitleListItem } from "./title-list-focus.ts";
+import { useFixedListRowHeight } from "./fixed-list-sizing.ts";
+import { ScreenNavigation } from "./ScreenNavigation.tsx";
 import { createGuideWorkScope, prioritizeGuideItems } from "./guide-priority.ts";
 import { loadSubtitlePreferences } from "../platform/browser/subtitle-preferences.ts";
 import { LanguageContext, Localized, translate, type UiLanguage } from "./language.tsx";
@@ -96,14 +98,15 @@ type LiveChannelRowProps = {
   rowRefs: MutableRefObject<Array<HTMLButtonElement | null>>;
   focusIndexSetter: Dispatch<SetStateAction<number>>;
   logoFailureSetter: Dispatch<SetStateAction<Record<string, { providerFailed?: boolean; dnaFailed?: boolean }>>>;
+  rowStyle: CSSProperties | undefined;
   onTune(channel: LiveChannel): void;
 };
 
-const LiveChannelRow = memo(function LiveChannelRow({ channel, index, focused, guide, guideFailed, current, next, guideNow, logoFailure, language, rowRefs, focusIndexSetter, logoFailureSetter, onTune }: LiveChannelRowProps) {
+const LiveChannelRow = memo(function LiveChannelRow({ channel, index, focused, guide, guideFailed, current, next, guideNow, logoFailure, language, rowRefs, focusIndexSetter, logoFailureSetter, rowStyle, onTune }: LiveChannelRowProps) {
   const logoUrl = channel.logo && !logoFailure?.providerFailed ? channel.logo : !logoFailure?.dnaFailed ? channel.dnaLogo : undefined;
   const remaining = current ? Math.max(0, Math.ceil((current.endTime - guideNow) / 60_000)) : 0;
   const progress = current ? programmeProgress(current, guideNow) : 0;
-  return <button className={`live-row ${focused ? "remote-focused" : ""}`} type="button" key={channel.id} ref={(element) => { rowRefs.current[index] = element; }} onFocus={() => focusIndexSetter(index)} onClick={() => onTune(channel)}>
+  return <button className={`live-row fixed-list-item ${focused ? "remote-focused" : ""}`} style={rowStyle} type="button" key={channel.id} ref={(element) => { rowRefs.current[index] = element; }} onFocus={() => focusIndexSetter(index)} onClick={() => onTune(channel)}>
     <span className="live-logo">{logoUrl
       ? <img src={logoUrl} alt="" loading="lazy" onError={() => logoFailureSetter((previous) => {
         const existing = previous[channel.id] ?? {};
@@ -184,6 +187,8 @@ export function LiveTv({ onMainMenu }: Props) {
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const categoryRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const listViewportRef = useRef<HTMLDivElement | null>(null);
+  const categoryRowStyle = useFixedListRowHeight(listViewportRef, categories.length, undefined, `${selectedCategory?.id ?? "categories"}:${selected?.id ?? "list"}:${playerFullscreen}`);
+  const channelRowStyle = useFixedListRowHeight(listViewportRef, channels.length, undefined, `${selectedCategory?.id ?? "no-category"}:${selected?.id ?? "list"}:${playerFullscreen}`);
   const mainMenuRef = useRef<HTMLButtonElement | null>(null);
   const categoriesButtonRef = useRef<HTMLButtonElement | null>(null);
   const emptyRefreshRef = useRef<HTMLButtonElement | null>(null);
@@ -1028,27 +1033,27 @@ export function LiveTv({ onMainMenu }: Props) {
   </main></Localized>;
   }
 
-  if (!selectedCategory) return <Localized language={language}><main className="screen live-screen">
-    <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV</p><h1>Finland</h1></div><button type="button" onClick={onMainMenu} ref={mainMenuRef}>Main menu</button></header>
+  if (!selectedCategory) return <Localized language={language}><main className={`screen live-screen${isTizen ? " tv-ui tv-fixed-list-screen" : ""}`}>
+    <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV</p><h1>Finland</h1></div><ScreenNavigation onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
     <p className="hint" role="status" aria-live="polite">{status}{cacheSavedAt && Date.now() - cacheSavedAt > STALE_AFTER_MS ? " · Saved list may be out of date." : ""}</p>
-    <div className="live-list" ref={listViewportRef}>
-      {categories.map((category, index) => <button className={`live-row live-category-row ${index === categoryFocusIndex ? "remote-focused" : ""}`} type="button" key={category.id} ref={(element) => { categoryRefs.current[index] = element; }} onFocus={() => setCategoryFocusIndex(index)} onClick={() => void openCategory(category)}>
+    <div className="live-list fixed-list-viewport" ref={listViewportRef}>
+      {categories.map((category, index) => <button className={`live-row live-category-row fixed-list-item ${index === categoryFocusIndex ? "remote-focused" : ""}`} style={categoryRowStyle} type="button" key={category.id} ref={(element) => { categoryRefs.current[index] = element; }} onFocus={() => setCategoryFocusIndex(index)} onClick={() => void openCategory(category)}>
         <span className="live-category-mark" aria-hidden="true">●</span><strong>{categoryLabel(category.name)}</strong><span className="live-category-arrow" aria-hidden="true">›</span>
       </button>)}
       {!categories.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No Finnish categories</h2><p>The provider did not return any matching Finland categories.</p><button type="button" ref={emptyRefreshRef} onClick={() => void refreshCategories()}>Refresh</button></div>}
     </div>
   </main></Localized>;
 
-  return <Localized language={language}><main className="screen live-screen">
-    <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV · FINLAND</p><h1>{categoryLabel(selectedCategory.name)}</h1></div><div className="header-actions"><button type="button" onClick={leaveCategory} ref={categoriesButtonRef}>Categories</button><button type="button" onClick={onMainMenu} ref={mainMenuRef}>Main menu</button></div></header>
+  return <Localized language={language}><main className={`screen live-screen${isTizen ? " tv-ui tv-fixed-list-screen" : ""}`}>
+    <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV · FINLAND</p><h1>{categoryLabel(selectedCategory.name)}</h1></div><ScreenNavigation onPrevious={leaveCategory} previousLabel="Categories" previousRef={categoriesButtonRef} onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
     <p className="hint" role="status" aria-live="polite">{status}</p>
-    <div className="live-list" ref={listViewportRef}>
+    <div className="live-list fixed-list-viewport" ref={listViewportRef}>
       {channels.map((channel, index) => {
         const guide = guideByChannel[channel.id];
         const slots = guideSlotsByChannel[channel.id] ?? { current: null, next: null };
         return <LiveChannelRow key={channel.id} channel={channel} index={index} focused={index === focusIndex}
           guide={guide} guideFailed={!!guideFailures[channel.id]} current={slots.current} next={slots.next} guideNow={guideNow}
-          logoFailure={logoFailures[channel.id]} language={language} rowRefs={rowRefs} focusIndexSetter={setFocusIndex}
+          logoFailure={logoFailures[channel.id]} language={language} rowRefs={rowRefs} focusIndexSetter={setFocusIndex} rowStyle={channelRowStyle}
           logoFailureSetter={setLogoFailures} onTune={tuneFromRow} />;
       })}
       {!channels.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No channels</h2><p>Refresh this category to try again.</p><button type="button" ref={emptyRefreshRef} onClick={() => void openCategory(selectedCategory)}>Refresh</button></div>}

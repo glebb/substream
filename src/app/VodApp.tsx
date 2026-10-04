@@ -21,11 +21,12 @@ import { clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, sav
 import { LatestVodLoader } from "../platform/browser/latest-vod.ts";
 import { APP_SECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, groupsWithLatest, isLatestVirtualGroup, latestVirtualGroup, sortAndPageBrowseItems, type AppSection } from "./browse.ts";
 import { formatCategoryBadge, formatGroupDisplayName } from "./display-formatting.ts";
+import { TitleMetadataExtras } from "./TitleMetadataExtras.tsx";
 import { formatRuntime, titleDetailsFor } from "./title-details.ts";
 import { clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials } from "../platform/browser/tmdb-config.ts";
 import { TmdbClient, type TmdbMetadata } from "../platform/tmdb/client.ts";
 import { TmdbArtworkCache, TmdbImageCache, TmdbMetadataCache } from "../platform/browser/tmdb-cache.ts";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, type HeldTitleKeyState, type SettingsControlKey } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, detailsControlNavigationTarget, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, type HeldTitleKeyState, type SettingsControlKey } from "./remote-navigation.ts";
 import { focusPageItem, focusTitleListItem } from "./title-list-focus.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
@@ -39,6 +40,8 @@ import { LanguageContext, Localized, translate, type UiLanguage } from "./langua
 import { LocalMediaSource, classifyLocalFilename, localDisplayTitle, localSubtitleQuery } from "../platform/browser/local-media-source.ts";
 import { readLocalSubtitleFile } from "../platform/browser/local-subtitle-file.ts";
 import { loadPreferredLocalSubtitle, type LocalSubtitleSnapshot } from "../platform/browser/local-subtitle-match.ts";
+import { ScreenNavigation } from "./ScreenNavigation.tsx";
+import { useFixedListRowHeight } from "./fixed-list-sizing.ts";
 
 type ScreenState = "loading" | "auto-import" | "ready" | "importing" | "error" | "storage-error";
 const PAGE_SIZE = 16;
@@ -107,6 +110,12 @@ function positiveInteger(value: string): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function sortLabel(sort: VodSort): string {
+  if (sort === "title") return "Title A–Z";
+  if (sort === "year") return "Release year (newest)";
+  return "Playlist order";
+}
+
 function BrowseArtwork({ title, image }: { title: string; image: string | null | undefined }) {
   const initial = title.trim().charAt(0).toLocaleUpperCase() || "?";
   return <span className="browse-artwork" aria-hidden="true">
@@ -142,6 +151,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const pageRef = useRef(page);
   pageRef.current = page;
   const [sort, setSort] = useState<VodSort>("playlist");
+  const [sortDraft, setSortDraft] = useState<VodSort>("playlist");
+  const [editingSort, setEditingSort] = useState(false);
   const [browseMode, setBrowseMode] = useState<BrowseMode>("local");
   const [browseCollection, setBrowseCollection] = useState<AppSection>("recent");
   const [searchQuery, setSearchQuery] = useState("");
@@ -230,6 +241,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const [settingsStatus, setSettingsStatus] = useState("");
   const [liveRelayConfig, setLiveRelayConfig] = useState<NormalizedLiveRelayConfig | null>(loadLiveRelayConfig);
   const [editingCompanionServer, setEditingCompanionServer] = useState(false);
+  const [editingUiLanguage, setEditingUiLanguage] = useState(false);
+  const uiLanguageControlRef = useRef<HTMLElement | null>(null);
   const [companionServerDraft, setCompanionServerDraft] = useState(companionServerUrl);
   const [webTvConnectionStatus, setWebTvConnectionStatus] = useState("");
   const [webTvPairingCode, setWebTvPairingCode] = useState("");
@@ -273,6 +286,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const retryPlaylistRef = useRef<HTMLButtonElement | null>(null);
   const mainMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousButtonRef = useRef<HTMLButtonElement | null>(null);
   const browseEmptyRecoveryRef = useRef<HTMLButtonElement | null>(null);
   const browseTabTransitionRef = useRef<"menu" | "content" | null>(null);
   const browseReturnFocusIndexRef = useRef(0);
@@ -281,10 +295,13 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const resumeChoiceControlsRef = useRef<Array<HTMLButtonElement | null>>([]);
   const detailsControlsRef = useRef<Array<HTMLButtonElement | null>>([]);
   const detailsEpisodeSelectRef = useRef<HTMLSelectElement | null>(null);
+  const webEpisodeSelectionChangedRef = useRef(false);
   const detailsEpisodeControlRef = useRef<HTMLElement | null>(null);
   const episodePickerOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const detailsRequestRef = useRef(0);
   const sortSelectRef = useRef<HTMLSelectElement | null>(null);
+  const sortControlRef = useRef<HTMLElement | null>(null);
+  const sortReloadFocusGuardRef = useRef(false);
   const backToGroupsRef = useRef<HTMLButtonElement | null>(null);
   const latestRefreshRef = useRef<HTMLButtonElement | null>(null);
   const previousPageRef = useRef<HTMLButtonElement | null>(null);
@@ -677,7 +694,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           setCatalogStatus("Provider catalogue is unavailable. Re-import the playlist to use the M3U fallback.");
           return;
         }
-        setCatalogStatus("Loading " + formatGroupDisplayName(group.name, language) + " from the provider…");
+        setCatalogStatus("Loading " + (isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language)) + " from the provider…");
         const result = await browseRequestRef.current.run(
           () => group.providerContentType === "movie" ? client.movies(group.providerCategoryId!) : client.series(group.providerCategoryId!),
           "This provider category could not be loaded. Check the TV network and try again.",
@@ -700,7 +717,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       setCatalogStatus(items.length.toLocaleString() + " titles ready");
       return;
     }
-    setCatalogStatus("Loading " + formatGroupDisplayName(group.name, language) + "…");
+    setCatalogStatus("Loading " + (isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language)) + "…");
     const result = await browseRequestRef.current.run(async () => {
       const store = await IndexedDbCatalogStore.open();
       try { return await store.byGroupPage(group.name, targetPage * PAGE_SIZE, PAGE_SIZE, targetSort); }
@@ -796,7 +813,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         return;
       }
       const cache = new TmdbMetadataCache();
-      const cached = cache.get(resolved.candidate.id, mediaType);
+      const stored = cache.get(resolved.candidate.id, mediaType);
+      const cached = stored?.detailsVersion === 1 ? stored : null;
       const metadata = cached ?? await client.getMetadata(resolved.candidate.id, mediaType);
       if (!cached) cache.set(metadata);
       new TmdbArtworkCache().set(artworkLookupKey(title)!, metadata.posterUrl);
@@ -1171,6 +1189,55 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     });
   };
 
+  const goToPreviousScreen = () => {
+    if (episodePickerOpen) {
+      const seasons = [...new Set(detailsEpisodes.map((episode) => episode.season).filter((season): season is number => season !== undefined))];
+      if (episodePickerLevel === "episodes" && seasons.length > 1) {
+        setEpisodePickerLevel("seasons");
+        setEpisodePickerFocusIndex(Math.max(0, seasons.indexOf(episodePickerSeason ?? seasons[0] ?? 0)));
+        window.requestAnimationFrame(() => episodePickerOptionRefs.current[Math.max(0, seasons.indexOf(episodePickerSeason ?? seasons[0] ?? 0))]?.focus());
+      } else {
+        setEpisodePickerOpen(false);
+        window.requestAnimationFrame(() => detailsControlsRef.current[2]?.focus());
+      }
+      return;
+    }
+    if (showSettings) {
+      setEditingCompanionServer(false);
+      if (settingsOnOpen) onMainMenu();
+      else setShowSettings(false);
+      return;
+    }
+    if (detailsTitle) { closeDetails(); return; }
+    if (selectedTitle) {
+      browseRequestRef.current.invalidate();
+      exitPlayerFullscreen();
+      setShowFullscreenControls(false);
+      if (selectedTitleSource === "local") setDetailsTitle(selectedTitle);
+      setSelectedTitle(null);
+      return;
+    }
+    if (activeGroup) {
+      latestRequestRef.current += 1;
+      browseRequestRef.current.invalidate();
+      remoteBrowseRef.current = null;
+      browseReturnFocusPendingRef.current = true;
+      setBrowseMode("local");
+      setBrowseCount(0);
+      setActiveGroup(null);
+      setTitles([]);
+      setPage(0);
+      setFocusIndex(browseReturnFocusIndexRef.current);
+      setCatalogStatus("");
+    }
+  };
+
+  const previousScreenLabel = showSettings
+    ? settingsOnOpen ? undefined : "Back to library"
+    : detailsTitle ? detailsOrigin?.kind === "search" ? "Back to search" : detailsOrigin?.kind === "local" ? "Back to home" : "Back to titles"
+      : selectedTitle ? selectedTitleSource === "local" ? "Back to details" : "Back to titles"
+        : activeGroup ? "Back to groups" : undefined;
+
   const refreshSearchCatalogue = async () => {
     if (!searchProviderFingerprint) {
       setSearchStatus("Full catalogue refresh requires an Xtream playlist. Your imported M3U titles are searchable here.");
@@ -1263,6 +1330,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     const episodes = result.value;
     setDetailsEpisodes(episodes);
     setDetailsEpisodeId(episodes[0]?.id ?? "");
+    webEpisodeSelectionChangedRef.current = false;
     if (!episodes.length) setEpisodeStatus("No playable episodes were returned for this series.");
     if (!episodes.length) return;
     // The first Action on a series must enter episode selection.  The details
@@ -1387,6 +1455,27 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     if (activeGroup) void openGroup(activeGroup, targetPage, targetSort, focusAtEnd);
   };
 
+  const commitSortEdit = () => {
+    const nextSort = sortDraft;
+    setEditingSort(false);
+    sortReloadFocusGuardRef.current = true;
+    const finish = () => window.requestAnimationFrame(() => {
+      const active = document.activeElement;
+      const restoreTrigger = active === document.body || active === sortSelectRef.current || active === sortControlRef.current;
+      sortReloadFocusGuardRef.current = false;
+      if (restoreTrigger) sortControlRef.current?.focus();
+    });
+    if (nextSort === sort) { finish(); return; }
+    setSort(nextSort);
+    if (!activeGroup) { finish(); return; }
+    if (browseMode !== "local" && remoteBrowseRef.current) {
+      changeBrowsePage(0, nextSort);
+      finish();
+      return;
+    }
+    void openGroup(activeGroup, 0, nextSort).finally(finish);
+  };
+
   useEffect(() => {
     const focusBrowseIndex = (index: number) => {
       setFocusIndex(index);
@@ -1406,9 +1495,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       if (targetIndex !== null) {
         focusBrowseIndex(targetIndex);
       } else if (allowEndpointExit && key === "ArrowUp" && focusIndex < columns) {
-        setFocusIndex(0);
         if (browseMode === "latest") latestRefreshRef.current?.focus();
-        else sortSelectRef.current?.focus();
+        else sortControlRef.current?.focus();
       } else if (allowEndpointExit && key === "ArrowDown" && focusIndex + columns >= itemCount) {
         if (page + 1 < browsePageCount(browseCount, PAGE_SIZE) && nextPageRef.current) nextPageRef.current.focus();
         else if (page > 0 && previousPageRef.current) previousPageRef.current.focus();
@@ -1437,7 +1525,15 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         return;
       }
       if (isBackKey(event)) {
-        if (showSettings && (showSettingsApiKeyEditor || editingCompanionServer || editingSubtitleLanguage || editingTmdbToken || editingTmdbApiKey)) {
+        if (editingSort) {
+          event.preventDefault();
+          setSortDraft(sort);
+          setEditingSort(false);
+          sortReloadFocusGuardRef.current = false;
+          window.requestAnimationFrame(() => sortControlRef.current?.focus());
+          return;
+        }
+        if (showSettings && (showSettingsApiKeyEditor || editingCompanionServer || editingUiLanguage || editingSubtitleLanguage || editingTmdbToken || editingTmdbApiKey)) {
           event.preventDefault();
           const target = event.target;
           if (target === settingsApiKeyInputRef.current) {
@@ -1446,6 +1542,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           } else if (target === settingsControlsRef.current["companion-url"]) {
             setEditingCompanionServer(false);
             window.requestAnimationFrame(() => settingsControlsRef.current["companion-url"]?.focus());
+          } else if (target === uiLanguageControlRef.current) {
+            setEditingUiLanguage(false);
+            window.requestAnimationFrame(() => uiLanguageControlRef.current?.focus());
           } else if (target === subtitleLanguageControlRef.current) {
             setEditingSubtitleLanguage(false);
             window.requestAnimationFrame(() => subtitleLanguageControlRef.current?.focus());
@@ -1458,6 +1557,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           } else {
             setShowSettingsApiKeyEditor(false);
             setEditingCompanionServer(false);
+            setEditingUiLanguage(false);
             setEditingSubtitleLanguage(false);
             setEditingTmdbToken(false);
             setEditingTmdbApiKey(false);
@@ -1502,18 +1602,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         }
         if (episodePickerOpen) {
           event.preventDefault();
-          if (episodePickerLevel === "episodes") {
-            const seasons = [...new Set(detailsEpisodes.map((episode) => episode.season).filter((season): season is number => season !== undefined))];
-            if (seasons.length > 1) {
-              setEpisodePickerLevel("seasons");
-              setEpisodePickerFocusIndex(Math.max(0, seasons.indexOf(episodePickerSeason ?? seasons[0] ?? 0)));
-              window.requestAnimationFrame(() => episodePickerOptionRefs.current[Math.max(0, seasons.indexOf(episodePickerSeason ?? seasons[0] ?? 0))]?.focus());
-              return;
-            }
-          }
-          setEpisodePickerOpen(false);
-          setDetailsFocusIndex(1);
-          window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus());
+          goToPreviousScreen();
           return;
         }
         if (detailsTitle) {
@@ -1587,7 +1676,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         return;
       }
       if (state !== "ready") {
-        const controls = [retryPlaylistRef.current].filter((control): control is HTMLButtonElement => control !== null);
+        const controls = [mainMenuButtonRef.current, retryPlaylistRef.current].filter((control): control is HTMLButtonElement => control !== null);
         if (controls.length === 0) return;
         const currentIndex = Math.max(0, controls.indexOf(document.activeElement as HTMLButtonElement));
         if (key === "ArrowDown" || key === "ArrowRight") {
@@ -1604,6 +1693,30 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           event.preventDefault();
           document.activeElement.click();
         }
+        return;
+      }
+      if (event.target === mainMenuButtonRef.current || event.target === previousButtonRef.current) {
+        const hasPrevious = Boolean(previousButtonRef.current);
+        if (key === "ArrowLeft" || key === "ArrowRight") {
+          const current = event.target === previousButtonRef.current ? "previous" : "main-menu";
+          const target = screenNavigationTarget(key, current, hasPrevious);
+          if (target) {
+            event.preventDefault();
+            (target === "previous" ? previousButtonRef.current : mainMenuButtonRef.current)?.focus();
+          }
+          return;
+        }
+        if (key === "ArrowDown") {
+          event.preventDefault();
+          if (showSettings) settingsControlsRef.current["companion-url"]?.focus();
+          else if (episodePickerOpen) episodePickerOptionRefs.current[episodePickerFocusIndex]?.focus();
+          else if (detailsTitle) detailsControlsRef.current[2]?.focus();
+          else if (selectedTitle) (playerFullscreen ? playerTogglePlaybackButtonRef : playerStageRef).current?.focus();
+          else if (activeGroup) (browseMode === "latest" ? latestRefreshRef.current : sortControlRef.current)?.focus();
+          else browseTabRefs.current[sectionOrder.indexOf(browseCollection)]?.focus();
+          return;
+        }
+        if (key === "Enter") { event.preventDefault(); (event.target as HTMLButtonElement).click(); }
         return;
       }
       if (resumeChoice) {
@@ -1633,6 +1746,11 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           const activeIndex = options.indexOf(document.activeElement as HTMLButtonElement);
           const currentIndex = activeIndex >= 0 ? activeIndex : episodePickerFocusIndex;
           if (key === "ArrowDown" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowLeft") {
+            if (key === "ArrowUp" && currentIndex === 0 && previousButtonRef.current) {
+              event.preventDefault();
+              previousButtonRef.current.focus();
+              return;
+            }
             event.preventDefault();
             const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
             const nextIndex = Math.max(0, Math.min(options.length - 1, currentIndex + delta));
@@ -1660,15 +1778,22 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           }
           return;
         }
-        const controls = [detailsControlsRef.current[0], ...(detailsTitle.providerSeriesId && detailsEpisodes.length ? [detailsEpisodeControlRef.current] : []), detailsControlsRef.current[2] ?? detailsControlsRef.current[1], detailsControlsRef.current[3], ...(detailsOrigin?.kind === "local" ? [detailsControlsRef.current[4], detailsControlsRef.current[5]] : [])].filter((control): control is HTMLElement => Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled));
+        // Keep details navigation in the same order as the other remote views:
+        // header, Play here, Play on TV, then the episode selector.
+        const controls = [detailsControlsRef.current[0], detailsControlsRef.current[2] ?? detailsControlsRef.current[1], detailsControlsRef.current[3], ...(detailsTitle.providerSeriesId && detailsEpisodes.length ? [detailsEpisodeControlRef.current] : []), ...(detailsOrigin?.kind === "local" ? [detailsControlsRef.current[4], detailsControlsRef.current[5]] : [])].filter((control): control is HTMLElement => Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled));
         if (controls.length === 0) return;
         const activeIndex = controls.indexOf(document.activeElement as HTMLElement);
         const currentIndex = activeIndex >= 0 ? activeIndex : detailsFocusIndex;
         if (document.activeElement === detailsEpisodeSelectRef.current && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) {
-          if (!isTizen || !editingDetailsEpisode) return;
+          // Native selects need the first Up/Down press for changing the
+          // selected episode. After that change, the next arrow leaves the
+          // select so web users can reach Play using only arrow keys.
+          if (!isTizen && (key === "ArrowUp" || key === "ArrowDown") && !webEpisodeSelectionChangedRef.current) return;
+          if (isTizen && !editingDetailsEpisode) return;
           event.preventDefault();
+          webEpisodeSelectionChangedRef.current = false;
           setEditingDetailsEpisode(false);
-          const targetIndex = Math.max(0, Math.min(controls.length - 1, currentIndex + (key === "ArrowUp" || key === "ArrowLeft" ? -1 : 1)));
+          const targetIndex = detailsControlNavigationTarget(key, currentIndex, controls.length) ?? currentIndex;
           window.requestAnimationFrame(() => controls[targetIndex]?.focus());
           return;
         }
@@ -1689,43 +1814,61 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         }
         if (["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(key)) {
           event.preventDefault();
-          if (nestedScreenSettingsTarget(key, currentIndex) && mainMenuButtonRef.current) {
-            mainMenuButtonRef.current.focus();
+          if (nestedScreenSettingsTarget(key, currentIndex) && (previousButtonRef.current || mainMenuButtonRef.current)) {
+            (previousButtonRef.current ?? mainMenuButtonRef.current)?.focus();
             return;
           }
-          const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
-          controls[Math.max(0, Math.min(controls.length - 1, currentIndex + delta))]?.focus();
+          const targetIndex = detailsControlNavigationTarget(key, currentIndex, controls.length);
+          if (targetIndex !== null) controls[targetIndex]?.focus();
           return;
         }
         if (key === "Enter") { event.preventDefault(); if (controls[currentIndex] instanceof HTMLButtonElement) controls[currentIndex].click(); }
         return;
       }
       if (settingsConfirmation || showSettings) {
+        if (isTizen && event.target instanceof HTMLSelectElement) {
+          // Once explicitly opened, a select owns its arrow keys so options
+          // can change. OK commits and returns to its navigation trigger.
+          if (key === "Enter") {
+            event.preventDefault();
+            if (event.target === uiLanguageControlRef.current) setEditingUiLanguage(false);
+            if (event.target === subtitleLanguageControlRef.current) setEditingSubtitleLanguage(false);
+          }
+          return;
+        }
         const settingsTextEntry = event.target instanceof HTMLTextAreaElement
           || event.target instanceof HTMLInputElement && event.target.type !== "checkbox";
         if (editingCompanionServer && event.target === settingsControlsRef.current["companion-url"] && (key === "ArrowUp" || key === "ArrowDown")) setEditingCompanionServer(false);
-        if (editingSubtitleLanguage && event.target === subtitleLanguageControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingSubtitleLanguage(false);
         if (editingTmdbToken && event.target === tmdbTokenControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingTmdbToken(false);
         if (editingTmdbApiKey && event.target === tmdbApiKeyControlRef.current && (key === "ArrowUp" || key === "ArrowDown")) setEditingTmdbApiKey(false);
         if (settingsTextEntry && !["ArrowUp", "ArrowDown"].includes(key)) return;
+        if (!settingsConfirmation && key === "ArrowUp" && (document.activeElement === settingsControlsRef.current["companion-url"] || settingsFocusKey === "companion-url")) {
+          event.preventDefault();
+          (previousButtonRef.current ?? mainMenuButtonRef.current)?.focus();
+          return;
+        }
         const order = settingsControlOrder({
           confirmationOpen: Boolean(settingsConfirmation),
           apiKeyEditorOpen: showSettingsApiKeyEditor,
           hasSubtitleKey,
           liveRelayControlsVisible: isTizen,
         });
-        const controls = order
+        const visibleOrder = order.filter((controlKey) => {
+          const control = settingsControlsRef.current[controlKey];
+          return Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled);
+        });
+        const controls = visibleOrder
           .map((controlKey) => settingsControlsRef.current[controlKey])
           .filter((control): control is HTMLElement => Boolean(control) && !(control instanceof HTMLButtonElement && control.disabled));
         if (controls.length === 0) return;
         const activeIndex = controls.indexOf(document.activeElement as HTMLButtonElement);
-        const focusIndex = order.indexOf(settingsFocusKey);
+        const focusIndex = visibleOrder.indexOf(settingsFocusKey);
         const currentIndex = activeIndex >= 0 ? activeIndex : Math.max(0, focusIndex);
         if (["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(key)) {
           event.preventDefault();
           const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
           const targetIndex = Math.max(0, Math.min(controls.length - 1, currentIndex + delta));
-          setSettingsFocusKey(order[targetIndex] ?? settingsFocusKey);
+          setSettingsFocusKey(visibleOrder[targetIndex] ?? settingsFocusKey);
           controls[targetIndex]?.focus();
           return;
         }
@@ -1818,6 +1961,10 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         }
         if (key === "ArrowDown" || key === "ArrowUp") {
           event.preventDefault();
+          if (key === "ArrowUp" && currentIndex === 0 && !playerFullscreen && previousButtonRef.current) {
+            previousButtonRef.current.focus();
+            return;
+          }
           if (playerFullscreen && showFullscreenControls) {
             const targetIndex = fullscreenControlNavigationTarget(key, currentIndex, controls.length, videoAreaFocusIndex);
             if (targetIndex !== null) {
@@ -1854,9 +2001,18 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       }
       if (event.target instanceof HTMLInputElement) return;
       if (event.target instanceof HTMLSelectElement) {
-        if (event.target === sortSelectRef.current && nestedScreenSettingsTarget(key, 0) && mainMenuButtonRef.current) {
+        if (event.target === sortSelectRef.current && editingSort) {
+          if (key === "Enter") {
+            event.preventDefault();
+            commitSortEdit();
+          }
+          // Leave directional keys to the native select while its explicit
+          // editor is open so they change the draft option.
+          return;
+        }
+        if (event.target === sortSelectRef.current && nestedScreenSettingsTarget(key, 0) && (previousButtonRef.current || mainMenuButtonRef.current)) {
           event.preventDefault();
-          mainMenuButtonRef.current.focus();
+          (previousButtonRef.current ?? mainMenuButtonRef.current)?.focus();
         } else if (activeGroup && isTizen && (key === "ArrowUp" || key === "ArrowDown")
           && event.repeat && heldTitleKeyRef.current?.key === key) {
           event.preventDefault();
@@ -1872,6 +2028,25 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         return;
       }
       const targetButton = event.target instanceof HTMLButtonElement ? event.target : null;
+      if (targetButton && (targetButton === sortControlRef.current || targetButton === latestRefreshRef.current)) {
+        if (key === "ArrowDown") {
+          event.preventDefault();
+          focusBrowseIndex(focusIndex);
+        } else if (key === "ArrowUp") {
+          event.preventDefault();
+          (previousButtonRef.current ?? mainMenuButtonRef.current)?.focus();
+        } else if (key === "ArrowLeft") {
+          event.preventDefault();
+          (previousButtonRef.current ?? mainMenuButtonRef.current)?.focus();
+        } else if (key === "ArrowRight") {
+          event.preventDefault();
+          mainMenuButtonRef.current?.focus();
+        } else if (key === "Enter") {
+          event.preventDefault();
+          targetButton.click();
+        }
+        return;
+      }
       if (targetButton === mainMenuButtonRef.current) {
         if (key === "ArrowDown") {
           event.preventDefault();
@@ -1913,7 +2088,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           }
           return;
         }
-        if (key === "ArrowUp" && currentTab === 0 && mainMenuButtonRef.current) {
+        if (key === "ArrowUp" && mainMenuButtonRef.current) {
           event.preventDefault();
           mainMenuButtonRef.current.focus();
           return;
@@ -1963,11 +2138,6 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             heldTitleKeyRef.current = { key, lastHandledAt: Date.now() };
             navigateTizenTitleGrid(key, false);
           }
-        } else if (verticalKey && heldTitleKeyRef.current?.key === key) {
-          if (shouldHandleHeldTitleKeyRepeat(key, Date.now(), heldTitleKeyRef.current)) {
-            heldTitleKeyRef.current = { key, lastHandledAt: Date.now() };
-            navigateTizenTitleGrid(key, false);
-          }
         } else {
           if (verticalKey) heldTitleKeyRef.current = { key, lastHandledAt: Date.now() };
           else heldTitleKeyRef.current = null;
@@ -1979,7 +2149,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         event.preventDefault();
         const compactViewport = window.innerWidth <= 800;
         const narrowViewport = window.innerWidth < 520;
-        const homeColumns = browseGridColumnCount(false, compactViewport, narrowViewport);
+        const homeColumns = browseGridColumnCount(false, compactViewport, narrowViewport, isTizen && window.innerWidth <= 1400);
         const targetIndex = activeGroup
           ? gridNavigationTarget(key, focusIndex, itemCount, browseGridColumnCount(true, compactViewport, narrowViewport))
           : browseCollection === "recent"
@@ -1991,7 +2161,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         }
         if (activeGroup && key === "ArrowUp" && targetIndex === null && focusIndex < browseGridColumnCount(true, compactViewport, narrowViewport)) {
           if (browseMode === "latest") latestRefreshRef.current?.focus();
-          else sortSelectRef.current?.focus();
+          else sortControlRef.current?.focus();
           return;
         }
         if (activeGroup && key === "ArrowDown" && targetIndex === null) {
@@ -2034,7 +2204,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingCompanionServer, editingDetailsEpisode, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, nextEpisode, page, pendingHistoryRemoval, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, showPlayerApiKeyEditor, showPlayerTools, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
+  }, [activeGroup, browseCollection, browseCount, catalogStatus, changeBrowsePage, continueHistory, detailsEpisodeId, detailsEpisodes, detailsFocusIndex, detailsTitle, editingCompanionServer, editingDetailsEpisode, editingSubtitleEpisode, editingSubtitleLanguage, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, editingTmdbApiKey, editingTmdbToken, editingUiLanguage, episodePickerFocusIndex, episodePickerOpen, favouriteGroupIds, focusIndex, groups, isPlaybackPaused, isSubtitleAttached, isTizen, nextEpisode, page, pendingHistoryRemoval, playerFocusIndex, playerFullscreen, playlistUrl, resumeChoice, resumeChoiceFocusIndex, selectedTitle, settingsConfirmation, settingsFocusKey, showPlayerApiKeyEditor, showPlayerTools, showFullscreenControls, showSettings, sort, state, subtitleSearchType, titles, visibleGroups]);
 
   useEffect(() => {
     const onKeyUp = (event: KeyboardEvent) => {
@@ -2094,6 +2264,12 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
 
   useEffect(() => {
     if (selectedTitle || detailsTitle || resumeChoice || showSettings || settingsConfirmation) return;
+    // List updates must preserve an explicit move to the header or browse
+    // controls; default tile focus is only appropriate while browsing items.
+    if (activeGroup && (editingSort || sortReloadFocusGuardRef.current
+      || document.activeElement === sortControlRef.current || document.activeElement === sortSelectRef.current
+      || document.activeElement === latestRefreshRef.current || document.activeElement === previousButtonRef.current
+      || document.activeElement === mainMenuButtonRef.current)) return;
     if (!activeGroup) {
       if (browseReturnFocusPendingRef.current) {
         browseReturnFocusPendingRef.current = false;
@@ -2141,13 +2317,16 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
 
   useEffect(() => {
     if (!showSettings && !settingsConfirmation) return;
-    const firstKey = settingsConfirmation ? "confirm-cancel" : "back";
+    const firstKey = settingsConfirmation ? "confirm-cancel" : "companion-url";
     setSettingsFocusKey(firstKey);
     window.requestAnimationFrame(() => settingsControlsRef.current[firstKey]?.focus());
   }, [settingsConfirmation, showSettings]);
 
+  const settingsApiKeyEditorWasOpenRef = useRef(false);
   useEffect(() => {
-    if (!showSettings) return;
+    const wasOpen = settingsApiKeyEditorWasOpenRef.current;
+    settingsApiKeyEditorWasOpenRef.current = showSettingsApiKeyEditor;
+    if (!showSettings || (!showSettingsApiKeyEditor && !wasOpen)) return;
     if (showSettingsApiKeyEditor) {
       setSettingsFocusKey("api-key-input");
       window.requestAnimationFrame(() => settingsApiKeyInputRef.current?.focus());
@@ -2855,7 +3034,10 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
 
   const hasSubtitleKey = Boolean(openSubtitlesApiKey.trim());
   const registerSettingsControl = (key: SettingsControlKey, element: HTMLElement | null) => {
-    if (element) settingsControlsRef.current[key] = element;
+    if (element) {
+      settingsControlsRef.current[key] = element;
+      element.dataset.settingsFocus = key;
+    }
     else delete settingsControlsRef.current[key];
   };
   const settingsFocusClass = (key: SettingsFocusKey): string => settingsFocusKey === key ? "remote-focused" : "";
@@ -2910,15 +3092,28 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const pickerOptions = episodePickerLevel === "seasons" ? pickerSeasons : pickerEpisodes;
   episodePickerOptionRefs.current.length = pickerOptions.length;
 
-  if (state === "loading") return <Localized language={language}><main className="screen"><p role="status" aria-live="polite">{startupStatus}</p><div className="groups skeleton-grid" aria-hidden="true">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-tile" key={index} />)}</div></main></Localized>;
-  if (state === "storage-error" && !settingsOnOpen) return <Localized language={language}><main className="screen">
-    <h1>Catalogue unavailable</h1>
-    <p role="alert">{error}</p>
-    <button type="button" autoFocus onClick={() => void refreshCatalog()}>Try again</button>
-  </main></Localized>;
-  if (state === "importing" || state === "auto-import") return <Localized language={language}><main className="screen"><h1>Importing library</h1><p role="status" aria-live="polite">{progress}</p></main></Localized>;
-
   const isTvTitleBrowse = state === "ready" && isTizen && Boolean(activeGroup) && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice;
+  const isTvCategoryBrowse = state === "ready" && isTizen && !activeGroup && !selectedTitle && !detailsTitle && !showSettings && !resumeChoice && (browseCollection === "movies" || browseCollection === "series" || browseCollection === "favourites");
+  const categoryRowStyle = useFixedListRowHeight(titleListViewportRef, Math.ceil(visibleGroups.length / browseGridColumnCount(false, window.innerWidth <= 800, window.innerWidth < 520, isTizen && window.innerWidth <= 1400)), { minHeight: 90, maxHeight: 160, spacing: 28 }, isTvCategoryBrowse);
+
+  const screenHeader = <header className="app-header" onFocusCapture={() => { if (detailsTitle) setDetailsFocusIndex(0); if (selectedTitle) setPlayerFocusIndex(0); }}><div><p className="eyebrow">{settingsOnOpen ? "SUBSTREAM · SETTINGS" : "SUBSTREAM · VIDEO-ON-DEMAND"}</p><h1>{settingsOnOpen ? "Settings" : state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
+      {!episodePickerOpen && !(selectedTitle && playerFullscreen) && <ScreenNavigation
+        onPrevious={previousScreenLabel ? goToPreviousScreen : undefined}
+        previousLabel={previousScreenLabel}
+        onMainMenu={onMainMenu}
+        previousRef={(element) => { previousButtonRef.current = element; detailsControlsRef.current[0] = detailsTitle ? element : null; playerBackButtonRef.current = selectedTitle ? element : null; backToGroupsRef.current = activeGroup && !detailsTitle && !selectedTitle && !showSettings ? element : null; }}
+        mainMenuRef={mainMenuButtonRef}
+      />}
+    </header>;
+
+  if (state === "loading") return <Localized language={language}><main className="screen">{screenHeader}<p role="status" aria-live="polite">{startupStatus}</p><div className="groups skeleton-grid" aria-hidden="true">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-tile" key={index} />)}</div></main></Localized>;
+  if (state === "storage-error" && !settingsOnOpen) return <Localized language={language}><main className="screen">
+    {screenHeader}<h2>Catalogue unavailable</h2>
+    <p role="alert">{error}</p>
+    <button type="button" ref={retryPlaylistRef} autoFocus onClick={() => void refreshCatalog()}>Try again</button>
+  </main></Localized>;
+  if (state === "importing" || state === "auto-import") return <Localized language={language}><main className="screen">{screenHeader}<h2>Importing library</h2><p role="status" aria-live="polite">{progress}</p></main></Localized>;
+
   const openCompanionTitle = (title: VodCatalogItem, source: "catalogue" | "local" = "catalogue") => {
     // A paired companion is a global input source. Its selection must win over
     // whatever transient TV screen is open, including the player.
@@ -2967,10 +3162,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setShowFullscreenControls(false);
     setPlaybackStatus("");
   };
-  return <Localized language={language}><main className={"screen" + (isTizen ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen" : "")}>
-    <header className="app-header"><div><p className="eyebrow">{settingsOnOpen ? "SUBSTREAM · SETTINGS" : "SUBSTREAM · VIDEO-ON-DEMAND"}</p><h1>{settingsOnOpen ? "Settings" : state === "ready" ? "Your VOD library" : "Connect your IPTV playlist"}</h1></div>
-      {state === "ready" && !selectedTitle && !showSettings && <div className="header-actions"><button type="button" ref={mainMenuButtonRef} onClick={onMainMenu}>Main menu</button></div>}
-    </header>
+  return <Localized language={language}><main className={"screen" + (isTizen ? " tv-ui" : "") + (isTvTitleBrowse ? " tv-title-screen tv-fixed-list-screen" : isTvCategoryBrowse ? " tv-fixed-list-screen" : "")}>
+    {screenHeader}
     {state !== "ready" && state === "error" && <section className="setup-recovery">
       <p className="error" role="alert">{error || "The saved playlist could not be imported."}</p>
       <div className="settings-actions">
@@ -2994,17 +3187,11 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         </section></div> : <>
           <h2>Settings</h2>
           <p className="hint">Playlist URLs and subtitle keys are masked on entry and are never displayed on this screen. The LAN relay address is not a credential.</p>
-          <div className="settings-actions settings-primary-actions">
-              <button className={settingsFocusClass("back")} data-settings-focus="back" type="button" ref={(element) => registerSettingsControl("back", element)} onClick={() => { setEditingCompanionServer(false); if (settingsOnOpen) onMainMenu(); else setShowSettings(false); }}>{settingsOnOpen ? "Back to main menu" : "Back to library"}</button>
-          </div>
           {isTizen && <CompanionPanel playlistUrl={playlistUrl} onPlay={openCompanionTitle} onLocalPlay={openCompanionLocalMedia} onLocalStop={stopCompanionLocalMedia} editingServer={editingCompanionServer} onEditingServerChange={setEditingCompanionServer} remoteMode={isTizen} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
           {isTizen && <LiveRelaySettings config={liveRelayConfig} language={language} onSave={(config) => { const saved = saveLiveRelayConfig(config); setLiveRelayConfig(saved); setSettingsStatus("Live subtitle relay settings saved."); }} onRemove={() => { clearLiveRelayConfig(); setLiveRelayConfig(null); setSettingsStatus("Saved live subtitle relay settings removed."); }} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />}
           <section className="settings-section">
             <h3>{language === "fi" ? "Käyttöliittymän kieli" : "Interface language"}</h3>
-            <label htmlFor="ui-language">{language === "fi" ? "Kieli" : "Language"}</label>
-            <select className={settingsFocusClass("ui-language")} data-settings-focus="ui-language" id="ui-language" value={language} ref={(element) => registerSettingsControl("ui-language", element)} onChange={(event) => setLanguage(event.target.value as UiLanguage)}>
-              <option value="fi">Suomi</option><option value="en">English</option>
-            </select>
+            <RemoteEditable label={language === "fi" ? "Kieli" : "Language"} value={language === "fi" ? "Suomi" : "English"} editing={editingUiLanguage} remoteMode={isTizen} className={settingsFocusClass("ui-language")} controlRef={(element) => { uiLanguageControlRef.current = element; registerSettingsControl("ui-language", element); }} onBeginEdit={() => { setEditingUiLanguage(true); window.requestAnimationFrame(() => uiLanguageControlRef.current?.focus()); }} renderEditor={(controlRef) => <label htmlFor="ui-language">{language === "fi" ? "Kieli" : "Language"}<select className={settingsFocusClass("ui-language")} data-settings-focus="ui-language" id="ui-language" value={language} ref={(element) => { uiLanguageControlRef.current = element; registerSettingsControl("ui-language", element); controlRef(element); }} onChange={(event) => setLanguage(event.target.value as UiLanguage)}><option value="fi">Suomi</option><option value="en">English</option></select></label>} />
           </section>
           <section className="settings-section">
             <h3>Navigation and playlist</h3>
@@ -3080,7 +3267,6 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       </section>
       {!showSettings && (detailsTitle && details ? <section className="title-details" aria-labelledby="title-details-heading">
         <div className="details-actions">
-          <button className={`secondary-button ${detailsFocusIndex === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { detailsControlsRef.current[0] = element; }} onFocus={() => setDetailsFocusIndex(0)} onClick={closeDetails}>{detailsOrigin?.kind === "search" ? "Back to search" : detailsOrigin?.kind === "local" ? "Back to home" : "Back to titles"}</button>
           <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} disabled={Boolean(detailsTitle.providerSeriesId && detailsEpisodes.length && !detailsEpisodeId)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsOrigin?.kind === "local" ? "Play on this computer" : detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : "Play here"}</button>
           {detailsOrigin?.kind === "local" && !isTizen && <button className={detailsFocusIndex === 2 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(2)} onClick={() => {
             if (localUpload.state === "uploading" || localUpload.state === "preparing") cancelLocalUpload();
@@ -3100,21 +3286,23 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           <div className="details-copy">
             <p className="eyebrow">{detailsTitle.contentType === "series" ? "SERIES" : detailsTitle.contentType === "other" ? "VIDEO · TYPE UNKNOWN" : "MOVIE"}</p>
             <h2 id="title-details-heading"><span translate="no">{detailsTitle.title}</span></h2>
-            <p className="details-facts">{details.year ?? "Year unavailable"}{details.runtimeMinutes ? ` · ${formatRuntime(details.runtimeMinutes)}` : ""}{details.rating !== undefined ? ` · ★ ${details.rating.toFixed(1)}/10` : ""}</p>
-            {details.genres.length > 0 && <p className="details-genres">{details.genres.join(" · ")}</p>}
-            <p className="details-synopsis"><span translate="no">{details.synopsis ?? (detailsMetadataStatus === "Loading title details…" ? "Loading details…" : "Synopsis unavailable for this title.")}</span></p>
+            <p className="details-facts">{details.year ?? "Year unavailable"}{details.runtimeMinutes ? ` · ${formatRuntime(details.runtimeMinutes)}${detailsTitle.contentType === "series" ? ` / ${translate("episode", language)}` : ""}` : ""}{details.rating !== undefined ? ` · ★ ${details.rating.toFixed(1)}/10` : ""}{details.genres.length > 0 && <span translate="no"> · {details.genres.slice(0, 3).join(" · ")}</span>}</p>
+            {detailsMetadata?.tagline && <p className="details-tagline" translate="no">{detailsMetadata.tagline}</p>}
+            <h3 className="details-section-heading">Overview</h3>
+            <p className="details-synopsis">{details.synopsis ? <span translate="no">{details.synopsis}</span> : detailsMetadataStatus === "Loading title details…" ? "Loading details…" : "Synopsis unavailable for this title."}</p>
+            {detailsMetadata && <TitleMetadataExtras metadata={detailsMetadata} language={language} />}
             {detailsOrigin?.kind === "local" && <div className="details-metadata-search"><label htmlFor="local-details-search">Subtitle and artwork search title</label><input id="local-details-search" type="text" value={localDetailsSearchTitle} onChange={(event) => setLocalDetailsSearchTitle(event.target.value)} /></div>}
             {detailsMetadataStatus && detailsMetadataStatus !== "Loading title details…" && <p className="hint" role="status">{detailsMetadataStatus}</p>}
             {detailsOrigin?.kind === "local" && detailsTitle.contentType === "other" && <p className="hint">{detailsTitle.classification?.evidence.join(" ")}</p>}
             {detailsOrigin?.kind === "local" && (tmdbCredentials.readAccessToken || tmdbCredentials.apiKey) && <button type="button" onClick={() => void openTitle(detailsTitle, { kind: "local", focusIndex: detailsFocusIndex })}>Search details again</button>}
             {details.subtitleLanguages.length > 0 ? <p className="hint">Subtitles available: {details.subtitleLanguages.join(", ")}</p> : <p className="hint">Subtitle languages will appear after searching OpenSubtitles.</p>}
             {detailsHistory && <p className="details-resume" role="status">Resume available at {formatPlaybackTime(detailsHistory.currentTimeSeconds)} of {formatPlaybackTime(detailsHistory.durationSeconds)}</p>}
-            {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `Season ${episode.season}, ` : ""}${episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}` : "Choose episode"; })()} editing={editingDetailsEpisode} remoteMode={isTizen} className={detailsFocusIndex === 1 ? "remote-focused" : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? "remote-focused" : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => setDetailsFocusIndex(1)} value={detailsEpisodeId} onChange={(event) => setDetailsEpisodeId(event.target.value)} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
+            {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" translateValue={false} value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `${translate("Season", language)} ${episode.season}, ` : ""}${episode.episode !== undefined ? `${translate("Episode", language)} ${episode.episode}` : episode.title}` : translate("Choose episode", language); })()} editing={editingDetailsEpisode} remoteMode={isTizen} className={detailsFocusIndex === 1 ? "remote-focused" : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? "remote-focused" : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => { setDetailsFocusIndex(1); webEpisodeSelectionChangedRef.current = false; }} value={detailsEpisodeId} onChange={(event) => { webEpisodeSelectionChangedRef.current = true; setDetailsEpisodeId(event.target.value); setDetailsFocusIndex(2); window.requestAnimationFrame(() => { webEpisodeSelectionChangedRef.current = false; detailsControlsRef.current[2]?.focus(); }); }} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id} translate={episode.episode === undefined ? "no" : undefined}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
           </div>
         </div>
         {episodePickerOpen && isTizen && <div className="episode-picker-backdrop" role="presentation">
           <section className="episode-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="episode-picker-heading">
-            <h3 id="episode-picker-heading">{episodePickerLevel === "seasons" ? "Choose a season" : translate("Choose an episode (Season {{season}})", language).replace("{{season}}", String(episodePickerSeason ?? "—"))}</h3>
+            <header className="app-header"><h3 id="episode-picker-heading">{episodePickerLevel === "seasons" ? "Choose a season" : translate("Choose an episode (Season {{season}})", language).replace("{{season}}", String(episodePickerSeason ?? "—"))}</h3><ScreenNavigation onPrevious={goToPreviousScreen} previousLabel={episodePickerLevel === "episodes" && pickerSeasons.length > 1 ? "Seasons" : "Back to details"} onMainMenu={onMainMenu} previousRef={previousButtonRef} mainMenuRef={mainMenuButtonRef} /></header>
             <p className="hint">{episodePickerLevel === "seasons" ? translate("Use arrows to move, Action to select, Back to close.", language) : translate("Use arrows to move, Action to select, Back to", language) + ` ${pickerSeasons.length > 1 ? translate("return to seasons", language) : translate("close", language)}.`}</p>
             <div className="episode-picker-options" role="listbox" aria-label={episodePickerLevel === "seasons" ? "Seasons" : "Episodes"}>
               {pickerOptions.map((option, index) => <button
@@ -3134,12 +3322,12 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
                     window.requestAnimationFrame(() => detailsControlsRef.current[2]?.focus());
                   }
                 }}
-              >{typeof option === "number" ? `Season ${option}` : option.episode !== undefined ? `Episode ${option.episode}` : option.title}</button>)}
+              >{typeof option === "number" ? `Season ${option}` : option.episode !== undefined ? `Episode ${option.episode}` : <span translate="no">{option.title}</span>}</button>)}
             </div>
           </section>
         </div>}
       </section> : resumeChoice ? <div className="modal-backdrop"><section className="resume-choice modal-panel" role="dialog" aria-modal="true" aria-labelledby="resume-title">
-        <h2 id="resume-title">Continue “{resumeChoice.title.title}”?</h2>
+        <h2 id="resume-title">Continue “<span translate="no">{resumeChoice.title.title}</span>”?</h2>
         <p className="hint">Saved at {formatPlaybackTime(resumeChoice.history.currentTimeSeconds)} of {formatPlaybackTime(resumeChoice.history.durationSeconds)}.</p>
         <div className="settings-actions">
           <button className={resumeChoiceFocusIndex === 0 ? "remote-focused" : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[0] = element; }} onFocus={() => setResumeChoiceFocusIndex(0)} onClick={() => chooseResumeAction(true)}>Resume</button>
@@ -3148,7 +3336,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         </div>
       </section></div> : pendingHistoryRemoval ? <div className="modal-backdrop"><section className="confirmation-panel modal-panel" role="dialog" aria-modal="true" aria-labelledby="history-remove-title">
         <h2 id="history-remove-title">Remove from Continue watching?</h2>
-        <p className="hint">{pendingHistoryRemoval.title} will leave this list. Your playlist will stay intact.</p>
+        <p className="hint"><span translate="no">{pendingHistoryRemoval.title}</span> will leave this list. Your playlist will stay intact.</p>
         <div className="settings-actions">
           <button ref={historyCancelRef} type="button" onClick={() => { setPendingHistoryRemoval(null); window.requestAnimationFrame(() => tileRefs.current[focusIndex]?.focus()); }}>Cancel</button>
           <button ref={historyConfirmRef} className="danger-button" type="button" onClick={confirmHistoryRemoval}>Remove</button>
@@ -3162,9 +3350,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         if (index >= 0) setPlayerFocusIndex(index);
       }}>
         <div className="player-heading">
-          <div className="player-title"><h2>{selectedTitle.title}</h2><p className="hint">{selectedTitle.year ?? selectedTitle.contentType}</p></div>
+          <div className="player-title"><h2 translate="no">{selectedTitle.title}</h2><p className="hint">{selectedTitle.year ?? selectedTitle.contentType}</p></div>
           {selectedTitleSource === "local" && onChooseLocalFile && <button type="button" onClick={onChooseLocalFile}>Choose another file</button>}
-          <button className={playerFocusIndex === 0 ? "remote-focused" : ""} type="button" onClick={() => { browseRequestRef.current.invalidate(); exitPlayerFullscreen(); setShowFullscreenControls(false); if (selectedTitleSource === "local") setDetailsTitle(selectedTitle); setSelectedTitle(null); }} ref={playerBackButtonRef}>{selectedTitleSource === "local" ? "Back to details" : "Back to titles"}</button>
+          {playerFullscreen && <ScreenNavigation onPrevious={goToPreviousScreen} previousLabel={selectedTitleSource === "local" ? "Back to details" : "Back to titles"} onMainMenu={onMainMenu} previousRef={(element) => { previousButtonRef.current = element; playerBackButtonRef.current = element; }} mainMenuRef={mainMenuButtonRef} />}
         </div>
         <div
           className={"player-stage " + (playerFocusIndex === videoAreaFocusIndex ? "video-area-focused" : "")}
@@ -3228,7 +3416,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           </div>}
           <p className="subtitle-search-heading">Subtitle search</p>
           <div className="subtitle-search-options">
-            <RemoteEditable label="Title" value={subtitleSearchQuery} editing={editingSubtitleQuery} remoteMode={isTizen} className={`subtitle-search-query ${playerFocusIndex === subtitleSearchFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleQuery(true); window.requestAnimationFrame(() => subtitleSearchInputRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-query" htmlFor="subtitle-search-query">Title<input id="subtitle-search-query" type="search" value={subtitleSearchQuery} onChange={(event) => setSubtitleSearchQuery(event.target.value)} autoComplete="off" enterKeyHint="search" aria-label="Subtitle search term" ref={(element) => { subtitleSearchInputRef.current = element; controlRef(element); }} /></label>} />
+            <RemoteEditable label="Title" value={subtitleSearchQuery} translateValue={false} editing={editingSubtitleQuery} remoteMode={isTizen} className={`subtitle-search-query ${playerFocusIndex === subtitleSearchFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleQuery(true); window.requestAnimationFrame(() => subtitleSearchInputRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-query" htmlFor="subtitle-search-query">Title<input id="subtitle-search-query" type="search" value={subtitleSearchQuery} onChange={(event) => setSubtitleSearchQuery(event.target.value)} autoComplete="off" enterKeyHint="search" aria-label="Subtitle search term" ref={(element) => { subtitleSearchInputRef.current = element; controlRef(element); }} /></label>} />
             <RemoteEditable label="Type" value={subtitleSearchType === "movie" ? "Movie" : "Series"} editing={editingSubtitleType} remoteMode={isTizen} className={playerFocusIndex === subtitleSearchTypeFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleSearchTypeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleType(true); window.requestAnimationFrame(() => subtitleSearchTypeRef.current?.focus()); }} renderEditor={(controlRef) => <label htmlFor="subtitle-search-type">Type<select id="subtitle-search-type" value={subtitleSearchType} onChange={(event) => setSubtitleSearchType(event.target.value as SubtitleSearchType)} ref={(element) => { subtitleSearchTypeRef.current = element; controlRef(element); }}><option value="movie">Movie</option><option value="series">Series</option></select></label>} />
             {subtitleSearchType === "series" && <>
               <RemoteEditable label="Season" value={subtitleSearchSeason} editing={editingSubtitleSeason} remoteMode={isTizen} className={`subtitle-search-number ${playerFocusIndex === subtitleSeasonFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchSeasonControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleSeason(true); window.requestAnimationFrame(() => subtitleSearchSeasonRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-season">Season<input id="subtitle-search-season" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchSeason} onChange={(event) => setSubtitleSearchSeason(event.target.value)} ref={(element) => { subtitleSearchSeasonRef.current = element; controlRef(element); }} /></label>} />
@@ -3239,7 +3427,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           {subtitleStatus && <p className="hint">{subtitleStatus}</p>}
           <div className="subtitle-results">
             {subtitleResults.map((subtitle, index) => <article key={subtitle.id}>
-              <strong>{subtitle.language.toUpperCase()} · {subtitle.releaseName}</strong>
+              <strong translate="no">{subtitle.language.toUpperCase()} · {subtitle.releaseName}</strong>
               <span>{subtitle.downloads.toLocaleString()} downloads{subtitle.hearingImpaired ? " · HI" : ""}</span>
               <button className={playerFocusIndex === index + firstSubtitleFocusIndex ? "remote-focused" : ""} type="button" onClick={() => void loadSubtitle(subtitle)} ref={(element) => { subtitleButtonRefs.current[index] = element; }}>Use this subtitle</button>
             </article>)}
@@ -3247,27 +3435,25 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         </section>}
       </section> : activeGroup ? <>
         <div className="catalogue-heading">
-          <div><h2 title={formatGroupDisplayName(activeGroup.name, language)}>{formatGroupDisplayName(activeGroup.name, language)}</h2><p className="hint">{browseCount.toLocaleString()} {browseMode === "episodes" ? "episodes" : "titles"} · page {page + 1} of {browsePageCount(browseCount, PAGE_SIZE)}</p></div>
-          {browseMode !== "latest" && <label className="sort-control">Sort
-            <select ref={sortSelectRef} value={sort} onChange={(event) => {
+          <div><h2 translate="no" title={(isLatestVirtualGroup(activeGroup) ? translate("Latest", language) : formatGroupDisplayName(activeGroup.name, language))}>{(isLatestVirtualGroup(activeGroup) ? translate("Latest", language) : formatGroupDisplayName(activeGroup.name, language))}</h2><p className="hint">{browseCount.toLocaleString()} {browseMode === "episodes" ? "episodes" : "titles"} · page {page + 1} of {browsePageCount(browseCount, PAGE_SIZE)}</p></div>
+          {browseMode !== "latest" && <RemoteEditable label="Sort" value={sortLabel(sort)} editing={editingSort} className="sort-control" controlRef={(element) => { sortControlRef.current = element; }} onBeginEdit={() => { setSortDraft(sort); setEditingSort(true); window.requestAnimationFrame(() => sortSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="sort-control" htmlFor="vod-sort-select">Sort
+            <select id="vod-sort-select" ref={(element) => { sortSelectRef.current = element; controlRef(element); }} value={sortDraft} onChange={(event) => {
               const nextSort = event.target.value as VodSort;
-              setSort(nextSort);
-              changeBrowsePage(0, nextSort);
+              setSortDraft(nextSort);
             }}>
               <option value="title">Title A–Z</option>
               <option value="playlist">Playlist order</option>
               <option value="year">Release year (newest)</option>
             </select>
-          </label>}
+          </label>} />}
           {browseMode === "latest" && <button className={browseControlFocus === "latest-refresh" ? "remote-focused" : ""} type="button" ref={latestRefreshRef} onFocus={() => setBrowseControlFocus("latest-refresh")} onBlur={() => setBrowseControlFocus(null)} onClick={() => void openLatest(activeGroup?.contentType === "series" ? "series" : "movie", true)}>Refresh Latest</button>}
-          <button className={browseControlFocus === "back" ? "remote-focused" : ""} type="button" ref={backToGroupsRef} onFocus={() => setBrowseControlFocus("back")} onBlur={() => setBrowseControlFocus(null)} onClick={() => { latestRequestRef.current += 1; browseRequestRef.current.invalidate(); remoteBrowseRef.current = null; browseReturnFocusPendingRef.current = true; setBrowseMode("local"); setBrowseCount(0); setActiveGroup(null); setTitles([]); setPage(0); setFocusIndex(browseReturnFocusIndexRef.current); setCatalogStatus(""); }}>Back to groups</button>
         </div>
         {isTizen && <p className="remote-key-hint tv-title-list-hint">{browseMode === "latest" ? "Use the arrow keys to browse titles · Up from the first row returns to refresh" : "Use the arrow keys to browse titles · Up from the first row returns to sorting"}</p>}
-        <div className={isTizen ? "tv-title-list-viewport" : ""} ref={isTizen ? titleListViewportRef : undefined}>
+        <div className={isTizen ? "tv-title-list-viewport fixed-list-viewport" : ""} ref={isTizen ? titleListViewportRef : undefined}>
         {catalogStatus && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
         <div className={"groups title-grid" + (isTizen ? " tv-title-list" : "")}>
           {titles.map((title, index) => <button className={"tile title-card " + (index === focusIndex ? "focused remote-focused" : "")} key={title.id} onClick={() => { setFocusIndex(index); void openTitle(title); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
-            <BrowseArtwork title={title.title} image={browseArtwork[title.id]} /><span className="tile-copy"><strong>{title.title}</strong><span className="tile-meta">{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span>{browseMode === "latest" && <span className="tile-meta">{formatCategoryBadge(title.group, language)}</span>}</span>
+            <BrowseArtwork title={title.title} image={browseArtwork[title.id]} /><span className="tile-copy"><strong><span translate="no">{title.title}</span></strong><span className="tile-meta">{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span>{browseMode === "latest" && <span className="tile-meta" translate="no">{formatCategoryBadge(title.group, language)}</span>}</span>
           </button>)}
           {!titles.length && !catalogStatus.startsWith("Loading ") && <p className="empty-state">{browseMode === "latest" && !groups.some((group) => favouriteGroupIds.includes(group.id) && ((group.providerContentType ?? group.contentType) === activeGroup?.contentType || group.contentType === "mixed")) ? "Favourite categories to see Latest titles." : "No titles are available in this group yet."}</p>}
         </div>
@@ -3298,7 +3484,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           <div className="groups continue-grid">
             {continueHistory.map((entry, index) => <Fragment key={entry.id}>
               <button className={"tile title-card " + (index * 2 === focusIndex ? "focused remote-focused" : "")} onClick={() => { setFocusIndex(index * 2); void openHistoryEntry(entry); }} ref={(element) => { tileRefs.current[index * 2] = element; }} type="button">
-                <BrowseArtwork title={entry.title} image={browseArtwork[entry.id]} /><span className="tile-copy"><strong>{entry.title}</strong><span>Resume · {formatPlaybackTime(entry.currentTimeSeconds)} of {formatPlaybackTime(entry.durationSeconds)}</span></span>
+                <BrowseArtwork title={entry.title} image={browseArtwork[entry.id]} /><span className="tile-copy"><strong><span translate="no">{entry.title}</span></strong><span>Resume · {formatPlaybackTime(entry.currentTimeSeconds)} of {formatPlaybackTime(entry.durationSeconds)}</span></span>
                 <progress className="history-progress" max={Math.max(1, entry.durationSeconds)} value={Math.min(Math.max(0, entry.currentTimeSeconds), Math.max(1, entry.durationSeconds))} aria-label={`Watched ${formatPlaybackTime(entry.currentTimeSeconds)} of ${formatPlaybackTime(entry.durationSeconds)}`} />
               </button>
               <button className={"tile remove-history " + (index * 2 + 1 === focusIndex ? "focused remote-focused" : "")} onClick={() => { setFocusIndex(index * 2 + 1); removeHistoryEntry(entry); }} ref={(element) => { tileRefs.current[index * 2 + 1] = element; }} type="button" aria-label={`Remove ${entry.title} from Continue watching`}>
@@ -3317,7 +3503,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           <p className="hint" role="status" aria-live="polite">{searchStatus || (searchProviderFingerprint ? "Search is available without a TV connection. Refresh the Xtream catalogue when needed." : "Searching titles saved on this device. Add an Xtream playlist to refresh a full provider catalogue.")}</p>
           <div className="groups search-results">
             {visibleSearchItems.map((result, index) => <button className={`tile title-card ${index === focusIndex ? "focused remote-focused" : ""}`} key={result.key} ref={(element) => { tileRefs.current[index] = element; }} type="button" onClick={() => result.record ? openSearchRecord(result.record, index) : openLocalSearchItem(result.item, index)}>
-              <BrowseArtwork title={result.title} image={browseArtwork[result.item.id]} /><span className="tile-copy"><strong>{result.title}</strong><span className="tile-meta">{result.kind === "series" ? "Series" : result.kind === "movie" ? "Movie" : "Other"}{result.year ? ` · ${result.year}` : ""}{result.category ? ` · ${formatCategoryBadge(result.category, language)}` : ""}</span></span>
+              <BrowseArtwork title={result.title} image={browseArtwork[result.item.id]} /><span className="tile-copy"><strong><span translate="no">{result.title}</span></strong><span className="tile-meta">{result.kind === "series" ? "Series" : result.kind === "movie" ? "Movie" : "Other"}{result.year ? ` · ${result.year}` : ""}{result.category ? <span translate="no">{` · ${formatCategoryBadge(result.category, language)}`}</span> : ""}</span></span>
             </button>)}
             {!visibleSearchItems.length && searchQuery.trim().length >= 2 && <p className="empty-state">No matching titles found.</p>}
             {!visibleSearchItems.length && searchQuery.trim().length < 2 && <p className="empty-state">Enter at least two characters to search.</p>}
@@ -3325,9 +3511,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         </section>}
         {browseCollection !== "recent" && browseCollection !== "search" && <>
           <div className="collection-heading"><h2>{browseCollection === "favourites" ? "Favourite groups" : browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">{browseCollection === "favourites" ? "Your saved movie genres and series categories." : "Choose a group to browse its titles. Provider groups load when selected."}</p><p className="remote-key-hint">Press the red remote key to toggle the focused group as a favourite.</p>{favouriteStatus && <p className="hint" role="status" aria-live="polite">{favouriteStatus}</p>}</div>
-          <div className="groups group-grid">
-          {visibleGroups.map((group, index) => <div className="favourite-tile" key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
-            <strong title={formatGroupDisplayName(group.name, language)}>{formatGroupDisplayName(group.name, language)}</strong><span>{isLatestVirtualGroup(group) ? (group.contentType === "series" ? "Recently updated shows" : "Recently added movies") : group.providerCategoryId ? "Select to load titles" : `${group.count.toLocaleString()} titles`}</span>{!isLatestVirtualGroup(group) && favouriteGroupIds.includes(group.id) && <span className="favourite-indicator">★ Favourite</span>}
+          <div className={isTizen ? "groups group-grid fixed-list-viewport" : "groups group-grid"} ref={isTizen ? titleListViewportRef : undefined}>
+          {visibleGroups.map((group, index) => <div className={"favourite-tile" + (isTizen ? " fixed-list-item" : "")} key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} style={isTizen ? categoryRowStyle : undefined} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
+            <strong translate="no" title={(isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language))}>{(isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language))}</strong><span>{isLatestVirtualGroup(group) ? (group.contentType === "series" ? "Recently updated shows" : "Recently added movies") : group.providerCategoryId ? "Select to load titles" : `${group.count.toLocaleString()} titles`}</span>{!isLatestVirtualGroup(group) && favouriteGroupIds.includes(group.id) && <span className="favourite-indicator">★ Favourite</span>}
           </button>{!isLatestVirtualGroup(group) && <button className="quiet-button favourite-toggle" type="button" tabIndex={isTizen ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTizen) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => toggleFavouriteForGroup(group)}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button>}</div>)}
           {!visibleGroups.length && <div className="empty-state"><h2>{browseCollection === "favourites" ? "No favourite groups yet" : `No ${browseCollection === "movies" ? "movie" : "series"} groups found`}</h2><p>{browseCollection === "favourites" ? "Use the red remote key on a group, or the button on a card, to save it on this device." : `Import a library with ${browseCollection === "movies" ? "movies" : "series"} to browse titles here.`}</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = "content"; setBrowseCollection("recent"); setFocusIndex(0); }}>Browse recent</button></div>}
           </div>

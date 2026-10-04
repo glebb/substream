@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, detailsControlNavigationTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
   it("keeps Settings navigation in DOM order as conditional editors appear", () => {
@@ -116,12 +116,35 @@ describe("remote dashboard navigation", () => {
     expect(nestedScreenSettingsTarget("ArrowDown", 0)).toBeNull();
   });
 
+  it("matches three-column category geometry on 720p TVs", () => {
+    expect(browseGridColumnCount(false, false, false, true)).toBe(3);
+    expect(browseGridColumnCount(false, false, false, false)).toBe(4);
+    expect(browseGridColumnCount(false, true, false, true)).toBe(2);
+    expect(gridNavigationTarget("ArrowDown", 1, 8, 3)).toBe(4);
+  });
+
+  it("moves across shared screen navigation from previous to main menu", () => {
+    expect(screenNavigationTarget("ArrowRight", "previous", true)).toBe("main-menu");
+    expect(screenNavigationTarget("ArrowLeft", "main-menu", true)).toBe("previous");
+    expect(screenNavigationTarget("ArrowLeft", "main-menu", false)).toBeNull();
+    expect(screenNavigationTarget("ArrowDown", "main-menu", true)).toBeNull();
+  });
+
   it("keeps dialog action navigation within the available choices", () => {
     expect(actionRowNavigationTarget("ArrowRight", 0, 3)).toBe(1);
     expect(actionRowNavigationTarget("ArrowDown", 1, 3)).toBe(2);
     expect(actionRowNavigationTarget("ArrowLeft", 0, 3)).toBe(0);
     expect(actionRowNavigationTarget("ArrowUp", 2, 3)).toBe(1);
     expect(actionRowNavigationTarget("Enter", 0, 3)).toBeNull();
+  });
+
+  it("keeps series details navigation reversible after selecting an episode", () => {
+    expect(detailsControlNavigationTarget("ArrowDown", 0, 3)).toBe(1);
+    expect(detailsControlNavigationTarget("ArrowDown", 1, 3)).toBe(2);
+    expect(detailsControlNavigationTarget("ArrowUp", 2, 3)).toBe(1);
+    expect(detailsControlNavigationTarget("ArrowUp", 1, 3)).toBe(0);
+    expect(detailsControlNavigationTarget("ArrowLeft", 2, 3)).toBe(1);
+    expect(detailsControlNavigationTarget("ArrowRight", 1, 3)).toBe(2);
   });
 
   it("uses Up and Down to leave editable player controls without taking text cursor keys", () => {

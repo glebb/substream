@@ -6,13 +6,6 @@ export type UiLanguage = "fi" | "en";
 
 const storageKey = "substream.ui-language";
 const dictionaries: Record<UiLanguage, Record<string, string>> = { en, fi };
-const dynamicWords = Object.keys(fi).filter((key) => /^[A-Za-z]+$/.test(key)).sort((left, right) => right.length - left.length);
-const dynamicWordPattern = new RegExp(`\\b(?:${dynamicWords.map(escapeRegExp).join("|")})\\b`, "gi");
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function loadUiLanguage(): UiLanguage {
   try { return localStorage.getItem(storageKey) === "en" ? "en" : "fi"; } catch { return "fi"; }
 }
@@ -24,6 +17,10 @@ export function saveUiLanguage(language: UiLanguage): void {
 export function translate(value: string, language: UiLanguage): string {
   const dictionary = dictionaries[language];
   if (dictionary[value] !== undefined) return dictionary[value]!;
+  const trimmed = value.trim();
+  if (trimmed && dictionary[trimmed] !== undefined) {
+    return value.slice(0, value.indexOf(trimmed)) + dictionary[trimmed]! + value.slice(value.indexOf(trimmed) + trimmed.length);
+  }
   const subtitleCount = value.match(/^(.+) subtitle matches found$/);
   if (subtitleCount) return dictionary["{{count}} subtitle matches found"]!.replace("{{count}}", subtitleCount[1]!);
   const episodeSubtitleCount = value.match(/^(.+) possible episode subtitles found$/);
@@ -66,7 +63,44 @@ export function translate(value: string, language: UiLanguage): string {
   const relayGap = value.match(/^Relay queue gap: commands through sequence (\d+) expired; replay resumed at (\d+)\.$/);
   if (relayGap) return `Välitysjono katkesi: komennot järjestysnumeroon ${relayGap[1]} asti vanhenivat; toisto jatkuu numerosta ${relayGap[2]}.`;
 
-  return value.replace(dynamicWordPattern, (word) => dictionary[word] ?? dictionary[word.toLocaleLowerCase()] ?? dictionary[word.charAt(0).toLocaleUpperCase() + word.slice(1).toLocaleLowerCase()] ?? word);
+  // Only known UI messages are translated. Unknown text may be provider content.
+  const seasonEpisode = value.match(/^(Season|Episode) (\d+)(, )?$/);
+  if (seasonEpisode) return `${seasonEpisode[1] === "Season" ? "Kausi" : "Jakso"} ${seasonEpisode[2]}${seasonEpisode[3] ?? ""}`;
+  const audio = value.match(/^Audio: (.+)$/);
+  if (audio) return `Ääni: ${audio[1]}`;
+  const subtitles = value.match(/^Subtitles: (On|Off|Finnish|English)( · Timing test)?$/);
+  if (subtitles) return `Tekstitykset: ${translate(subtitles[1]!, language)}${subtitles[2] ? " · Ajoitustesti" : ""}`;
+  const aspect = value.match(/^Aspect: (Auto|Fit|Fill)$/);
+  if (aspect) return `Kuvasuhde: ${translate(aspect[1]!, language)}`;
+  const removeHistory = value.match(/^Remove (.+) from Continue watching$/);
+  if (removeHistory) return `Poista ${removeHistory[1]} Jatka katselua -listalta`;
+  const favouriteAction = value.match(/^(Add|Remove) (.+) (to|from) favourites$/);
+  if (favouriteAction) return `${favouriteAction[1] === "Add" ? "Lisää" : "Poista"} ${favouriteAction[2]} ${favouriteAction[1] === "Add" ? "suosikkeihin" : "suosikeista"}`;
+  const watched = value.match(/^Watched (.+) of (.+)$/);
+  if (watched) return `Katsottu ${watched[1]} / ${watched[2]}`;
+  const nextProgramme = value.match(/^Next: (.+)$/);
+  if (nextProgramme) return `Seuraavaksi: ${nextProgramme[1]}`;
+  const remainingTime = value.match(/^(\d{2}:\d{2}–\d{2}:\d{2}) · (\d+) min left$/);
+  if (remainingTime) return `${remainingTime[1]} · ${remainingTime[2]} min jäljellä`;
+  const programmeProgress = value.match(/^(\d+)% of (.+)$/);
+  if (programmeProgress) return `${programmeProgress[1]} % ohjelmasta ${programmeProgress[2]}`;
+  const loadingGroup = value.match(/^Loading (.+) from the provider…$/);
+  if (loadingGroup) return `Ladataan ${loadingGroup[1]} palveluntarjoajalta…`;
+  const subtitleEnabled = value.match(/^Subtitle enabled: (.+)$/);
+  if (subtitleEnabled) return `Tekstitys käytössä: ${subtitleEnabled[1]}`;
+  const bestSubtitle = value.match(/^Best match found. Loading (.+) subtitles…$/);
+  if (bestSubtitle) return `Paras vastaavuus löytyi. Ladataan ${bestSubtitle[1]}-tekstitystä…`;
+  const providerCategories = value.match(/^(.+) provider categories ready$/);
+  if (providerCategories) return `${providerCategories[1]} palveluntarjoajan kategoriaa valmiina`;
+  const importProgress = value.match(/^(.+) entries scanned · (.+) VOD items saved$/);
+  if (importProgress) return `${importProgress[1]} merkintää luettu · ${importProgress[2]} videonimikettä tallennettu`;
+  const importComplete = value.match(/^(.+) VOD items imported$/);
+  if (importComplete) return `${importComplete[1]} videonimikettä tuotu`;
+  const updatingCatalogue = value.match(/^Updating saved catalogue… (.+) titles processed\. Large libraries can take a few minutes; keep this page open\.$/);
+  if (updatingCatalogue) return `Päivitetään tallennettua luetteloa… ${updatingCatalogue[1]} nimikettä käsitelty. Suuren kirjaston käsittely voi kestää muutaman minuutin. Pidä sivu avoinna.`;
+  const pairedBrowser = value.match(/^Browser paired with (.+)\. You can choose it as the playback target\.$/);
+  if (pairedBrowser) return `Selain pariliitetty TV:hen ${pairedBrowser[1]}. Voit valita sen toistokohteeksi.`;
+  return value;
 }
 
 function localizeNode(node: ReactNode, language: UiLanguage): ReactNode {

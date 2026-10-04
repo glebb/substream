@@ -29,4 +29,26 @@ describe("TmdbClient", () => {
     let count = 0; const client = new TmdbClient({ apiKey: "key" }, async (url) => { count++; return response(url.includes("en-US") ? { id: 3, title: "Movie", overview: "English synopsis", genres: [{ name: "Drama" }], runtime: 90, vote_average: 8 } : { id: 3, title: "Elokuva", overview: "" }); });
     const metadata = await client.getMetadata(3, "movie"); expect(count).toBe(2); expect(metadata.overview).toBe("English synopsis"); expect(metadata.genres).toEqual(["Drama"]);
   });
+  it("includes bounded, ordered movie cast and production details in the detail request", async () => {
+    const client = new TmdbClient({ apiKey: "synthetic" }, async (url) => {
+      expect(new URL(url).searchParams.get("append_to_response")).toBe("credits");
+      return response({ title: "Example", overview: "A story", tagline: "An adventure", spoken_languages: [{ english_name: "Finnish" }],
+        production_countries: [{ name: "Finland" }], production_companies: [{ name: "Example Studio" }],
+        credits: { cast: [null, { name: "" }, ...Array.from({ length: 8 }, (_, i) => ({ name: `Actor ${i}`, character: `Role ${i}`, order: 7 - i }))],
+          crew: [{ name: "Director A", job: "Director" }, { name: "Writer A", job: "Screenplay" }, { name: "Writer A", job: "Story" }, { name: "Editor A", job: "Editor" }] } });
+    });
+    const metadata = await client.getMetadata(7, "movie");
+    expect(metadata.cast).toHaveLength(6);
+    expect(metadata.cast?.[0]).toEqual({ name: "Actor 7", character: "Role 7" });
+    expect(metadata).toMatchObject({ detailsVersion: 1, directors: ["Director A"], writers: ["Writer A"], spokenLanguages: ["Finnish"], countries: ["Finland"], studios: ["Example Studio"], tagline: "An adventure" });
+  });
+  it("uses all-season series credits and handles missing or malformed optional fields", async () => {
+    const client = new TmdbClient({ apiKey: "synthetic" }, async (url) => {
+      expect(new URL(url).searchParams.get("append_to_response")).toBe("aggregate_credits");
+      return response({ name: "Example series", overview: "A story", created_by: [null, { name: "Creator A" }], networks: [{ name: "Network A" }],
+        number_of_seasons: 3, number_of_episodes: 24, status: "Ended", production_countries: "invalid",
+        aggregate_credits: { cast: [{ name: "Actor A", roles: [{ character: "Character A" }] }], crew: null } });
+    });
+    expect(await client.getMetadata(8, "tv")).toMatchObject({ cast: [{ name: "Actor A", character: "Character A" }], creators: ["Creator A"], networks: ["Network A"], seasonCount: 3, episodeCount: 24, status: "Ended", countries: [], directors: [], writers: [] });
+  });
 });

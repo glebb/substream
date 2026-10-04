@@ -11,6 +11,8 @@ html, body { background: #080a10; color: #f4f7ff; font-family: Arial, Helvetica,
 body { margin: 0; overflow-x: hidden; }
 .header-actions { display: flex; }
 .header-actions > * + * { margin-left: .65rem; }
+.screen-navigation { flex: 0 0 auto; margin-left: auto; }
+.screen-navigation button { white-space: nowrap; }
 .app-home { background: linear-gradient(rgba(4, 10, 25, .18), rgba(4, 10, 25, .25)), url('../../public/branding/substream-splash.png') center/cover no-repeat; min-height: 100vh; position: relative; }
 .vod-route { min-height: 100vh; position: relative; }
 .shell-home-button { position: fixed; right: 1rem; top: 1rem; z-index: 19; }
@@ -18,6 +20,9 @@ body { margin: 0; overflow-x: hidden; }
 .home-brand img { border-radius: 18%; box-shadow: 0 14px 46px rgba(0, 0, 0, .48); height: 126px; margin-bottom: 24px; width: 126px; }
 .home-brand strong { font-size: 46px; font-weight: 700; letter-spacing: .02em; }
 .home-content { bottom: 8vh; left: 0; position: absolute; right: 0; z-index: 1; }
+.route-transition { align-items: center; display: flex; justify-content: center; }
+.route-transition-content { box-sizing: border-box; max-width: 42rem; padding: 2rem; text-align: center; width: 100%; }
+.route-transition-content p { margin: 0 0 1.5rem; }
 .home-cards { display: flex; justify-content: center; margin: 0 auto; padding: 0 2rem; }
 .home-cards > * + * { margin-left: 1.4rem; }
 .home-card { align-items: center; background: rgba(17,23,34,.94); border: 2px solid #6d839f; color: #f4f7ff; display: flex; justify-content: center; min-height: 5.25rem; padding: 1rem 2.5rem; text-align: center; width: 19rem; }
@@ -298,7 +303,7 @@ button:disabled { cursor: default; opacity: .45; }
 .screen.tv-title-screen > .app-header { flex: 0 0 auto; }
 .screen.tv-title-screen > section { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
 .screen.tv-title-screen .catalogue-heading, .screen.tv-title-screen .tv-title-list-hint, .screen.tv-title-screen .pagination { flex: 0 0 auto; }
-.screen.tv-title-screen .tv-title-list-viewport { height: auto; max-height: 650px; min-height: 0; }
+.screen.tv-title-screen .tv-title-list-viewport { height: auto; max-height: none; min-height: 0; }
 .tv-title-list-viewport .title-grid.tv-title-list { display: block; margin: 0; }
 .tv-title-list-viewport .title-grid.tv-title-list > .tile { flex: 0 0 auto; margin: 0 0 8px; width: 100%; }
 .tv-title-list-viewport .title-grid.tv-title-list > .tile:last-child { margin-bottom: 14px; }
@@ -436,6 +441,34 @@ button:disabled { cursor: default; opacity: .45; }
 /* TV and Chromium 47 preview: use static values and the flex fallback. */
 .screen.tv-ui { padding: 22px 36px; }
 
+/* Every bounded TV list uses the space remaining after its surrounding
+ * controls. Flex and explicit padding work on the Chromium 47 baseline. */
+.screen.tv-fixed-list-screen {
+  display: flex; flex-direction: column; height: 100vh; min-height: 0;
+  overflow: hidden;
+}
+.tv-fixed-list-screen > .app-header, .tv-fixed-list-screen > .hint { flex: 0 0 auto; }
+.tv-fixed-list-screen > section { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.tv-fixed-list-screen .browse-tabs, .tv-fixed-list-screen .collection-heading,
+.tv-fixed-list-screen .catalogue-heading, .tv-fixed-list-screen .pagination,
+.tv-fixed-list-screen .tv-title-list-hint, .tv-fixed-list-screen .browse-status { flex: 0 0 auto; }
+.tv-fixed-list-screen .fixed-list-viewport {
+  flex: 1 1 auto; height: auto; max-height: none; min-height: 0;
+  overflow-x: hidden; overflow-y: auto; padding: 16px;
+}
+.tv-fixed-list-screen .live-list { margin: 0 -16px; }
+.tv-fixed-list-screen .groups.group-grid.fixed-list-viewport { align-content: flex-start; margin: 0 -16px; }
+.tv-fixed-list-screen .fixed-list-item { flex-shrink: 0; }
+.tv-fixed-list-screen .live-row strong { font-size: 20px; }
+.app-header > div:first-child { min-width: 0; }
+.screen-navigation { justify-content: flex-end; }
+.live-relay-settings label > textarea {
+  background: #151d2b; border: 1px solid #273349; border-radius: .55rem;
+  color: #f4f7ff; display: block; font: inherit; margin-top: 9px;
+  max-width: 100%; padding: .85rem 1rem; width: 100%;
+}
+.live-relay-settings label > textarea:focus { box-shadow: 0 0 0 3px #080a10, 0 0 0 7px #ffd54a; outline: 0; }
+
 /* Browse artwork stays a fixed, quiet column so titles line up whether TMDb
  * supplied a poster or the cache deliberately recorded no artwork. */
 .title-card { align-items: center; display: flex; flex-direction: row; justify-content: flex-start; min-height: 154px; }
@@ -553,6 +586,53 @@ button:disabled { cursor: default; opacity: .45; }
 .details-episode-picker select { display: block; margin-top: 10px; max-width: 100%; }
 .details-copy > .remote-editable-trigger { margin-top: 12px; }
 .details-actions { margin-bottom: 24px; }
+
+/* Detail metadata uses flex and explicit margins on the Chromium 47 baseline. */
+.details-copy { flex: 1 1 auto; min-width: 0; }
+.details-section-heading { color: #82b7ff; font-size: .85rem; letter-spacing: .08em; margin: 16px 0 8px; text-transform: uppercase; }
+.details-copy > .details-tagline { color: #b8c4d7; font-style: italic; line-height: 1.4; margin-bottom: 12px; }
+.details-copy > .details-synopsis { line-height: 1.45; margin-bottom: 12px; }
+.details-extra-sections { border-top: 1px solid #273349; display: flex; margin-bottom: 16px; }
+.details-cast { flex: 1 1 52%; min-width: 0; }
+.details-production { flex: 1 1 48%; min-width: 0; }
+.details-cast + .details-production { margin-left: 24px; }
+.details-cast-list, .details-production-list { display: flex; flex-wrap: wrap; list-style: none; margin: 0 -8px; padding: 0; }
+.details-cast-list > li, .details-production-list > div { box-sizing: border-box; flex: 0 0 50%; margin-bottom: 12px; min-width: 0; padding: 0 8px; width: 50%; }
+.details-cast-list strong, .details-cast-list span, .details-production-list dt, .details-production-list dd { display: block; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.details-cast-list strong, .details-production-list dd { font-size: .95rem; }
+.details-cast-list span, .details-production-list dt { color: #b8c4d7; font-size: .8rem; }
+.details-production-list dd { margin: 3px 0 0; }
+.details-cast-list span { margin-top: 3px; }
+.tv-ui .details-copy h2 { font-size: 32px; line-height: 1.15; }
+.tv-ui .details-layout > .details-poster { flex-basis: 210px; min-height: 310px; }
+.tv-ui .details-copy > .details-synopsis { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.tv-ui .details-copy > .details-tagline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-ui .details-copy > p { margin-bottom: 6px; }
+.tv-ui .details-copy > .remote-editable-trigger { margin-top: 8px; }
+.tv-ui .details-section-heading { margin-top: 8px; margin-bottom: 6px; }
+.tv-ui .details-actions { margin-bottom: 12px; }
+.tv-ui .details-actions > button { margin-bottom: 0; }
+.tv-ui .details-extra-sections { margin-bottom: 8px; }
+.tv-ui .details-cast-list > li, .tv-ui .details-production-list > div { margin-bottom: 8px; }
+.tv-ui .details-resume { padding: 6px 10px; }
+.tv-ui .details-copy h2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+@media (max-height: 800px) and (min-width: 801px) {
+  .screen.tv-ui { padding-top: 16px; padding-bottom: 16px; }
+  .tv-ui .title-details { padding: 16px; }
+  .tv-ui .details-copy h2 { font-size: 28px; }
+  .tv-ui .details-copy > .details-synopsis { -webkit-line-clamp: 2; }
+  .tv-ui .details-copy > p { margin-bottom: 4px; }
+  .tv-ui .details-resume { line-height: 1.2; padding: 4px 8px; }
+}
+@media (max-width: 800px) {
+  .details-extra-sections { display: block; }
+  .details-cast + .details-production { margin-left: 0; }
+  .details-copy { display: block; }
+}
+@media (max-width: 519px) {
+  .details-layout > .details-poster { float: none; margin: 0 0 16px; min-height: 0; width: 110px; }
+  .details-copy h2 { font-size: 1.8rem; }
+}
 .player-controls { padding: 16px; }
 /* Leave room for remote focus rings, including when controls wrap. Keep
  * these selectors stronger than the search-label margin reset above. */

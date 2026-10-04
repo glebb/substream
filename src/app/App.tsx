@@ -12,7 +12,14 @@ type AppRoute = "home" | "live" | "vod" | "settings" | "local";
 
 function RouteLoading({ onBack }: { onBack(): void }) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const [showControls, setShowControls] = useState(false);
   const { language } = useContext(LanguageContext);
+  // Fast chunk loads should leave only the splash background, without a flash
+  // of temporary navigation. Keep Back available even before controls appear.
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setShowControls(true), 300);
+    return () => window.clearTimeout(timeout);
+  }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isBackKey(event)) return;
@@ -20,12 +27,18 @@ function RouteLoading({ onBack }: { onBack(): void }) {
       onBack();
     };
     window.addEventListener("keydown", onKeyDown);
-    window.requestAnimationFrame(() => buttonRef.current?.focus());
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onBack]);
-  return <Localized language={language}><main className="app-home"><section className="home-content" aria-live="polite">
-    <p>Opening catalogue…</p>
-    <button type="button" ref={buttonRef} onClick={onBack}>Back to main menu</button>
+  useEffect(() => {
+    if (!showControls) return;
+    const frame = window.requestAnimationFrame(() => buttonRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [showControls]);
+  return <Localized language={language}><main className="app-home route-transition" aria-busy="true"><section className="route-transition-content" aria-live="polite">
+    {showControls && <>
+      <p>Opening catalogue…</p>
+      <button type="button" ref={buttonRef} onClick={onBack}>Back to main menu</button>
+    </>}
   </section></main></Localized>;
 }
 
@@ -42,7 +55,7 @@ function RouteFailure({ onBack }: { onBack(): void }) {
     window.requestAnimationFrame(() => buttonRef.current?.focus());
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onBack]);
-  return <Localized language={language}><main className="app-home"><section className="home-content" role="alert">
+  return <Localized language={language}><main className="app-home route-transition"><section className="route-transition-content" role="alert">
     <p>Could not open this screen. Please try again.</p>
     <button type="button" ref={buttonRef} onClick={onBack}>Back to main menu</button>
   </section></main></Localized>;

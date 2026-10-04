@@ -8,6 +8,19 @@ export type TmdbMetadata = {
   mediaType: TmdbMediaType;
   title: string;
   originalTitle?: string;
+  detailsVersion?: 1;
+  tagline?: string;
+  cast?: Array<{ name: string; character: string }>;
+  directors?: string[];
+  writers?: string[];
+  creators?: string[];
+  spokenLanguages?: string[];
+  countries?: string[];
+  studios?: string[];
+  networks?: string[];
+  status?: string;
+  seasonCount?: number | null;
+  episodeCount?: number | null;
   overview: string;
   year: number | null;
   genres: string[];
@@ -32,6 +45,11 @@ const year = (value: unknown): number | null => { const match = text(value).matc
 const image = (path: unknown): string | null => text(path) ? IMAGE_BASE_URL + text(path) : null;
 const titleOf = (item: Raw): string => text(item.title) || text(item.name) || text(item.original_title) || text(item.original_name);
 const originalTitleOf = (item: Raw): string => text(item.original_title) || text(item.original_name) || titleOf(item);
+
+const records = (value: unknown): Raw[] => Array.isArray(value)
+  ? value.filter((entry): entry is Raw => !!entry && typeof entry === "object" && !Array.isArray(entry)) : [];
+const names = (value: unknown): string[] => [...new Set(records(value).map((entry) => text(entry.name)).filter(Boolean))];
+const positiveCount = (value: unknown): number | null => { const count = number(value); return count !== null && Number.isInteger(count) && count > 0 ? count : null; };
 
 function normalize(value: string): string { return value.toLocaleLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim(); }
 function candidateFrom(item: Raw, mediaType: TmdbMediaType, query: string): TmdbCandidate | null {
@@ -83,12 +101,27 @@ export class TmdbClient {
     return [...bestById.values()].sort((a, b) => b.score - a.score || a.id - b.id);
   }
   async getMetadata(id: number, mediaType: TmdbMediaType): Promise<TmdbMetadata> {
-    const localized = await this.get("/" + mediaType + "/" + encodeURIComponent(String(id)), { language: "fi-FI" });
+    const append = mediaType === "tv" ? "aggregate_credits" : "credits";
+    const localized = await this.get("/" + mediaType + "/" + encodeURIComponent(String(id)), { language: "fi-FI", append_to_response: append });
     const localizedTitle = titleOf(localized); const localizedOverview = text(localized.overview);
-    const fallback = !localizedTitle || !localizedOverview ? await this.get("/" + mediaType + "/" + encodeURIComponent(String(id)), { language: "en-US" }) : null;
+    const fallback = !localizedTitle || !localizedOverview ? await this.get("/" + mediaType + "/" + encodeURIComponent(String(id)), { language: "en-US", append_to_response: append }) : null;
     const item = fallback ? { ...fallback, ...localized, overview: localizedOverview || text(fallback.overview), title: localizedTitle || titleOf(fallback), name: localizedTitle || titleOf(fallback) } : localized;
     const rawGenres = Array.isArray(item.genres) ? item.genres : [];
-    return { id, mediaType, title: titleOf(item), originalTitle: originalTitleOf(item), overview: text(item.overview), year: year(item.release_date ?? item.first_air_date), genres: rawGenres.flatMap((genre) => genre && typeof genre === "object" && text((genre as Raw).name) ? [text((genre as Raw).name)] : []), runtime: number(item.runtime) ?? (Array.isArray(item.episode_run_time) ? number(item.episode_run_time[0]) : null), rating: number(item.vote_average), posterUrl: image(item.poster_path), backdropUrl: image(item.backdrop_path), language: localizedOverview || localizedTitle ? "fi-FI" : "en-US" };
+    const creditsValue = item[append];
+    const credits = creditsValue && typeof creditsValue === "object" ? creditsValue as Raw : {};
+    const cast = records(credits.cast).sort((a, b) => (number(a.order) ?? 9999) - (number(b.order) ?? 9999))
+      .filter((actor, index, actors) => text(actor.name) && actors.findIndex((other) => text(other.name) === text(actor.name)) === index)
+      .slice(0, 6).map((actor) => ({ name: text(actor.name), character: text(actor.character) || text(records(actor.roles)[0]?.character) }));
+    const crew = records(credits.crew);
+    return { detailsVersion: 1, tagline: text(item.tagline) || text(fallback?.tagline), cast,
+      directors: names(crew.filter((person) => text(person.job) === "Director")),
+      writers: names(crew.filter((person) => ["Screenplay", "Writer", "Story"].includes(text(person.job)))),
+      creators: mediaType === "tv" ? names(item.created_by) : [],
+      spokenLanguages: [...new Set(records(item.spoken_languages).map((entry) => text(entry.english_name) || text(entry.name)).filter(Boolean))],
+      countries: names(item.production_countries), studios: names(item.production_companies), networks: names(item.networks),
+      status: text(item.status), seasonCount: mediaType === "tv" ? positiveCount(item.number_of_seasons) : null,
+      episodeCount: mediaType === "tv" ? positiveCount(item.number_of_episodes) : null,
+      id, mediaType, title: titleOf(item), originalTitle: originalTitleOf(item), overview: text(item.overview), year: year(item.release_date ?? item.first_air_date), genres: rawGenres.flatMap((genre) => genre && typeof genre === "object" && text((genre as Raw).name) ? [text((genre as Raw).name)] : []), runtime: number(item.runtime) ?? (Array.isArray(item.episode_run_time) ? number(item.episode_run_time[0]) : null), rating: number(item.vote_average), posterUrl: image(item.poster_path), backdropUrl: image(item.backdrop_path), language: localizedOverview || localizedTitle ? "fi-FI" : "en-US" };
   }
   async resolve(query: string, mediaType: TmdbMediaType, yearHint?: number | null): Promise<{ kind: "match"; candidate: TmdbCandidate } | { kind: "ambiguous"; candidates: TmdbCandidate[] } | { kind: "none" }> {
     const candidates = (await this.search(query, mediaType, yearHint)).filter((item) => !yearHint || item.year === yearHint || item.year === null);

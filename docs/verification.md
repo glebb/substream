@@ -27,7 +27,8 @@ Start Docker Desktop, then use `npm run preview:chromium47` for a standard previ
    playback, subtitle replacement/on-off/offset, TV staging/preparation progress and cancellation,
    automatic preferred-language subtitles for a release-style episode filename,
    seek/restart, remote stop, and ended-session restart with generated media.
-3. Check visible focus, poster/fallback alignment, loading/empty/error states, and focus restoration. The TV title list should be one bounded column with fixed surrounding controls.
+3. Check visible focus, poster/fallback alignment, loading/empty/error states, and focus restoration. TV category and title lists should fill a bounded viewport with fixed surrounding controls. Check larger short-list rows, four-column title cards, and three-column category cards at 1280px. Settings must start on TV connection; arrows focus editor triggers and OK opens the editor.
+   In both TV preview and ordinary browser mode, navigate title → Sort/Refresh → previous action → Main menu using Up/Right, then return with Down. Confirm Sort opens only on OK, Back cancels, and refreshing Latest preserves header focus. Test two fresh Up presses without an intervening keyup.
 4. Check 1280×720 and 1920×1080. Chromium 47 needs static-color/flexbox fallbacks and margin/padding spacing; flex `gap` cannot be the only spacing rule.
 5. Exercise the changed behavior, then stop and remove the temporary build with `npm run preview:chromium47 -- stop`.
 
