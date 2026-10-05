@@ -3540,7 +3540,13 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         </div>
         {playbackProgress && (!playerFullscreen || playbackStatus === "Paused" || isSkipFeedbackVisible) && <div className="playback-progress" aria-label="Playback progress">
           <span>{formatPlaybackTime(playbackProgress.currentTimeSeconds)}</span>
-          <progress max={playbackProgress.durationSeconds} value={Math.min(playbackProgress.currentTimeSeconds, playbackProgress.durationSeconds)} aria-label="Video progress" />
+          <progress max={playbackProgress.durationSeconds} value={Math.min(playbackProgress.currentTimeSeconds, playbackProgress.durationSeconds)} aria-label="Video progress" onClick={isTvProfile ? undefined : (event) => {
+            const { left, width } = event.currentTarget.getBoundingClientRect();
+            const duration = playbackProgress.durationSeconds;
+            if (width <= 0 || !Number.isFinite(duration) || duration <= 0) return;
+            const position = Math.max(0, Math.min(1, (event.clientX - left) / width));
+            skipVideo(position * duration - playbackProgress.currentTimeSeconds);
+          }} />
           <span>{formatPlaybackTime(playbackProgress.durationSeconds)}</span>
         </div>}
         <div className="player-controls" aria-label="Playback controls">
