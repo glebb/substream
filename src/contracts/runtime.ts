@@ -3,7 +3,7 @@ import type { PlaybackReleaseBarrier } from "../application/playback-release-bar
 import type { CatalogueRepositoryFactory, PreferencesRepository, TransportRepository } from "./repository.ts";
 
 export type RuntimePlatform = "browser" | "tizen";
-export type InteractionProfile = "desktop" | "tv";
+export type InteractionProfile = "desktop" | "touch" | "tv";
 
 export interface RuntimeCapabilities {
   nativeVideoSurface: boolean;

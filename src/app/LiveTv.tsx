@@ -1,3 +1,4 @@
+import { requestPlayerFullscreen, exitBrowserFullscreen, releasePlayerOrientation } from "../platform/browser/fullscreen.ts";
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
@@ -98,6 +99,7 @@ const LiveChannelRow = memo(function LiveChannelRow({ channel, index, focused, g
 
 export function LiveTv({ onMainMenu }: Props) {
   const runtime = useRuntime();
+  const isTouchProfile = runtime.interactionProfile === "touch";
   const companion = useCompanion();
   const safeGuideCache = (key: string) => readGuideCache(runtime.preferences, key);
   const safeDnaGuideCache = (key: string, now: number) => readDnaGuideCache(runtime.preferences, key, now);
@@ -150,6 +152,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const [relayDiagnostics, setRelayDiagnostics] = useState("");
     const subtitleSelectionManualRef = useRef(false);
   const [showLiveHint, setShowLiveHint] = useState(false);
+  const [showTouchControls, setShowTouchControls] = useState(false);
   const liveHintTimerRef = useRef<number | null>(null);
   const audioSelectionManualRef = useRef(false);
   const [retryCount, setRetryCount] = useState(0);
@@ -165,7 +168,8 @@ export function LiveTv({ onMainMenu }: Props) {
   const mainMenuRef = useRef<HTMLButtonElement | null>(null);
   const categoriesButtonRef = useRef<HTMLButtonElement | null>(null);
   const emptyRefreshRef = useRef<HTMLButtonElement | null>(null);
-  const focusListItem = (element: HTMLButtonElement | null) => {
+  const focusListItem = (element: HTMLButtonElement | null, keyboard = false) => {
+    if (isTouchProfile && !keyboard) return;
     if (runtime.interactionProfile === "tv") focusTitleListItem(element, listViewportRef.current);
     else element?.focus();
   };
@@ -242,6 +246,13 @@ export function LiveTv({ onMainMenu }: Props) {
     }
   }
   const isTvProfile = runtime.interactionProfile === "tv";
+  useEffect(() => {
+    if (!selected || isTvProfile) return;
+    return () => {
+      releasePlayerOrientation();
+      if (document.fullscreenElement === document.documentElement) void exitBrowserFullscreen(document);
+    };
+  }, [Boolean(selected), isTvProfile]);
 
   const hideLiveHint = () => {
     if (liveHintTimerRef.current !== null) window.clearTimeout(liveHintTimerRef.current);
@@ -652,7 +663,7 @@ export function LiveTv({ onMainMenu }: Props) {
     const startupTimer = window.setTimeout(() => {
       const video = videoRef.current;
       const playbackIsAdvancing = !!video && !video.paused && video.readyState >= 2 && video.currentTime > 0;
-      if (playbackIsAdvancing || playbackStateRef.current === "error") return;
+      if (playbackIsAdvancing || playbackStateRef.current === "error" || playbackStateRef.current === "paused") return;
       // Stop hls.js before a malformed or continuously busy transport stream
       // can monopolize Chromium's renderer. Retry starts another bounded attempt.
       const player = playerRef.current;
@@ -680,6 +691,7 @@ export function LiveTv({ onMainMenu }: Props) {
     const syncFullscreen = () => {
       const isFullscreen = document.fullscreenElement === document.documentElement;
       setPlayerFullscreen(isFullscreen);
+      if (!isFullscreen) releasePlayerOrientation();
       if (!isFullscreen && selected && !requestedFullscreenExitRef.current) {
         const index = Math.max(0, channels.findIndex((channel) => channel.id === selected.id));
         setSelected(null);
@@ -703,7 +715,8 @@ export function LiveTv({ onMainMenu }: Props) {
     showLiveHintBriefly();
     setLiveBufferWindow(null);
     setPlayerFullscreen(true);
-    if (!isTvProfile && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
+    setShowTouchControls(false);
+    if (!isTvProfile && !document.fullscreenElement) void requestPlayerFullscreen(document.documentElement);
     setSelected(channel);
     window.requestAnimationFrame(() => playerStageRef.current?.focus());
   };
@@ -717,11 +730,12 @@ export function LiveTv({ onMainMenu }: Props) {
     if (next) tune(next);
   };
   const exitFullscreen = () => {
+    releasePlayerOrientation();
     setPlayerFullscreen(false);
     hideLiveHint();
     if (!isTvProfile && document.fullscreenElement) {
       requestedFullscreenExitRef.current = true;
-      void document.exitFullscreen().catch(() => { requestedFullscreenExitRef.current = false; });
+      void exitBrowserFullscreen(document).then((exited) => { if (!exited) requestedFullscreenExitRef.current = false; });
     }
   };
   const toggleFullscreen = () => {
@@ -729,11 +743,12 @@ export function LiveTv({ onMainMenu }: Props) {
     else {
       setPlayerFullscreen(true);
       showLiveHintBriefly();
-      if (!isTvProfile && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
+      if (!isTvProfile && !document.fullscreenElement) void requestPlayerFullscreen(document.documentElement);
       window.requestAnimationFrame(() => playerStageRef.current?.focus());
     }
   };
   const showControls = () => {
+    if (!isTvProfile) { setShowTouchControls(true); return; }
     exitFullscreen();
     window.requestAnimationFrame(() => playerControlRefs.current[7]?.focus());
   };
@@ -840,7 +855,7 @@ export function LiveTv({ onMainMenu }: Props) {
       if (activeHeaderIndex >= 0) {
         if (key === "ArrowDown") {
           event.preventDefault();
-          if (itemCount > 0) focusListItem(refs.current[currentIndex] ?? null);
+          if (itemCount > 0) focusListItem(refs.current[currentIndex] ?? null, true);
           else if (emptyRefreshRef.current) emptyRefreshRef.current.focus();
           else if (selectedCategory) headerButtons[activeHeaderIndex === 0 ? 1 : 0]?.focus();
           else mainMenuRef.current?.focus();
@@ -868,7 +883,7 @@ export function LiveTv({ onMainMenu }: Props) {
         }
         const next = Math.max(0, Math.min(itemCount - 1, currentIndex + (key === "ArrowUp" ? -1 : 1)));
         selectedCategory ? setFocusIndex(next) : setCategoryFocusIndex(next);
-        focusListItem(refs.current[next] ?? null);
+        focusListItem(refs.current[next] ?? null, true);
         if (runtime.interactionProfile !== "tv") refs.current[next]?.scrollIntoView({ block: "nearest" });
       } else if (key === "ArrowLeft" || key === "ArrowRight") {
         event.preventDefault();
@@ -886,18 +901,19 @@ export function LiveTv({ onMainMenu }: Props) {
     const behindLiveSeconds = liveBufferWindow ? Math.max(0, liveBufferWindow.endSeconds - liveBufferWindow.currentSeconds) : 0;
     const hasLiveBuffer = !!liveBufferWindow && liveBufferWindow.endSeconds - liveBufferWindow.startSeconds >= 2;
     const atLiveEdge = behindLiveSeconds < 3;
-    return <Localized language={language}><main className={`screen player-screen live-player-screen ${playerFullscreen ? "is-fullscreen" : ""}`}>
-    <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span></header>
-    <div className="player-stage" ref={playerStageRef} tabIndex={-1} onClick={() => { if (playerFullscreen) showControls(); }}>
+    return <Localized language={language}><main className={`screen player-screen live-player-screen ${playerFullscreen ? "is-fullscreen" : ""} ${!isTvProfile && showTouchControls ? "has-visible-controls" : ""}`}>
+    <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span>{!isTvProfile && <button type="button" onClick={leavePlayer}>Back to channels</button>}</header>
+    <div className="player-stage" ref={playerStageRef} tabIndex={-1} onClick={() => { if (!isTvProfile && playerFullscreen) setShowTouchControls((visible) => !visible); else if (playerFullscreen) showControls(); }}>
       {runtime.capabilities.nativeVideoSurface ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
       {playbackState === "loading" || (playbackState === "buffering" && !hasStartedPlayback) ? <div className="buffering-overlay">Connecting…</div> : null}
+      {playbackState === "paused" && !isTvProfile && <div className="playback-error-overlay"><button type="button" onClick={(event) => { event.stopPropagation(); playerRef.current?.play(); }}>Play</button></div>}
       {playbackState === "error" && <div className="playback-error-overlay"><strong>{relayFailureMessage ? "Channel connection failed" : "Channel unavailable"}</strong><span>{relayFailureMessage || "The stream could not be played on this device."}</span></div>}
-      {playerFullscreen && showLiveHint && playbackState !== "error" && <span className="live-controls-hint">Press OK or Enter for controls</span>}
+      {playerFullscreen && isTvProfile && showLiveHint && playbackState !== "error" && <span className="live-controls-hint">Press OK or Enter for controls</span>}
     </div>
     <div className="player-controls live-controls">
       <button type="button" disabled={selectedIndex <= 0} onClick={() => changeChannel(-1)} ref={(element) => { playerControlRefs.current[0] = element; }}>Previous channel</button>
       <button type="button" disabled={selectedIndex >= channels.length - 1} onClick={() => changeChannel(1)} ref={(element) => { playerControlRefs.current[1] = element; }}>Next channel</button>
-      <button type="button" onClick={toggleFullscreen} ref={(element) => { playerControlRefs.current[2] = element; }}>{playerFullscreen ? "Exit full screen" : "Full screen"}</button>
+      <button type="button" onClick={() => { if (isTouchProfile && playerFullscreen) setShowTouchControls(false); else toggleFullscreen(); }} ref={(element) => { playerControlRefs.current[2] = element; }}>{isTouchProfile && playerFullscreen ? "Hide controls" : playerFullscreen ? "Exit full screen" : "Full screen"}</button>
       {playbackState === "error" && <button type="button" onClick={() => {
         setPlaybackState("loading");
         void runtime.playbackRelease.retryRelease().then(() => setRetryCount((count) => count + 1)).catch(() => { setPlaybackState("error"); setRelayFailureMessage("The previous stream could not be stopped. Wait a minute, then select Retry."); });
@@ -920,7 +936,7 @@ export function LiveTv({ onMainMenu }: Props) {
     <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV</p><h1>Finland</h1></div><ScreenNavigation onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
     <p className="hint" role="status" aria-live="polite">{status}{cacheSavedAt && Date.now() - cacheSavedAt > STALE_AFTER_MS ? " · Saved list may be out of date." : ""}</p>
     <div className="live-list fixed-list-viewport" ref={listViewportRef}>
-      {categories.map((category, index) => <button className={`live-row live-category-row fixed-list-item ${index === categoryFocusIndex ? "remote-focused" : ""}`} style={categoryRowStyle} type="button" key={category.id} ref={(element) => { categoryRefs.current[index] = element; }} onFocus={() => setCategoryFocusIndex(index)} onClick={() => void openCategory(category)}>
+      {categories.map((category, index) => <button className={`live-row live-category-row fixed-list-item ${!isTouchProfile && index === categoryFocusIndex ? "remote-focused" : ""}`} style={categoryRowStyle} type="button" key={category.id} ref={(element) => { categoryRefs.current[index] = element; }} onFocus={() => setCategoryFocusIndex(index)} onClick={() => void openCategory(category)}>
         <span className="live-category-mark" aria-hidden="true">●</span><strong>{categoryLabel(category.name)}</strong><span className="live-category-arrow" aria-hidden="true">›</span>
       </button>)}
       {!categories.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No Finnish categories</h2><p>The provider did not return any matching Finland categories.</p><button type="button" ref={emptyRefreshRef} onClick={() => void refreshCategories()}>Refresh</button></div>}
@@ -934,7 +950,7 @@ export function LiveTv({ onMainMenu }: Props) {
       {channels.map((channel, index) => {
         const guide = guideByChannel[channel.id];
         const slots = guideSlotsByChannel[channel.id] ?? { current: null, next: null };
-        return <LiveChannelRow key={channel.id} channel={channel} index={index} focused={index === focusIndex}
+        return <LiveChannelRow key={channel.id} channel={channel} index={index} focused={!isTouchProfile && index === focusIndex}
           guide={guide} guideFailed={!!guideFailures[channel.id]} current={slots.current} next={slots.next} guideNow={guideNow}
           logoFailure={logoFailures[channel.id]} language={language} rowRefs={rowRefs} focusIndexSetter={setFocusIndex} rowStyle={channelRowStyle}
           logoFailureSetter={setLogoFailures} onTune={tuneFromRow} />;

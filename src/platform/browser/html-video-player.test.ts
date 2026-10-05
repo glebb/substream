@@ -38,6 +38,25 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); isHlsSupported.mockReset().mockReturnValue(false); hlsInstances.length = 0; });
 
 describe("HtmlVideoPlayer", () => {
+  it("keeps an autoplay-blocked stream available for an explicit Play tap", async () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    vi.mocked(video.play).mockRejectedValueOnce(new DOMException("Gesture required", "NotAllowedError"));
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/movie.mp4");
+    await Promise.resolve();
+    expect(states).toContain("paused");
+    vi.advanceTimersByTime(10_000);
+    expect(states).not.toContain("error");
+    player.play();
+    dispatch("playing");
+    expect(video.play).toHaveBeenCalledTimes(2);
+    expect(states.at(-1)).toBe("playing");
+    player.destroy();
+  });
+
   it("automatically uses external subtitles when browser playback exposes no embedded tracks", async () => {
     const { video, dispatch } = fakeVideo();
     Object.defineProperty(video, "textTracks", { value: [] });

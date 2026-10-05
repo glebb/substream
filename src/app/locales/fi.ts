@@ -2,6 +2,7 @@
 import type { en } from "./en.ts";
 
 export const fi: Record<keyof typeof en, string> = {
+  "Hide controls": "Piilota ohjaimet",
   "Cast": "Näyttelijät",
   "More details": "Lisätiedot",
   "Created by": "Luojat",

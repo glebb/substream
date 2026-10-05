@@ -20,7 +20,12 @@ HTTP `/` and the portal's Google-auth, access, logout and branding routes
 redirect to HTTPS. HTTPS proxies only `GET /`, `GET /auth/google/login`,
 `GET /auth/google/callback`, `POST /access`, `POST /access/revoke`,
 `POST /logout`, and `GET /branding/substream-icon.png` to the standalone
-portal service. Other HTTPS paths return 404. Nginx replaces `X-Real-IP` and
+portal service. GET/HEAD requests to well-shaped HTTPS player landing links
+(`/<43-character-token>/`) redirect to the HTTP player gate, without query
+parameters, referrers or caching. This recovers browser HTTPS upgrades; the
+HTTP gate still validates the grant. Other HTTPS paths return 404. Strict
+HTTPS-only browser settings or inherited HSTS may still require a browser
+exception or a separate HTTP player hostname. Nginx replaces `X-Real-IP` and
 `X-Forwarded-For` with its observed `$remote_addr`; the portal must set secure,
 host-only cookies itself. No HSTS or `upgrade-insecure-requests` is configured,
 so the same hostname's HTTP player remains available.

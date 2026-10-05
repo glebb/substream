@@ -487,6 +487,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   play(): void {
+    this.armPlaybackStartTimer(this.loadGeneration);
     void this.requestPlay();
   }
 
@@ -633,8 +634,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private async requestPlay(): Promise<void> {
     try {
       await this.video.play();
-    } catch {
+    } catch (error) {
       // Autoplay restrictions require an explicit gesture; the video remains paused.
+      if (error && typeof error === "object" && "name" in error && error.name === "NotAllowedError") this.clearPlaybackStartTimer();
       this.emit(this.video.error ? "error" : "paused");
     }
   }

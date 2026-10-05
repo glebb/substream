@@ -1,5 +1,6 @@
 /** English UI messages. Keep the values aligned with the English source phrases. */
 export const en = {
+  "Hide controls": "Hide controls",
   "Cast": "Cast",
   "More details": "More details",
   "Created by": "Created by",

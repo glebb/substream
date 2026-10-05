@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { installTouchNavigationStyles } from "../platform/browser/touch-interaction.ts";
 import type { AppRuntime } from "../contracts/runtime.ts";
 import { createAppRuntime } from "../bootstrap/runtime.ts";
 
@@ -6,6 +7,9 @@ const RuntimeContext = createContext<AppRuntime | null>(null);
 
 export function RuntimeProvider({ runtime, children }: { runtime?: AppRuntime; children: ReactNode }) {
   const [resolvedRuntime] = useState(() => runtime ?? createAppRuntime());
+  useEffect(() => {
+    if (resolvedRuntime.interactionProfile === "touch") return installTouchNavigationStyles(document);
+  }, [resolvedRuntime]);
   return <RuntimeContext.Provider value={resolvedRuntime}>{children}</RuntimeContext.Provider>;
 }
 

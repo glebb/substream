@@ -28,12 +28,13 @@ export function createAppRuntime(overrides: AppRuntimeOverrides = {}): AppRuntim
   const tizen = isTizenRuntime();
   const nativeVideoSurface = isTizenAvPlayAvailable();
   const previewTvProfile = typeof __SUBSTREAM_TV_UI_PREVIEW__ !== "undefined" && __SUBSTREAM_TV_UI_PREVIEW__;
+  const touchProfile = typeof globalThis.matchMedia === "function" && globalThis.matchMedia("(pointer: coarse) and (hover: none)").matches;
   const playbackFactory = new BrowserTizenPlaybackPlayerFactory();
   const preferences = overrides.preferences ?? localPreferences;
   const subtitleCache = new EmbeddedSubtitleMetadataCache({ getItem: (key) => preferences.get(key), setItem: (key, value) => preferences.set(key, value) });
   const defaults: AppRuntime = {
     platform: tizen ? "tizen" : "browser",
-    interactionProfile: tizen || previewTvProfile ? "tv" : "desktop",
+    interactionProfile: tizen || previewTvProfile ? "tv" : touchProfile ? "touch" : "desktop",
     capabilities: {
       nativeVideoSurface,
       tvInput: tizen && Boolean((globalThis as typeof globalThis & { tizen?: { tvinputdevice?: unknown } }).tizen?.tvinputdevice),

@@ -75,6 +75,8 @@ class RouteErrorBoundary extends Component<{ onBack(): void; children: ReactNode
 export function App() {
   const companion = useCompanion();
   const runtime = useRuntime();
+  const isTouchProfile = runtime.interactionProfile === "touch";
+  const remoteFocusClass = isTouchProfile ? "" : "remote-focused";
   const { loadPlaylistUrl, savePlaylistUrl, loadUiLanguage, saveUiLanguage } = createDeviceSettings(runtime.preferences);
   const [language, setLanguageState] = useState<UiLanguage>(loadUiLanguage);
   const setLanguage = (next: UiLanguage) => { setLanguageState(next); saveUiLanguage(next); };
@@ -202,7 +204,7 @@ export function App() {
       if (isBackKey(event)) event.preventDefault();
     };
     window.addEventListener("keydown", onKeyDown);
-    window.requestAnimationFrame(() => (playlistSetupOpen ? (localHomeActionRef.current ?? playlistInputRef.current) : cardRefs.current[homeFocus])?.focus());
+    if (!isTouchProfile) window.requestAnimationFrame(() => (playlistSetupOpen ? (localHomeActionRef.current ?? playlistInputRef.current) : cardRefs.current[homeFocus])?.focus());
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [homeFocus, playlistSetupOpen, route, supportsLocalMediaPicker]);
   const backToHome = (focus: number) => { setHomeFocus(focus); setRoute("home"); };
@@ -225,10 +227,10 @@ export function App() {
         <button type="button" ref={setupSettingsRef} onClick={() => { openRoute("settings", settingsHomeIndex); setHomeFocus(settingsHomeIndex); }}>Settings and TV pairing</button>
         {playlistError && <p className="error" role="alert">{playlistError}</p>}
       </form> : <div className="home-cards">
-        <button className={`home-card ${homeFocus === 0 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[0] = element; }} onFocus={() => setHomeFocus(0)} onClick={() => openRoute("live", 0)}><strong>Live TV</strong></button>
-        <button className={`home-card ${homeFocus === 1 ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[1] = element; }} onFocus={() => setHomeFocus(1)} onClick={() => openRoute("vod", 1)}><strong>Video-On-Demand</strong></button>
-        {supportsLocalMediaPicker && <button className={`home-card ${homeFocus === localHomeIndex ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[localHomeIndex] = element; }} onFocus={() => setHomeFocus(localHomeIndex)} onClick={openLocalPicker}><strong>Open local video file</strong></button>}
-        <button className={`home-card ${homeFocus === settingsHomeIndex ? "remote-focused" : ""}`} type="button" ref={(element) => { cardRefs.current[settingsHomeIndex] = element; }} onFocus={() => setHomeFocus(settingsHomeIndex)} onClick={() => openRoute("settings", settingsHomeIndex)}><strong>Settings</strong></button>
+        <button className={`home-card ${homeFocus === 0 ? remoteFocusClass : ""}`} type="button" ref={(element) => { cardRefs.current[0] = element; }} onFocus={() => setHomeFocus(0)} onClick={() => openRoute("live", 0)}><strong>Live TV</strong></button>
+        <button className={`home-card ${homeFocus === 1 ? remoteFocusClass : ""}`} type="button" ref={(element) => { cardRefs.current[1] = element; }} onFocus={() => setHomeFocus(1)} onClick={() => openRoute("vod", 1)}><strong>Video-On-Demand</strong></button>
+        {supportsLocalMediaPicker && <button className={`home-card ${homeFocus === localHomeIndex ? remoteFocusClass : ""}`} type="button" ref={(element) => { cardRefs.current[localHomeIndex] = element; }} onFocus={() => setHomeFocus(localHomeIndex)} onClick={openLocalPicker}><strong>Open local video file</strong></button>}
+        <button className={`home-card ${homeFocus === settingsHomeIndex ? remoteFocusClass : ""}`} type="button" ref={(element) => { cardRefs.current[settingsHomeIndex] = element; }} onFocus={() => setHomeFocus(settingsHomeIndex)} onClick={() => openRoute("settings", settingsHomeIndex)}><strong>Settings</strong></button>
       </div>}
       {supportsLocalMediaPicker && <input ref={localFileInputRef} className="sr-only" type="file" accept="video/*,.mkv,.mp4,.m4v,.mov,.webm,.avi,.ts,.m2ts,.mpg,.mpeg" onChange={acceptLocalFile} aria-label="Choose a local video file" />}
     </section>

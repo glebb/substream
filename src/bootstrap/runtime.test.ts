@@ -1,7 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppRuntime } from "./runtime.ts";
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("application runtime composition", () => {
+  it("selects touch interaction from pointer capabilities without changing browser playback", () => {
+    const matchMedia = vi.fn(() => ({ matches: true }));
+    vi.stubGlobal("matchMedia", matchMedia);
+    const runtime = createAppRuntime();
+    expect(runtime.interactionProfile).toBe("touch");
+    expect(runtime.platform).toBe("browser");
+    expect(runtime.capabilities.nativeVideoSurface).toBe(false);
+    expect(matchMedia).toHaveBeenCalledWith("(pointer: coarse) and (hover: none)");
+    expect(createAppRuntime({ interactionProfile: "tv" }).interactionProfile).toBe("tv");
+  });
+
+  it("retains desktop interaction for a mouse or unavailable pointer detection", () => {
+    expect(createAppRuntime().interactionProfile).toBe("desktop");
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    expect(createAppRuntime().interactionProfile).toBe("desktop");
+  });
   it("keeps TV interaction profile independent from platform capabilities", () => {
     const runtime = createAppRuntime({
       platform: "browser",
@@ -27,7 +45,7 @@ describe("application runtime composition", () => {
     expect("app" in runtime).toBe(false);
   });
 
-  it.each(["tv", "desktop"] as const)("keeps direct guide transport independent of %s interaction", (interactionProfile) => {
+  it.each(["tv", "desktop", "touch"] as const)("keeps direct guide transport independent of %s interaction", (interactionProfile) => {
     const runtime = createAppRuntime({
       platform: "browser",
       interactionProfile,

@@ -1,3 +1,4 @@
+import { requestPlayerFullscreen, exitBrowserFullscreen, releasePlayerOrientation } from "../platform/browser/fullscreen.ts";
 import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FocusEvent, type FormEvent, type SetStateAction } from "react";
 import { importM3uChunks, normalizeTitle, type VodCatalogItem } from "../core/catalog/index.ts";
 import { DEFAULT_MAX_WHOLE_RESPONSE_BYTES, responseTextChunks, validateWholeResponseFallback, WholeResponseFallbackError } from "../platform/browser/fetch-chunks.ts";
@@ -156,6 +157,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const vodSubtitlePreferences = useMemo(() => new VodSubtitlePreferences(runtime.preferences), [runtime.preferences]);
 
   const isTvProfile = runtime.interactionProfile === "tv";
+  const isTouchProfile = runtime.interactionProfile === "touch";
+  const remoteFocusClass = isTouchProfile ? "" : "remote-focused";
+  const titleFocusClass = isTouchProfile ? "" : "focused remote-focused";
   const sectionOrder = APP_SECTION_ORDER;
   const [state, setState] = useState<ScreenState>(settingsOnOpen || localSource ? "ready" : "loading");
   const [startupStatus, setStartupStatus] = useState("Opening catalogue…");
@@ -782,12 +786,22 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   };
 
   const exitPlayerFullscreen = () => {
+    releasePlayerOrientation();
     if (isTvProfile) {
       setPlayerFullscreen(false);
       return;
     }
-    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    setPlayerFullscreen(false);
+    if (document.fullscreenElement) void exitBrowserFullscreen(document);
   };
+
+  useEffect(() => {
+    if (!selectedTitle || isTvProfile) return;
+    return () => {
+      releasePlayerOrientation();
+      if (document.fullscreenElement === document.documentElement) void exitBrowserFullscreen(document);
+    };
+  }, [Boolean(selectedTitle), isTvProfile]);
 
   const startPlayback = (title: VodCatalogItem, resumeSeconds = 0, followingEpisode: VodCatalogItem | null = null, source: "catalogue" | "local" = "catalogue") => {
     latestRequestRef.current += 1;
@@ -803,11 +817,10 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setPlayerFocusIndex(0);
     setNextEpisode(followingEpisode);
     setShowFullscreenControls(false);
-    // Tizen uses the app's viewport presentation. On the web, ask the browser
-    // for real fullscreen while this user action is still active.
-    setPlayerFullscreen(isTvProfile);
+    // Keep the viewport player available even when native fullscreen is unsupported.
+    setPlayerFullscreen(true);
     if (!isTvProfile && !document.fullscreenElement) {
-      void document.documentElement.requestFullscreen().catch(() => undefined);
+      void requestPlayerFullscreen(document.documentElement);
     }
     setVideoDisplayMode("auto");
     setPlaybackStatus("Loading…");
@@ -2561,7 +2574,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     const syncFullscreenState = () => {
       const isPlayerFullscreen = document.fullscreenElement === document.documentElement;
       setPlayerFullscreen(isPlayerFullscreen);
-      if (!isPlayerFullscreen) setShowFullscreenControls(false);
+      if (!isPlayerFullscreen) { releasePlayerOrientation(); setShowFullscreenControls(false); }
     };
     document.addEventListener("fullscreenchange", syncFullscreenState);
     return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
@@ -3157,12 +3170,11 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   };
 
   const toggleFullscreen = () => {
-    if (isTvProfile) {
-      setPlayerFullscreen((current) => !current);
-    } else if (document.fullscreenElement) {
+    if (playerFullscreen) {
       exitPlayerFullscreen();
     } else {
-      void document.documentElement.requestFullscreen().catch(() => undefined);
+      setPlayerFullscreen(true);
+      if (!isTvProfile) void requestPlayerFullscreen(document.documentElement);
     }
     setShowFullscreenControls(false);
     setPlayerFocusIndex(videoAreaFocusIndex);
@@ -3442,7 +3454,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     }
     else delete settingsControlsRef.current[key];
   };
-  const settingsFocusClass = (key: SettingsFocusKey): string => settingsFocusKey === key ? "remote-focused" : "";
+  const settingsFocusClass = (key: SettingsFocusKey): string => settingsFocusKey === key ? remoteFocusClass : "";
   const handleSettingsFocusCapture = (event: FocusEvent<HTMLElement>) => {
     const focusKey = (event.target as HTMLElement).dataset.settingsFocus as SettingsFocusKey | undefined;
     if (focusKey) setSettingsFocusKey(focusKey);
@@ -3686,15 +3698,15 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       </section>
       {!showSettings && (detailsTitle && details ? <section className="title-details" aria-labelledby="title-details-heading">
         <div className="details-actions">
-          <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} disabled={Boolean(detailsTitle.providerSeriesId && detailsEpisodes.length && !detailsEpisodeId)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsOrigin?.kind === "local" ? "Play on this computer" : detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : "Play"}</button>
-          {detailsOrigin?.kind === "local" && !isTvProfile && <button className={detailsFocusIndex === 2 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(2)} onClick={() => {
+          <button className={detailsFocusIndex === (detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1) ? remoteFocusClass : ""} type="button" ref={(element) => { detailsControlsRef.current[2] = element; detailsControlsRef.current[1] = element; }} onFocus={() => setDetailsFocusIndex(detailsTitle.providerSeriesId && detailsEpisodes.length ? 2 : 1)} disabled={Boolean(detailsTitle.providerSeriesId && detailsEpisodes.length && !detailsEpisodeId)} onClick={() => void (detailsTitle.providerSeriesId ? (detailsEpisodes.length ? playSelectedSeriesEpisode() : chooseSeriesEpisodes(detailsTitle)) : playFromDetails(detailsTitle))}>{detailsOrigin?.kind === "local" ? "Play on this computer" : detailsTitle.providerSeriesId ? (detailsEpisodes.length ? "Play selected episode" : "Choose season and episode") : "Play"}</button>
+          {detailsOrigin?.kind === "local" && !isTvProfile && <button className={detailsFocusIndex === 2 ? remoteFocusClass : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(2)} onClick={() => {
             if (localUpload.state === "uploading" || localUpload.state === "preparing") cancelLocalUpload();
             else if (localUpload.session && ["playing", "paused", "preparing", "accepted"].includes(localUpload.session.playbackState ?? "")) void stopLocalTvPlayback();
             else void playLocalOnTv();
           }}>{localUpload.state === "preparing" ? "Cancel TV preparation" : localUpload.state === "uploading" ? `Cancel upload (${Math.floor(localUpload.sentBytes * 100 / Math.max(1, localUpload.totalBytes))}%)` : localUpload.session && ["playing", "paused", "preparing", "accepted"].includes(localUpload.session.playbackState ?? "") ? "Stop TV playback" : "Play on TV"}</button>}
-          {detailsOrigin?.kind === "local" && !isTvProfile && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[4] = element; }} onFocus={() => setDetailsFocusIndex(3)} onClick={() => setShowSettings(true)}>TV settings and pairing</button>}
-          {detailsOrigin?.kind === "local" && onChooseLocalFile && <button className={detailsFocusIndex === 4 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[5] = element; }} onFocus={() => setDetailsFocusIndex(4)} onClick={onChooseLocalFile}>Choose another file</button>}
-          {!isTvProfile && detailsOrigin?.kind !== "local" && (detailsSearchRecord || /^xtream:(movie|series):\d{1,20}$/.test(detailsTitle.id)) && <button className={detailsFocusIndex === 3 ? "remote-focused" : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(3)} disabled={Boolean(detailsTitle.providerSeriesId && (!detailsEpisodes.length || !detailsEpisodeId))} onClick={() => void playSearchResultOnTv(detailsTitle.providerSeriesId ? (detailsEpisodes.find((episode) => episode.id === detailsEpisodeId) ?? detailsTitle) : detailsTitle)}>Play on TV</button>}
+          {detailsOrigin?.kind === "local" && !isTvProfile && <button className={detailsFocusIndex === 3 ? remoteFocusClass : ""} type="button" ref={(element) => { detailsControlsRef.current[4] = element; }} onFocus={() => setDetailsFocusIndex(3)} onClick={() => setShowSettings(true)}>TV settings and pairing</button>}
+          {detailsOrigin?.kind === "local" && onChooseLocalFile && <button className={detailsFocusIndex === 4 ? remoteFocusClass : ""} type="button" ref={(element) => { detailsControlsRef.current[5] = element; }} onFocus={() => setDetailsFocusIndex(4)} onClick={onChooseLocalFile}>Choose another file</button>}
+          {!isTvProfile && detailsOrigin?.kind !== "local" && (detailsSearchRecord || /^xtream:(movie|series):\d{1,20}$/.test(detailsTitle.id)) && <button className={detailsFocusIndex === 3 ? remoteFocusClass : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(3)} disabled={Boolean(detailsTitle.providerSeriesId && (!detailsEpisodes.length || !detailsEpisodeId))} onClick={() => void playSearchResultOnTv(detailsTitle.providerSeriesId ? (detailsEpisodes.find((episode) => episode.id === detailsEpisodeId) ?? detailsTitle) : detailsTitle)}>Play on TV</button>}
         </div>
         {tvPlaybackStatus && <p className="hint" role="status" aria-live="polite">{tvPlaybackStatus}</p>}
         {episodeStatus && <p className="hint" role="status" aria-live="polite">{episodeStatus}</p>}
@@ -3716,7 +3728,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             {detailsOrigin?.kind === "local" && (tmdbCredentials.readAccessToken || tmdbCredentials.apiKey) && <button type="button" onClick={() => void openTitle(detailsTitle, { kind: "local", focusIndex: detailsFocusIndex })}>Search details again</button>}
             <SubtitleAvailability language={language} embedded={detailsEmbeddedSubtitles} externalLanguages={details.subtitleLanguages} episodeRequired={!!detailsTitle.providerSeriesId && !detailsEpisodeId} local={detailsOrigin?.kind === "local"} />
             {detailsHistory && <p className="details-resume" role="status">Resume available at {formatPlaybackTime(detailsHistory.currentTimeSeconds)} of {formatPlaybackTime(detailsHistory.durationSeconds)}</p>}
-            {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" translateValue={false} value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `${translate("Season", language)} ${episode.season}, ` : ""}${episode.episode !== undefined ? `${translate("Episode", language)} ${episode.episode}` : episode.title}` : translate("Choose episode", language); })()} editing={editingDetailsEpisode} remoteMode={isTvProfile} className={detailsFocusIndex === 1 ? "remote-focused" : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? "remote-focused" : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => { setDetailsFocusIndex(1); webEpisodeSelectionChangedRef.current = false; }} value={detailsEpisodeId} onChange={(event) => { webEpisodeSelectionChangedRef.current = true; setDetailsEpisodeId(event.target.value); setDetailsFocusIndex(2); window.requestAnimationFrame(() => { webEpisodeSelectionChangedRef.current = false; detailsControlsRef.current[2]?.focus(); }); }} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id} translate={episode.episode === undefined ? "no" : undefined}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
+            {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" translateValue={false} value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `${translate("Season", language)} ${episode.season}, ` : ""}${episode.episode !== undefined ? `${translate("Episode", language)} ${episode.episode}` : episode.title}` : translate("Choose episode", language); })()} editing={editingDetailsEpisode} remoteMode={isTvProfile} className={detailsFocusIndex === 1 ? remoteFocusClass : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? remoteFocusClass : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => { setDetailsFocusIndex(1); webEpisodeSelectionChangedRef.current = false; }} value={detailsEpisodeId} onChange={(event) => { webEpisodeSelectionChangedRef.current = true; setDetailsEpisodeId(event.target.value); setDetailsFocusIndex(2); window.requestAnimationFrame(() => { webEpisodeSelectionChangedRef.current = false; detailsControlsRef.current[2]?.focus(); }); }} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id} translate={episode.episode === undefined ? "no" : undefined}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
           </div>
         </div>
         {episodePickerOpen && isTvProfile && <div className="episode-picker-backdrop" role="presentation">
@@ -3726,7 +3738,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             <div className="episode-picker-options" role="listbox" aria-label={episodePickerLevel === "seasons" ? "Seasons" : "Episodes"}>
               {pickerOptions.map((option, index) => <button
                 key={typeof option === "number" ? `season-${option}` : option.id}
-                className={episodePickerFocusIndex === index ? "remote-focused" : ""}
+                className={episodePickerFocusIndex === index ? remoteFocusClass : ""}
                 type="button"
                 role="option"
                 aria-selected={typeof option !== "number" && option.id === detailsEpisodeId}
@@ -3749,9 +3761,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         <h2 id="resume-title">Continue “<span translate="no">{resumeChoice.title.title}</span>”?</h2>
         <p className="hint">Saved at {formatPlaybackTime(resumeChoice.history.currentTimeSeconds)} of {formatPlaybackTime(resumeChoice.history.durationSeconds)}.</p>
         <div className="resume-choice-actions">
-          <button className={resumeChoiceFocusIndex === 0 ? "remote-focused" : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[0] = element; }} onFocus={() => setResumeChoiceFocusIndex(0)} onClick={() => chooseResumeAction(true)}>Resume</button>
-          <button className={resumeChoiceFocusIndex === 1 ? "remote-focused" : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[1] = element; }} onFocus={() => setResumeChoiceFocusIndex(1)} onClick={() => chooseResumeAction(false)}>Start over</button>
-          <button className={resumeChoiceFocusIndex === 2 ? "remote-focused" : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[2] = element; }} onFocus={() => setResumeChoiceFocusIndex(2)} onClick={() => setResumeChoice(null)}>Cancel</button>
+          <button className={resumeChoiceFocusIndex === 0 ? remoteFocusClass : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[0] = element; }} onFocus={() => setResumeChoiceFocusIndex(0)} onClick={() => chooseResumeAction(true)}>Resume</button>
+          <button className={resumeChoiceFocusIndex === 1 ? remoteFocusClass : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[1] = element; }} onFocus={() => setResumeChoiceFocusIndex(1)} onClick={() => chooseResumeAction(false)}>Start over</button>
+          <button className={resumeChoiceFocusIndex === 2 ? remoteFocusClass : ""} type="button" ref={(element) => { resumeChoiceControlsRef.current[2] = element; }} onFocus={() => setResumeChoiceFocusIndex(2)} onClick={() => setResumeChoice(null)}>Cancel</button>
         </div>
       </section></div> : pendingHistoryRemoval ? <div className="modal-backdrop"><section className="confirmation-panel modal-panel" role="dialog" aria-modal="true" aria-labelledby="history-remove-title">
         <h2 id="history-remove-title">Remove from Continue watching?</h2>
@@ -3774,16 +3786,19 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           {playerFullscreen && <ScreenNavigation onPrevious={goToPreviousScreen} previousLabel={selectedTitleSource === "local" ? "Back to details" : "Back to titles"} onMainMenu={onMainMenu} previousRef={(element) => { previousButtonRef.current = element; playerBackButtonRef.current = element; }} mainMenuRef={mainMenuButtonRef} />}
         </div>
         <div
-          className={"player-stage " + (playerFocusIndex === videoAreaFocusIndex ? "video-area-focused" : "")}
+          className={"player-stage " + (playerFocusIndex === videoAreaFocusIndex ? (isTouchProfile ? "" : "video-area-focused") : "")}
           ref={playerStageRef}
           role="group"
           aria-label="Video area. Press left or right to skip while selected."
           tabIndex={0}
-          onClick={() => playerStageRef.current?.focus()}
+          onClick={() => {
+            playerStageRef.current?.focus();
+            if (!isTvProfile && playerFullscreen) setShowFullscreenControls((visible) => !visible);
+          }}
         >
           {runtime.capabilities.nativeVideoSurface
             ? <object className="player tizen-player" ref={avPlayContainerRef} type="application/avplayer" aria-label="Video player" />
-            : <video className="player" autoPlay ref={videoRef} />}
+            : <video className="player" autoPlay playsInline ref={videoRef} />}
           {playerFullscreen && isPlaybackBuffering && <div className="buffering-overlay" role="status" aria-live="polite">Buffering…</div>}
           {playerFullscreen && playbackStatus === "Paused" && <div className="paused-title-overlay">{selectedTitle.title}</div>}
           {(playbackStatus === PLAYBACK_UNAVAILABLE_MESSAGE || playbackStatus === LOCAL_PLAYBACK_ERROR_MESSAGE || playbackStatus === PLAYBACK_CLEANUP_MESSAGE) && <div className="playback-error-overlay" role="alert"><strong>Video unavailable</strong><span>{playbackStatus}</span></div>}
@@ -3803,31 +3818,31 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           <span>{formatPlaybackTime(playbackProgress.durationSeconds)}</span>
         </div>}
         <div className="player-controls" aria-label="Playback controls">
-          <button className={playerFocusIndex === playbackToggleFocusIndex ? "remote-focused" : ""} type="button" onClick={togglePlayback} aria-label={isPlaybackPaused ? "Play video" : "Pause video"} aria-pressed={!isPlaybackPaused} ref={playerTogglePlaybackButtonRef}>{isPlaybackPaused ? "Play" : "Pause"}</button>
-          <button className={playerFocusIndex === restartFocusIndex ? "remote-focused" : ""} type="button" onClick={restartVideo} ref={playerRestartButtonRef}>{playbackCleanupBlocked ? "Retry" : "Restart"}</button>
-          {nextEpisode && <button className={playerFocusIndex === playerNextEpisodeFocusIndex ? "remote-focused" : ""} type="button" onClick={() => startPlayback(nextEpisode, 0, followingEpisodeFor(nextEpisode))} ref={playerNextEpisodeButtonRef}>Play next episode</button>}
-          <button className={playerFocusIndex === fullscreenFocusIndex ? "remote-focused" : ""} type="button" onClick={toggleFullscreen} ref={playerFullscreenButtonRef}>{playerFullscreen ? "Exit full screen" : "Full screen"}</button>
-          <button className={playerFocusIndex === subtitleToggleFocusIndex ? "remote-focused" : ""} type="button" onClick={isSubtitleAttached ? toggleSubtitles : () => { setShowPlayerTools(true); setPlayerFocusIndex(infoFocusIndex); window.requestAnimationFrame(() => playerInfoButtonRef.current?.focus()); }} aria-label={isSubtitleAttached ? "Subtitles" : "Find subtitles"} aria-pressed={isSubtitleAttached ? isSubtitleEnabled : undefined} ref={subtitleToggleButtonRef}>{isSubtitleAttached ? `Subtitles: ${isSubtitleEnabled ? "On" : "Off"}` : "Find subtitles"}</button>
-          <button className={playerFocusIndex === infoFocusIndex ? "remote-focused" : ""} type="button" onClick={() => setShowPlayerTools((visible) => !visible)} aria-expanded={showPlayerTools} ref={playerInfoButtonRef}>Subtitles &amp; more</button>
+          <button className={playerFocusIndex === playbackToggleFocusIndex ? remoteFocusClass : ""} type="button" onClick={togglePlayback} aria-label={isPlaybackPaused ? "Play video" : "Pause video"} aria-pressed={!isPlaybackPaused} ref={playerTogglePlaybackButtonRef}>{isPlaybackPaused ? "Play" : "Pause"}</button>
+          <button className={playerFocusIndex === restartFocusIndex ? remoteFocusClass : ""} type="button" onClick={restartVideo} ref={playerRestartButtonRef}>{playbackCleanupBlocked ? "Retry" : "Restart"}</button>
+          {nextEpisode && <button className={playerFocusIndex === playerNextEpisodeFocusIndex ? remoteFocusClass : ""} type="button" onClick={() => startPlayback(nextEpisode, 0, followingEpisodeFor(nextEpisode))} ref={playerNextEpisodeButtonRef}>Play next episode</button>}
+          <button className={playerFocusIndex === fullscreenFocusIndex ? remoteFocusClass : ""} type="button" onClick={() => { if (isTouchProfile && playerFullscreen) setShowFullscreenControls(false); else toggleFullscreen(); }} ref={playerFullscreenButtonRef}>{isTouchProfile && playerFullscreen ? "Hide controls" : playerFullscreen ? "Exit full screen" : "Full screen"}</button>
+          <button className={playerFocusIndex === subtitleToggleFocusIndex ? remoteFocusClass : ""} type="button" onClick={isSubtitleAttached ? toggleSubtitles : () => { setShowPlayerTools(true); setPlayerFocusIndex(infoFocusIndex); window.requestAnimationFrame(() => playerInfoButtonRef.current?.focus()); }} aria-label={isSubtitleAttached ? "Subtitles" : "Find subtitles"} aria-pressed={isSubtitleAttached ? isSubtitleEnabled : undefined} ref={subtitleToggleButtonRef}>{isSubtitleAttached ? `Subtitles: ${isSubtitleEnabled ? "On" : "Off"}` : "Find subtitles"}</button>
+          <button className={playerFocusIndex === infoFocusIndex ? remoteFocusClass : ""} type="button" onClick={() => setShowPlayerTools((visible) => !visible)} aria-expanded={showPlayerTools} ref={playerInfoButtonRef}>Subtitles &amp; more</button>
           {showPlayerTools && <>
-            <button className={playerFocusIndex === aspectFocusIndex ? "remote-focused" : ""} type="button" onClick={cycleVideoDisplayMode} ref={playerAspectButtonRef}>Aspect: {videoDisplayMode === "auto" ? "Auto" : videoDisplayMode === "fit" ? "Fit" : "Fill"}</button>
-            <button className={playerFocusIndex === 8 + playerControlOffset ? "remote-focused" : ""} type="button" onClick={() => setShowVideoInfo((visible) => !visible)} ref={playerTechnicalInfoButtonRef}>Info</button>
-            <button className={playerFocusIndex === audioTrackFocusIndex ? "remote-focused" : ""} type="button" onClick={selectNextAudioTrack} ref={playerAudioTrackButtonRef}>{audioTracks.length === 0 ? "Audio: unavailable" : `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}`}</button>
-            <button className={playerFocusIndex === subtitleSmallerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(-.2)} disabled={subtitleRendering?.styling === false} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
-            <button className={playerFocusIndex === subtitleLargerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(.2)} disabled={subtitleRendering?.styling === false} ref={subtitleLargerButtonRef}>Subtitle A+</button>
+            <button className={playerFocusIndex === aspectFocusIndex ? remoteFocusClass : ""} type="button" onClick={cycleVideoDisplayMode} ref={playerAspectButtonRef}>Aspect: {videoDisplayMode === "auto" ? "Auto" : videoDisplayMode === "fit" ? "Fit" : "Fill"}</button>
+            <button className={playerFocusIndex === 8 + playerControlOffset ? remoteFocusClass : ""} type="button" onClick={() => setShowVideoInfo((visible) => !visible)} ref={playerTechnicalInfoButtonRef}>Info</button>
+            <button className={playerFocusIndex === audioTrackFocusIndex ? remoteFocusClass : ""} type="button" onClick={selectNextAudioTrack} ref={playerAudioTrackButtonRef}>{audioTracks.length === 0 ? "Audio: unavailable" : `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}`}</button>
+            <button className={playerFocusIndex === subtitleSmallerFocusIndex ? remoteFocusClass : ""} type="button" onClick={() => adjustSubtitleFontSize(-.2)} disabled={subtitleRendering?.styling === false} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
+            <button className={playerFocusIndex === subtitleLargerFocusIndex ? remoteFocusClass : ""} type="button" onClick={() => adjustSubtitleFontSize(.2)} disabled={subtitleRendering?.styling === false} ref={subtitleLargerButtonRef}>Subtitle A+</button>
           </>}
           <span className={"playback-status " + ([PLAYBACK_UNAVAILABLE_MESSAGE, LOCAL_PLAYBACK_ERROR_MESSAGE, PLAYBACK_CLEANUP_MESSAGE].includes(playbackStatus) ? "error" : "")} role="status" aria-live="polite">{playbackStatus}</span>
         </div>
         {showPlayerTools && <section className="subtitles">
           <h3>Subtitles</h3>
-          <RemoteEditable label="Subtitle source" value={subtitleChoice === "automatic" ? "Automatic" + (activeSubtitleDescription ? " — " + activeSubtitleDescription : "") : subtitleChoice === "off" ? "Off" : activeSubtitleDescription || "External subtitle"} editing={editingSubtitleSource} remoteMode={isTvProfile} className={playerFocusIndex === subtitleFocus.sourcePicker ? "remote-focused" : ""} controlRef={(element) => { subtitleSourceControlRef.current = element; }} onBeginEdit={() => { setSubtitleSourceDraft(subtitleChoice); setEditingSubtitleSource(true); window.requestAnimationFrame(() => subtitleSourceControlRef.current?.focus()); }} renderEditor={(controlRef) => <label>Subtitle source<select aria-label="Subtitle source" value={isTvProfile && editingSubtitleSource ? subtitleSourceDraft : subtitleChoice} ref={controlRef} onChange={(event) => { if (isTvProfile && editingSubtitleSource) setSubtitleSourceDraft(event.target.value); else changeSubtitleSource(event.target.value); }} onKeyDown={(event) => {
+          <RemoteEditable label="Subtitle source" value={subtitleChoice === "automatic" ? "Automatic" + (activeSubtitleDescription ? " — " + activeSubtitleDescription : "") : subtitleChoice === "off" ? "Off" : activeSubtitleDescription || "External subtitle"} editing={editingSubtitleSource} remoteMode={isTvProfile} className={playerFocusIndex === subtitleFocus.sourcePicker ? remoteFocusClass : ""} controlRef={(element) => { subtitleSourceControlRef.current = element; }} onBeginEdit={() => { setSubtitleSourceDraft(subtitleChoice); setEditingSubtitleSource(true); window.requestAnimationFrame(() => subtitleSourceControlRef.current?.focus()); }} renderEditor={(controlRef) => <label>Subtitle source<select aria-label="Subtitle source" value={isTvProfile && editingSubtitleSource ? subtitleSourceDraft : subtitleChoice} ref={controlRef} onChange={(event) => { if (isTvProfile && editingSubtitleSource) setSubtitleSourceDraft(event.target.value); else changeSubtitleSource(event.target.value); }} onKeyDown={(event) => {
             event.stopPropagation();
             if (event.key === "Enter") { const value = event.currentTarget.value; event.preventDefault(); changeSubtitleSource(value); return; }
             if (isBackKey(event.nativeEvent) || event.key === "Escape") { event.preventDefault(); setEditingSubtitleSource(false); window.requestAnimationFrame(() => subtitleSourceControlRef.current?.focus()); }
           }}><option value="automatic">Automatic</option><option value="off">Off</option>{[...embeddedSubtitleTracks].sort((left, right) => { const rank = (track: EmbeddedSubtitleTrack) => normalizeVodSubtitleLanguage(track.language ?? track.label) === subtitleLanguagePreference ? 0 : normalizeVodSubtitleLanguage(track.language ?? track.label) ? 1 : 2; return rank(left) - rank(right); }).map((track) => <option key={track.id} value={"embedded:" + track.id} disabled={track.playable === false}>{embeddedSubtitleLabel(track, language)} · {translate("Included in video", language)}</option>)}{subtitleChoice === "external" && <option value="external">{activeSubtitleDescription || "External subtitle"}</option>}</select></label>} />
           {selectedTitleSource === "local" && <div className="subtitle-actions">
             <input ref={localSubtitleInputRef} className="sr-only" type="file" accept=".srt,.vtt,application/x-subrip,text/vtt" onChange={attachLocalSubtitle} aria-label="Choose an SRT or WebVTT subtitle file" />
-            <button className={playerFocusIndex === subtitleFocus.localSubtitle ? "remote-focused" : ""} type="button" ref={openLocalSubtitleButtonRef} onClick={() => localSubtitleInputRef.current?.click()}>Open subtitle file (SRT/WebVTT)</button>
+            <button className={playerFocusIndex === subtitleFocus.localSubtitle ? remoteFocusClass : ""} type="button" ref={openLocalSubtitleButtonRef} onClick={() => localSubtitleInputRef.current?.click()}>Open subtitle file (SRT/WebVTT)</button>
             <p className="hint">Subtitle search uses the editable title only. Video bytes and file paths stay on this computer.</p>
           </div>}
           {subtitleTimingAvailable && <div className="subtitle-timing" aria-label="Subtitle timing controls">
@@ -3835,32 +3850,32 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             <p><strong>Current offset: {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</strong></p>
             <p className="hint">{selectedTitleSource === "local" ? "Positive values show subtitles later; negative values show them earlier. Kept in memory for this local session." : "Positive values show subtitles later; negative values show them earlier. Saved for this title on this device."}</p>
             <div className="subtitle-timing-actions">
-              <button className={playerFocusIndex === subtitleTimingStartFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-2)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingMinusTwoButtonRef}>−2 s</button>
-              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 1 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-0.5)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingMinusHalfButtonRef}>−0.5 s</button>
-              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 2 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(0.5)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingPlusHalfButtonRef}>+0.5 s</button>
-              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 3 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(2)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingPlusTwoButtonRef}>+2 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex ? remoteFocusClass : ""} type="button" onClick={() => adjustSubtitleTiming(-2)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingMinusTwoButtonRef}>−2 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 1 ? remoteFocusClass : ""} type="button" onClick={() => adjustSubtitleTiming(-0.5)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingMinusHalfButtonRef}>−0.5 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 2 ? remoteFocusClass : ""} type="button" onClick={() => adjustSubtitleTiming(0.5)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingPlusHalfButtonRef}>+0.5 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 3 ? remoteFocusClass : ""} type="button" onClick={() => adjustSubtitleTiming(2)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingPlusTwoButtonRef}>+2 s</button>
             </div>
           </div>}
           {!hasSubtitleKey && <div className="subtitle-actions">
-            <RemoteEditable label="OpenSubtitles API key" value="Not configured" editing={showPlayerApiKeyEditor} remoteMode={isTvProfile} className={playerFocusIndex === subtitleSettingsFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleKeyControlRef.current = element; }} onBeginEdit={showPlayerApiKeySetup} renderEditor={(controlRef) => <label htmlFor="opensubtitles-api-key">OpenSubtitles API key<input id="opensubtitles-api-key" type="password" value={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={(element) => { openSubtitlesApiKeyRef.current = element; subtitleKeyInputRef.current = element; controlRef(element); }} /></label>} />
-            {showPlayerApiKeyEditor && <button className={playerFocusIndex === subtitleFocus.saveKey ? "remote-focused" : ""} type="button" onClick={saveSubtitleSettings} ref={subtitleSaveButtonRef}>Save settings</button>}
+            <RemoteEditable label="OpenSubtitles API key" value="Not configured" editing={showPlayerApiKeyEditor} remoteMode={isTvProfile} className={playerFocusIndex === subtitleSettingsFocusIndex ? remoteFocusClass : ""} controlRef={(element) => { subtitleKeyControlRef.current = element; }} onBeginEdit={showPlayerApiKeySetup} renderEditor={(controlRef) => <label htmlFor="opensubtitles-api-key">OpenSubtitles API key<input id="opensubtitles-api-key" type="password" value={openSubtitlesApiKey} onChange={(event) => setOpenSubtitlesApiKey(event.target.value)} autoComplete="off" ref={(element) => { openSubtitlesApiKeyRef.current = element; subtitleKeyInputRef.current = element; controlRef(element); }} /></label>} />
+            {showPlayerApiKeyEditor && <button className={playerFocusIndex === subtitleFocus.saveKey ? remoteFocusClass : ""} type="button" onClick={saveSubtitleSettings} ref={subtitleSaveButtonRef}>Save settings</button>}
           </div>}
           <p className="subtitle-search-heading">Subtitle search</p>
           <div className="subtitle-search-options">
-            <RemoteEditable label="Title" value={subtitleSearchQuery} translateValue={false} editing={editingSubtitleQuery} remoteMode={isTvProfile} className={`subtitle-search-query ${playerFocusIndex === subtitleSearchFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleQuery(true); window.requestAnimationFrame(() => subtitleSearchInputRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-query" htmlFor="subtitle-search-query">Title<input id="subtitle-search-query" type="search" value={subtitleSearchQuery} onChange={(event) => setSubtitleSearchQuery(event.target.value)} autoComplete="off" enterKeyHint="search" aria-label="Subtitle search term" ref={(element) => { subtitleSearchInputRef.current = element; controlRef(element); }} /></label>} />
-            <RemoteEditable label="Type" value={subtitleSearchType === "movie" ? "Movie" : "Series"} editing={editingSubtitleType} remoteMode={isTvProfile} className={playerFocusIndex === subtitleSearchTypeFocusIndex ? "remote-focused" : ""} controlRef={(element) => { subtitleSearchTypeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleType(true); window.requestAnimationFrame(() => subtitleSearchTypeRef.current?.focus()); }} renderEditor={(controlRef) => <label htmlFor="subtitle-search-type">Type<select id="subtitle-search-type" value={subtitleSearchType} onChange={(event) => setSubtitleSearchType(event.target.value as SubtitleSearchType)} ref={(element) => { subtitleSearchTypeRef.current = element; controlRef(element); }}><option value="movie">Movie</option><option value="series">Series</option></select></label>} />
+            <RemoteEditable label="Title" value={subtitleSearchQuery} translateValue={false} editing={editingSubtitleQuery} remoteMode={isTvProfile} className={`subtitle-search-query ${playerFocusIndex === subtitleSearchFocusIndex ? remoteFocusClass : ""}`} controlRef={(element) => { subtitleSearchControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleQuery(true); window.requestAnimationFrame(() => subtitleSearchInputRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-query" htmlFor="subtitle-search-query">Title<input id="subtitle-search-query" type="search" value={subtitleSearchQuery} onChange={(event) => setSubtitleSearchQuery(event.target.value)} autoComplete="off" enterKeyHint="search" aria-label="Subtitle search term" ref={(element) => { subtitleSearchInputRef.current = element; controlRef(element); }} /></label>} />
+            <RemoteEditable label="Type" value={subtitleSearchType === "movie" ? "Movie" : "Series"} editing={editingSubtitleType} remoteMode={isTvProfile} className={playerFocusIndex === subtitleSearchTypeFocusIndex ? remoteFocusClass : ""} controlRef={(element) => { subtitleSearchTypeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleType(true); window.requestAnimationFrame(() => subtitleSearchTypeRef.current?.focus()); }} renderEditor={(controlRef) => <label htmlFor="subtitle-search-type">Type<select id="subtitle-search-type" value={subtitleSearchType} onChange={(event) => setSubtitleSearchType(event.target.value as SubtitleSearchType)} ref={(element) => { subtitleSearchTypeRef.current = element; controlRef(element); }}><option value="movie">Movie</option><option value="series">Series</option></select></label>} />
             {subtitleSearchType === "series" && <>
-              <RemoteEditable label="Season" value={subtitleSearchSeason} editing={editingSubtitleSeason} remoteMode={isTvProfile} className={`subtitle-search-number ${playerFocusIndex === subtitleSeasonFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchSeasonControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleSeason(true); window.requestAnimationFrame(() => subtitleSearchSeasonRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-season">Season<input id="subtitle-search-season" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchSeason} onChange={(event) => setSubtitleSearchSeason(event.target.value)} ref={(element) => { subtitleSearchSeasonRef.current = element; controlRef(element); }} /></label>} />
-              <RemoteEditable label="Episode" value={subtitleSearchEpisode} editing={editingSubtitleEpisode} remoteMode={isTvProfile} className={`subtitle-search-number ${playerFocusIndex === subtitleEpisodeFocusIndex ? "remote-focused" : ""}`} controlRef={(element) => { subtitleSearchEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleEpisode(true); window.requestAnimationFrame(() => subtitleSearchEpisodeRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-episode">Episode<input id="subtitle-search-episode" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchEpisode} onChange={(event) => setSubtitleSearchEpisode(event.target.value)} ref={(element) => { subtitleSearchEpisodeRef.current = element; controlRef(element); }} /></label>} />
+              <RemoteEditable label="Season" value={subtitleSearchSeason} editing={editingSubtitleSeason} remoteMode={isTvProfile} className={`subtitle-search-number ${playerFocusIndex === subtitleSeasonFocusIndex ? remoteFocusClass : ""}`} controlRef={(element) => { subtitleSearchSeasonControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleSeason(true); window.requestAnimationFrame(() => subtitleSearchSeasonRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-season">Season<input id="subtitle-search-season" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchSeason} onChange={(event) => setSubtitleSearchSeason(event.target.value)} ref={(element) => { subtitleSearchSeasonRef.current = element; controlRef(element); }} /></label>} />
+              <RemoteEditable label="Episode" value={subtitleSearchEpisode} editing={editingSubtitleEpisode} remoteMode={isTvProfile} className={`subtitle-search-number ${playerFocusIndex === subtitleEpisodeFocusIndex ? remoteFocusClass : ""}`} controlRef={(element) => { subtitleSearchEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingSubtitleEpisode(true); window.requestAnimationFrame(() => subtitleSearchEpisodeRef.current?.focus()); }} renderEditor={(controlRef) => <label className="subtitle-search-number" htmlFor="subtitle-search-episode">Episode<input id="subtitle-search-episode" type="number" min="1" step="1" inputMode="numeric" value={subtitleSearchEpisode} onChange={(event) => setSubtitleSearchEpisode(event.target.value)} ref={(element) => { subtitleSearchEpisodeRef.current = element; controlRef(element); }} /></label>} />
             </>}
-            <button className={`subtitle-search-submit ${playerFocusIndex === findSubtitleFocusIndex ? "remote-focused" : ""}`} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
+            <button className={`subtitle-search-submit ${playerFocusIndex === findSubtitleFocusIndex ? remoteFocusClass : ""}`} type="button" onClick={() => void findSubtitles()} ref={findSubtitlesButtonRef}>Find subtitles</button>
           </div>
           {subtitleStatus && <p className="hint">{subtitleStatus}</p>}
           <div className="subtitle-results">
             {subtitleResults.map((subtitle, index) => <article key={subtitle.id}>
               <strong translate="no">{subtitle.language.toUpperCase()} · {subtitle.releaseName}</strong>
               <span>{subtitle.downloads.toLocaleString()} downloads{subtitle.hearingImpaired ? " · HI" : ""}</span>
-              <button className={playerFocusIndex === index + firstSubtitleFocusIndex ? "remote-focused" : ""} type="button" onClick={() => void loadSubtitle(subtitle)} ref={(element) => { subtitleButtonRefs.current[index] = element; }}>Use this subtitle</button>
+              <button className={playerFocusIndex === index + firstSubtitleFocusIndex ? remoteFocusClass : ""} type="button" onClick={() => void loadSubtitle(subtitle)} ref={(element) => { subtitleButtonRefs.current[index] = element; }}>Use this subtitle</button>
             </article>)}
           </div>
         </section>}
@@ -3877,21 +3892,21 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
               <option value="year">Release year (newest)</option>
             </select>
           </label>} />}
-          {browseMode === "latest" && <button className={browseControlFocus === "latest-refresh" ? "remote-focused" : ""} type="button" ref={latestRefreshRef} onFocus={() => setBrowseControlFocus("latest-refresh")} onBlur={() => setBrowseControlFocus(null)} onClick={() => void openLatest(activeGroup?.contentType === "series" ? "series" : "movie", true)}>Refresh Latest</button>}
+          {browseMode === "latest" && <button className={browseControlFocus === "latest-refresh" ? remoteFocusClass : ""} type="button" ref={latestRefreshRef} onFocus={() => setBrowseControlFocus("latest-refresh")} onBlur={() => setBrowseControlFocus(null)} onClick={() => void openLatest(activeGroup?.contentType === "series" ? "series" : "movie", true)}>Refresh Latest</button>}
         </div>
         {isTvProfile && <p className="remote-key-hint tv-title-list-hint">{browseMode === "latest" ? "Use the arrow keys to browse titles · Up from the first row returns to refresh" : "Use the arrow keys to browse titles · Up from the first row returns to sorting"}</p>}
         <div className={isTvProfile ? "tv-title-list-viewport fixed-list-viewport" : ""} ref={isTvProfile ? titleListViewportRef : undefined}>
         {catalogStatus && <p className="hint browse-status" role="status" aria-live="polite">{catalogStatus}</p>}
         <div className={"groups title-grid" + (isTvProfile ? " tv-title-list" : "")}>
-          {titles.map((title, index) => <button className={"tile title-card " + (index === focusIndex ? "focused remote-focused" : "")} key={title.id} onClick={() => { setFocusIndex(index); void openTitle(title); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
+          {titles.map((title, index) => <button className={"tile title-card " + (index === focusIndex ? titleFocusClass : "")} key={title.id} onClick={() => { setFocusIndex(index); void openTitle(title); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
             <BrowseArtwork title={title.title} image={browseArtwork[title.id]} /><span className="tile-copy"><strong><span translate="no">{title.title}</span></strong><span className="tile-meta">{title.season !== undefined && title.episode !== undefined ? "S" + String(title.season).padStart(2, "0") + "E" + String(title.episode).padStart(2, "0") : title.year ?? title.contentType}</span>{browseMode === "latest" && <span className="tile-meta" translate="no">{formatCategoryBadge(title.group, language)}</span>}</span>
           </button>)}
           {!titles.length && !catalogStatus.startsWith("Loading ") && <p className="empty-state">{browseMode === "latest" && !groups.some((group) => favouriteGroupIds.includes(group.id) && ((group.providerContentType ?? group.contentType) === activeGroup?.contentType || group.contentType === "mixed")) ? "Favourite categories to see Latest titles." : "No titles are available in this group yet."}</p>}
         </div>
         </div>
         <div className="pagination">
-          <button aria-label={isTvProfile ? "Previous page (Left)" : "Previous page"} className={browseControlFocus === "previous-page" ? "remote-focused" : ""} disabled={page === 0} ref={previousPageRef} onFocus={() => setBrowseControlFocus("previous-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page - 1)} type="button">{isTvProfile ? "Previous page · ←" : "Previous"}</button>
-          <button aria-label={isTvProfile ? "Next page (Right)" : "Next page"} className={browseControlFocus === "next-page" ? "remote-focused" : ""} disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onFocus={() => setBrowseControlFocus("next-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page + 1)} type="button">{isTvProfile ? "Next page · →" : "Next"}</button>
+          <button aria-label={isTvProfile ? "Previous page (Left)" : "Previous page"} className={browseControlFocus === "previous-page" ? remoteFocusClass : ""} disabled={page === 0} ref={previousPageRef} onFocus={() => setBrowseControlFocus("previous-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page - 1)} type="button">{isTvProfile ? "Previous page · ←" : "Previous"}</button>
+          <button aria-label={isTvProfile ? "Next page (Right)" : "Next page"} className={browseControlFocus === "next-page" ? remoteFocusClass : ""} disabled={page + 1 >= browsePageCount(browseCount, PAGE_SIZE)} ref={nextPageRef} onFocus={() => setBrowseControlFocus("next-page")} onBlur={() => setBrowseControlFocus(null)} onClick={() => changeBrowsePage(page + 1)} type="button">{isTvProfile ? "Next page · →" : "Next"}</button>
         </div>
       </> : <>
         <nav className="browse-tabs" role="tablist" aria-label="Browse your library">
@@ -3914,11 +3929,11 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           <h2 className="section-heading">Continue watching</h2>
           <div className="groups continue-grid">
             {continueHistory.map((entry, index) => <Fragment key={entry.id}>
-              <button className={"tile title-card " + (index * 2 === focusIndex ? "focused remote-focused" : "")} onClick={() => { setFocusIndex(index * 2); void openHistoryEntry(entry); }} ref={(element) => { tileRefs.current[index * 2] = element; }} type="button">
+              <button className={"tile title-card " + (index * 2 === focusIndex ? titleFocusClass : "")} onClick={() => { setFocusIndex(index * 2); void openHistoryEntry(entry); }} ref={(element) => { tileRefs.current[index * 2] = element; }} type="button">
                 <BrowseArtwork title={entry.title} image={browseArtwork[entry.id]} /><span className="tile-copy"><strong><span translate="no">{entry.title}</span></strong><span>Resume · {formatPlaybackTime(entry.currentTimeSeconds)} of {formatPlaybackTime(entry.durationSeconds)}</span></span>
                 <progress className="history-progress" max={Math.max(1, entry.durationSeconds)} value={Math.min(Math.max(0, entry.currentTimeSeconds), Math.max(1, entry.durationSeconds))} aria-label={`Watched ${formatPlaybackTime(entry.currentTimeSeconds)} of ${formatPlaybackTime(entry.durationSeconds)}`} />
               </button>
-              <button className={"tile remove-history " + (index * 2 + 1 === focusIndex ? "focused remote-focused" : "")} onClick={() => { setFocusIndex(index * 2 + 1); removeHistoryEntry(entry); }} ref={(element) => { tileRefs.current[index * 2 + 1] = element; }} type="button" aria-label={`Remove ${entry.title} from Continue watching`}>
+              <button className={"tile remove-history " + (index * 2 + 1 === focusIndex ? titleFocusClass : "")} onClick={() => { setFocusIndex(index * 2 + 1); removeHistoryEntry(entry); }} ref={(element) => { tileRefs.current[index * 2 + 1] = element; }} type="button" aria-label={`Remove ${entry.title} from Continue watching`}>
                 <strong>Remove</strong>
               </button>
             </Fragment>)}
@@ -3937,7 +3952,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           </div>
           <p className="hint" role="status" aria-live="polite">{searchStatus || (searchProviderFingerprint ? "Search is available without a TV connection. Refresh the Xtream catalogue when needed." : "Searching titles saved on this device. Add an Xtream playlist to refresh a full provider catalogue.")}</p>
           <div className="groups search-results">
-            {visibleSearchItems.map((result, index) => <button className={`tile title-card ${index === focusIndex ? "focused remote-focused" : ""}`} key={result.key} ref={(element) => { tileRefs.current[index] = element; }} type="button" onFocus={() => setFocusIndex(index)} onClick={() => result.record ? openSearchRecord(result.record, index) : openLocalSearchItem(result.item, index)}>
+            {visibleSearchItems.map((result, index) => <button className={`tile title-card ${index === focusIndex ? titleFocusClass : ""}`} key={result.key} ref={(element) => { tileRefs.current[index] = element; }} type="button" onFocus={() => setFocusIndex(index)} onClick={() => result.record ? openSearchRecord(result.record, index) : openLocalSearchItem(result.item, index)}>
               <BrowseArtwork title={result.title} image={browseArtwork[result.item.id]} /><span className="tile-copy"><strong><span translate="no">{result.title}</span></strong><span className="tile-meta">{result.kind === "series" ? "Series" : result.kind === "movie" ? "Movie" : "Other"}{result.year ? ` · ${result.year}` : ""}{result.category ? <span translate="no">{` · ${formatCategoryBadge(result.category, language)}`}</span> : ""}</span></span>
             </button>)}
             {!visibleSearchItems.length && searchQuery.trim().length >= 2 && <p className="empty-state">No matching titles found.</p>}
@@ -3947,7 +3962,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         {browseCollection !== "recent" && browseCollection !== "search" && <>
           <div className="collection-heading"><h2>{browseCollection === "favourites" ? "Favourite groups" : browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">{browseCollection === "favourites" ? "Your saved movie genres and series categories." : "Choose a group to browse its titles. Provider groups load when selected."}</p><p className="remote-key-hint">Press the red remote key to toggle the focused group as a favourite.</p>{favouriteStatus && <p className="hint" role="status" aria-live="polite">{favouriteStatus}</p>}</div>
           <div className={isTvProfile ? "groups group-grid fixed-list-viewport" : "groups group-grid"} ref={isTvProfile ? titleListViewportRef : undefined}>
-          {visibleGroups.map((group, index) => <div className={"favourite-tile" + (isTvProfile ? " fixed-list-item" : "")} key={group.id}><button className={"tile " + (index === focusIndex ? "focused remote-focused" : "")} style={isTvProfile ? categoryRowStyle : undefined} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
+          {visibleGroups.map((group, index) => <div className={"favourite-tile" + (isTvProfile ? " fixed-list-item" : "")} key={group.id}><button className={"tile " + (index === focusIndex ? titleFocusClass : "")} style={isTvProfile ? categoryRowStyle : undefined} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
             <strong translate="no" title={(isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language))}>{(isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language))}</strong><span>{isLatestVirtualGroup(group) ? (group.contentType === "series" ? "Recently updated shows" : "Recently added movies") : group.providerCategoryId ? "Select to load titles" : `${group.count.toLocaleString()} titles`}</span>{!isLatestVirtualGroup(group) && favouriteGroupIds.includes(group.id) && <span className="favourite-indicator">★ Favourite</span>}
           </button>{!isLatestVirtualGroup(group) && <button className="quiet-button favourite-toggle" type="button" tabIndex={isTvProfile ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTvProfile) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => toggleFavouriteForGroup(group)}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button>}</div>)}
           {!visibleGroups.length && <div className="empty-state"><h2>{browseCollection === "favourites" ? "No favourite groups yet" : `No ${browseCollection === "movies" ? "movie" : "series"} groups found`}</h2><p>{browseCollection === "favourites" ? "Use the red remote key on a group, or the button on a card, to save it on this device." : `Import a library with ${browseCollection === "movies" ? "movies" : "series"} to browse titles here.`}</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = "content"; setBrowseCollection("recent"); setFocusIndex(0); }}>Browse recent</button></div>}

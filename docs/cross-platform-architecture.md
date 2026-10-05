@@ -34,7 +34,7 @@ flowchart TB
 
 `main.tsx` mounts `RuntimeProvider → CompanionProvider → App`. `createAppRuntime` supplies playback construction, a release barrier, independent catalogue sessions, preferences, transport and key registration. Overrides let tests or future hosts replace these services.
 
-Platform identity (`browser` or `tizen`) is separate from interaction profile (`desktop` or `tv`). TV navigation and deliberate text editing use the profile. Features use capabilities such as native video surfaces, local-file picking, direct guide requests, companion and relay support. Generic input normalization lives in `src/contracts/input.ts`; Samsung registration remains in its adapter.
+Platform identity (`browser` or `tizen`) is separate from interaction profile (`desktop`, `touch` or `tv`). Bootstrap selects touch interaction for a coarse primary pointer without hover; TV navigation and deliberate text editing use the profile. Touch playback starts with controls hidden; tapping reveals navigation and playback actions, and Hide controls restores the unobstructed player. Touch navigation suppresses automatic row highlighting and simulated hover; keyboard input restores ordinary focus styling. Features use capabilities such as native video surfaces, local-file picking, direct guide requests, companion and relay support. Generic input normalization lives in `src/contracts/input.ts`; Samsung registration remains in its adapter.
 
 Shared CSS retains Chromium 47 as the complete baseline: flexbox, static colours, physical positioning and explicit margins. See [navigation](navigation.md) and [verification](verification.md).
 

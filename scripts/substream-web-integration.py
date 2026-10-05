@@ -202,6 +202,7 @@ def run(args: argparse.Namespace) -> None:
             ("http://127.0.0.1:8791/authorize", f"http://{bind_ip}:{auth_port}/authorize"),
             ("http://127.0.0.1:8792", f"http://{bind_ip}:{portal_port}"),
             ("https://substream.example.invalid", f"https://localhost:{https_port}"),
+            ("http://substream.example.invalid", f"http://localhost:{http_port}"),
             ("/etc/letsencrypt/live/substream.example.invalid/fullchain.pem", str(certificate)),
             ("/etc/letsencrypt/live/substream.example.invalid/privkey.pem", str(private_key)),
         )
@@ -418,6 +419,21 @@ def run(args: argparse.Namespace) -> None:
             if "upgrade-insecure-requests" in headers.get("content-security-policy", ""):
                 raise AssertionError("portal CSP must not upgrade HTTP player requests")
             print(f"HTTPS portal route {method} {path.split('?')[0]}: {status}")
+        for method in ("GET", "HEAD"):
+            path = "/" + "x" * 43 + "/"
+            status, _, _, headers = request(path + "?discard=synthetic", use_https=True, method=method)
+            if status != 302 or headers.get("location") != f"http://localhost:{http_port}{path}":
+                raise AssertionError("HTTPS player landing link must redirect to the HTTP gate without query data")
+            if headers.get("referrer-policy") != "no-referrer" or headers.get("cache-control") != "no-store":
+                raise AssertionError("player landing redirects must suppress referrers and caching")
+            if request(path)[0] != 403:
+                raise AssertionError("redirected unknown grants must remain denied by the HTTP gate")
+        for path in ("/" + "x" * 42 + "/", "/" + "x" * 43 + "/assets/app.js", "/" + "x" * 43 + "/api/"):
+            if request(path, use_https=True)[0] != 404:
+                raise AssertionError("HTTPS redirect must be limited to well-shaped player landing links")
+        if request("/" + "x" * 43 + "/", use_https=True, method="POST")[0] != 403:
+            raise AssertionError("HTTPS player landing redirects must reject mutation methods")
+
         if request("/not-allowlisted", use_https=True)[0] != 404:
             raise AssertionError("HTTPS non-allowlisted route should return 404")
         if request("/access", use_https=True)[0] != 403:

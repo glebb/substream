@@ -174,7 +174,7 @@ label, h2 { font-weight: 650; }
 input, button, select { border: 1px solid transparent; border-radius: .55rem; font: inherit; padding: .85rem 1rem; }
 input, select { background: var(--panel-raised); border-color: var(--border-soft); color: inherit; }
 button { background: var(--blue); color: #061426; cursor: pointer; font-weight: 750; width: fit-content; }
-button:hover { background: #a5ccff; }
+html:not(.touch-navigation) button:hover { background: #a5ccff; }
 input:focus, button:focus, select:focus { box-shadow: 0 0 0 3px var(--page), 0 0 0 7px var(--focus); outline: 0; }
 input:focus-visible, button:focus-visible, select:focus-visible { box-shadow: 0 0 0 3px var(--page), 0 0 0 7px var(--focus); outline: 0; }
 .secondary-button, .app-header button, .player-heading button, .settings-primary-actions button { background: var(--panel-raised); border-color: var(--border); color: var(--text); }
@@ -728,3 +728,13 @@ button:disabled { cursor: default; opacity: .45; }
   .settings-key-fields > label, .settings-key-fields > .remote-editable-trigger { flex-basis: 100%; }
   .episode-picker-options > button { flex-basis: calc(100% - 12px); }
 }
+
+/* Keep touch navigation quiet; a keyboard event restores ordinary :focus styles. */
+.touch-navigation button:focus { box-shadow: none !important; outline: 0; }
+.touch-navigation .home-card:focus, .touch-navigation .tile:focus {
+  background: #151d2b !important; border-color: #273349; color: #f4f7ff !important;
+  box-shadow: none !important; transform: none;
+}
+.touch-navigation .tile:focus span { color: #b8c4d7; }
+.touch-navigation .player-stage.video-area-focused { outline: 0; }
+.touch-navigation .live-controls button:focus { background: #82b7ff !important; color: #061426 !important; }
