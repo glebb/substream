@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HtmlVideoPlayer } from "./html-video-player.ts";
+import { VodSubtitleController } from "../../application/vod-subtitle-controller.ts";
 
 const { isHlsSupported, hlsInstances } = vi.hoisted(() => ({ isHlsSupported: vi.fn(() => false), hlsInstances: [] as unknown[] }));
 vi.mock("hls.js", () => ({ default: class MockHls {
@@ -37,6 +38,27 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); isHlsSupported.mockReset().mockReturnValue(false); hlsInstances.length = 0; });
 
 describe("HtmlVideoPlayer", () => {
+  it("automatically uses external subtitles when browser playback exposes no embedded tracks", async () => {
+    const { video, dispatch } = fakeVideo();
+    Object.defineProperty(video, "textTracks", { value: [] });
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    dispatch("loadedmetadata");
+    const activate = vi.fn(() => true);
+    const searchExternal = vi.fn(async (language: string) => ({ language, activate }));
+    const controller = new VodSubtitleController({
+      preferredLanguage: "fi",
+      discoverEmbedded: async () => player.getEmbeddedSubtitleTracks(),
+      selectEmbedded: (track) => player.selectEmbeddedSubtitleTrack(track.id),
+      searchExternal,
+    });
+    expect(player.isVodSubtitleDiscoveryComplete()).toBe(true);
+    expect(await controller.start()).toEqual({ source: "external", language: "fi" });
+    expect(searchExternal).toHaveBeenCalledExactlyOnceWith("fi");
+    expect(activate).toHaveBeenCalledOnce();
+    player.destroy();
+  });
+
   it("surfaces a missing compatibility server instead of silently playing unsupported MKV audio", async () => {
     const { video } = fakeVideo();
     (video as unknown as { canPlayType(type: string): string }).canPlayType = vi.fn((type: string) => type.includes("avc1") ? "probably" : "");
@@ -304,8 +326,8 @@ describe("HtmlVideoPlayer", () => {
     expect((tracks[0] as unknown as { mode: string }).mode).toBe("disabled");
     expect((tracks[1] as unknown as { mode: string }).mode).toBe("disabled");
     expect(player.getEmbeddedSubtitleTracks()).toEqual([
-      { id: "text:0", label: "English", language: "en", selected: false },
-      { id: "text:1", label: "Finnish", language: "fi", selected: false },
+      { id: "text:0", label: "English", language: "en", playable: true, selected: false },
+      { id: "text:1", label: "Finnish", language: "fi", playable: true, selected: false },
     ]);
     expect(player.selectEmbeddedSubtitleTrack("text:1")).toBe(true);
     expect((tracks[0] as unknown as { mode: string }).mode).toBe("disabled");
@@ -315,6 +337,52 @@ describe("HtmlVideoPlayer", () => {
     expect(trackChanges.length).toBeGreaterThan(0);
     player.setLiveSubtitleMode(false);
     expect(player.getEmbeddedSubtitleTracks()).toEqual([]);
+    player.destroy();
+  });
+
+  it("discovers native VOD text tracks and switches cleanly between embedded and external subtitles", async () => {
+    const { video, dispatch, tracks: attached } = fakeVideo();
+    const textTracks = [
+      { kind: "subtitles", label: "Finnish", language: "fi", mode: "showing" },
+      { kind: "captions", label: "English", language: "en", mode: "disabled" },
+    ] as unknown as TextTrack[];
+    (video as unknown as { textTracks: TextTrack[] }).textTracks = textTracks;
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:synthetic-vod-subtitle"), revokeObjectURL: vi.fn() });
+    vi.stubGlobal("document", { createElement: vi.fn(() => ({ default: false, kind: "", label: "", srclang: "", src: "", track: { mode: "disabled" }, remove: vi.fn(() => { attached.splice(0); }) })) });
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode?.(true);
+    expect((textTracks[0] as unknown as { mode: string }).mode).toBe("disabled");
+    player.load("https://media.example.invalid/movie.mp4");
+    dispatch("loadedmetadata");
+
+    expect(player.isVodSubtitleDiscoveryComplete?.()).toBe(true);
+    expect(player.getEmbeddedSubtitleTracks()).toHaveLength(2);
+    expect(player.selectEmbeddedSubtitleTrack("text:0")).toBe(true);
+    expect((textTracks[0] as unknown as { mode: string }).mode).toBe("showing");
+    expect(await player.setSubtitle("1\n00:00:01,000 --> 00:00:02,000\nExternal", "External", "fi")).toEqual({ enabled: true });
+    expect((textTracks[0] as unknown as { mode: string }).mode).toBe("disabled");
+    expect(attached).toHaveLength(1);
+    expect(player.selectEmbeddedSubtitleTrack("off")).toBe(true);
+    expect(attached).toHaveLength(1);
+    textTracks.push((attached[0] as unknown as { track: TextTrack }).track);
+    player.setSubtitleEnabled(true);
+    expect((attached[0] as unknown as { track: { mode: string } }).track.mode).toBe("showing");
+    // Real browser TextTrackLists include the injected external track. Playing
+    // and metadata refreshes must not suppress it as a native default.
+    Object.assign((attached[0] as unknown as { track: TextTrack }).track, { kind: "subtitles", label: "External", language: "fi" });
+    dispatch("playing");
+    dispatch("loadedmetadata");
+    expect((attached[0] as unknown as { track: { mode: string } }).track.mode).toBe("showing");
+    expect(player.getEmbeddedSubtitleTracks()).toHaveLength(2);
+    player.setSubtitleEnabled(false);
+    dispatch("playing");
+    expect((attached[0] as unknown as { track: { mode: string } }).track.mode).toBe("disabled");
+    player.setSubtitleEnabled(true);
+    dispatch("playing");
+    expect((attached[0] as unknown as { track: { mode: string } }).track.mode).toBe("showing");
+    expect(player.selectEmbeddedSubtitleTrack("text:1")).toBe(true);
+    expect(attached).toHaveLength(0);
+    expect((textTracks[1] as unknown as { mode: string }).mode).toBe("showing");
     player.destroy();
   });
 

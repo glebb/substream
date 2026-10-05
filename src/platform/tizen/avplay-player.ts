@@ -1,5 +1,8 @@
+import { enrichEmbeddedSubtitleTracks } from "../../core/subtitles/embedded-metadata.ts";
+import type { MatroskaSubtitleTrack } from "../../core/subtitles/matroska.ts";
 import type { AudioTrack, EmbeddedSubtitleTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { parseSrtCues, type SubtitleCue } from "../../core/subtitles/srt-cues.ts";
+import { normalizeSubtitleText } from "../../core/subtitles/normalize.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
 import { probeLiveTsAudioMetadata, type LiveTsAudioProbeResult } from "./live-ts-audio-metadata.ts";
 import { TizenLiveDvbSubtitleFeed, type TizenDvbTrack } from "./live-dvb-subtitle-feed.ts";
@@ -15,10 +18,12 @@ interface AvPlayApi {
   close(): void;
   seekTo?(milliseconds: number, onSuccess?: () => void, onError?: (error: unknown) => void): void;
   getDuration?(): number;
+  getCurrentTime?(): number;
   getCurrentStreamInfo?(): AvPlayStreamInfo[];
   getTotalTrackInfo?(): AvPlayStreamInfo[];
   setSelectTrack?(trackType: "AUDIO" | "TEXT", index: number): void;
   setSilentSubtitle?(silent: boolean): void;
+  setSubtitlePosition?(milliseconds: number): void;
   setStreamingProperty?(property: "USER_AGENT", value: string): void;
   setBufferingParam?(bufferingType: "PLAYER_BUFFER_FOR_PLAY" | "PLAYER_BUFFER_FOR_RESUME", parameter: "PLAYER_BUFFER_SIZE_IN_SECOND", value: number): void;
   setDisplayRect(left: number, top: number, width: number, height: number): void;
@@ -28,6 +33,7 @@ interface AvPlayApi {
     onbufferingstart?(): void;
     onbufferingcomplete?(): void;
     onstreamcompleted?(): void;
+    onsubtitlechange?(durationMilliseconds: number | string, text: string, data3?: unknown, data4?: unknown): void;
     onerror?(error: unknown): void;
   }): void;
 }
@@ -65,6 +71,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private subtitleCues: SubtitleCue[] = [];
   private visibleCue = "";
   private subtitleOffsetMilliseconds = 0;
+  private nativeSubtitleTimingSupported: boolean | undefined;
   private subtitlesEnabled = true;
   private currentPlayheadMilliseconds = 0;
   private generation = 0;
@@ -75,6 +82,13 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private pendingSeekMilliseconds: number | null = null;
   private eventHandlers: MediaPlayerEventHandlers | null = null;
   private liveSubtitleMode = false;
+  private vodSubtitleMode = false;
+  private vodSubtitleMetadata: readonly MatroskaSubtitleTrack[] = [];
+  private vodSubtitleDiscoveryComplete = false;
+  private selectedVodSubtitleTrackId: string | undefined;
+  private vodEmbeddedSubtitleEnabled = false;
+  private subtitleCueTimer: ReturnType<typeof setTimeout> | undefined;
+  private embeddedCueExpiresAtMilliseconds: number | undefined;
   private liveSubtitleSilent: boolean | undefined;
   private embeddedSubtitleTracksSignature = "";
   private audioTracksSignature = "";
@@ -101,6 +115,20 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   setLiveSubtitleMode(enabled: boolean): void {
     this.liveSubtitleMode = enabled;
     if (enabled) this.setLiveAvPlaySubtitleSilent(true);
+  }
+
+  setVodSubtitleMode(enabled: boolean): void {
+    this.vodSubtitleMode = enabled;
+    this.vodSubtitleDiscoveryComplete = false;
+    if (enabled && this.isPrepared) this.setNativeSubtitleSilent(true);
+    this.emitEmbeddedSubtitleTracksIfChanged();
+  }
+
+  isVodSubtitleDiscoveryComplete(): boolean { return this.vodSubtitleDiscoveryComplete; }
+
+  setVodSubtitleMetadata(tracks: readonly MatroskaSubtitleTrack[]): void {
+    this.vodSubtitleMetadata = [...tracks];
+    this.emitEmbeddedSubtitleTracksIfChanged();
   }
 
   setLiveAudioMetadataUrl(url: string): void {
@@ -154,6 +182,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     const liveAudioMetadataUrl = this.liveAudioMetadataUrl;
     const liveDvbSubtitleUrl = this.liveDvbSubtitleUrl;
     this.destroy();
+    this.vodSubtitleMetadata = [];
     this.liveAudioMetadataUrl = liveAudioMetadataUrl;
     this.liveDvbSubtitleUrl = liveDvbSubtitleUrl;
     const player = avplay();
@@ -194,12 +223,29 @@ export class TizenAvPlayPlayer implements MediaPlayer {
         oncurrentplaytime: (milliseconds) => {
           if (!this.isCurrent(generation)) return;
           this.currentPlayheadMilliseconds = milliseconds;
+          this.expireEmbeddedSubtitleCue(milliseconds);
           this.liveDvbFeed?.setTime(milliseconds / 1_000);
           this.updateSubtitle(milliseconds);
           this.emitProgress(milliseconds, player);
           this.emitEmbeddedSubtitleTracksIfChanged();
           this.selectDefaultAudioTrack();
           this.emitAudioTracksIfChanged();
+        },
+        onsubtitlechange: (durationMilliseconds, text) => {
+          if (!this.isCurrent(generation) || !this.vodSubtitleMode || this.liveSubtitleMode || !this.vodEmbeddedSubtitleEnabled || !this.selectedVodSubtitleTrackId) return;
+          if (typeof text !== "string") return;
+          if (this.subtitleCueTimer) clearTimeout(this.subtitleCueTimer);
+          const cue = normalizeSubtitleText(text).trim();
+          this.onSubtitleCue(cue);
+          // AVPlay declares duration as DOMString milliseconds; some firmware
+          // returns a number instead. Validate after conversion, not before.
+          const numericDuration = Number(durationMilliseconds);
+          const duration = Number.isFinite(numericDuration) ? Math.max(0, Math.min(numericDuration, 60_000)) : 0;
+          this.embeddedCueExpiresAtMilliseconds = this.subtitlePlayhead(player) + duration;
+          this.subtitleCueTimer = setTimeout(() => {
+            this.subtitleCueTimer = undefined;
+            if (this.isCurrent(generation)) this.expireEmbeddedSubtitleCue(this.subtitlePlayhead(player));
+          }, duration);
         },
         onbufferingstart: () => { if (this.isCurrent(generation)) this.emit("buffering"); },
         onbufferingcomplete: () => {
@@ -216,7 +262,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
           () => {
             if (!this.isCurrent(generation)) return;
             this.isPrepared = true;
-            this.setLiveAvPlaySubtitleSilent(true);
+            if (this.liveSubtitleMode || this.vodSubtitleMode) this.setNativeSubtitleSilent(true);
             this.startLiveDvbFeed();
           this.emitEmbeddedSubtitleTracksIfChanged();
           this.selectDefaultAudioTrack();
@@ -278,6 +324,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   restart(): void {
     const player = avplay();
     if (!this.opened || !player) return;
+    if (this.selectedVodSubtitleTrackId) this.clearSubtitleCue();
     try {
       const generation = this.generation;
       this.isPrepared = false;
@@ -314,6 +361,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     }
     try {
       if (player.seekTo) {
+        if (this.selectedVodSubtitleTrackId) this.clearSubtitleCue();
         player.seekTo(targetMilliseconds, () => undefined, () => undefined);
       } else {
         const delta = targetMilliseconds - this.currentPlayheadMilliseconds;
@@ -424,8 +472,10 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       const selectedIndex = this.getSelectedTrackIndex(player, "TEXT");
       const native = player.getTotalTrackInfo()
         .filter((stream) => stream.type?.toUpperCase() === "TEXT" && avPlayTrackIndex(stream.index) !== undefined)
-        .map((stream) => subtitleTrackFromAvPlay(stream, avPlayTrackIndex(stream.index) === selectedIndex));
-      return [...this.liveDvbTracks, ...native];
+        .map((stream) => subtitleTrackFromAvPlay(stream, this.vodSubtitleMode
+          ? this.selectedVodSubtitleTrackId === String(stream.index)
+          : this.liveSubtitleSilent !== true && avPlayTrackIndex(stream.index) === selectedIndex));
+      return [...this.liveDvbTracks, ...(this.vodSubtitleMode ? enrichEmbeddedSubtitleTracks(native, this.vodSubtitleMetadata) : native)];
     } catch {
       return [...this.liveDvbTracks];
     }
@@ -451,17 +501,46 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       this.emitEmbeddedSubtitleTracksIfChanged();
       return true;
     }
-    if (this.liveSubtitleMode && id === "off") {
+    if ((this.liveSubtitleMode || this.vodSubtitleMode) && id === "off") {
+      if (!this.setNativeSubtitleSilent(true)) return false;
+      const turningOffEmbedded = this.selectedVodSubtitleTrackId !== undefined;
+      this.selectedVodSubtitleTrackId = undefined;
+      this.vodEmbeddedSubtitleEnabled = false;
+      if (this.subtitleCues.length > 0) this.subtitlesEnabled = false;
+      this.clearSubtitleCue();
+      this.setNativeSubtitlePosition(0);
+      if (turningOffEmbedded) this.subtitleOffsetMilliseconds = 0;
       this.liveDvbEnabled = false;
       this.liveDvbFeed?.select(undefined);
-      return this.setLiveAvPlaySubtitleSilent(true);
+      return true;
     }
     const index = Number(id);
     const player = avplay();
     if (!this.opened || !player?.setSelectTrack || !Number.isInteger(index) || index < 0) return false;
+    const previousIndex = this.getSelectedTrackIndex(player, "TEXT");
     try {
       player.setSelectTrack("TEXT", index);
-      if (this.liveSubtitleMode && !this.setLiveAvPlaySubtitleSilent(false)) return false;
+      if (this.vodSubtitleMode && !this.liveSubtitleMode) {
+        if (!this.setNativeSubtitleSilent(true)) {
+          if (previousIndex !== undefined) {
+            try { player.setSelectTrack("TEXT", previousIndex); } catch { /* Preserve best effort if firmware rejects rollback. */ }
+          }
+          return false;
+        }
+        this.setNativeSubtitlePosition(0);
+        this.subtitleCues = [];
+        this.subtitlesEnabled = false;
+        this.subtitleOffsetMilliseconds = 0;
+        this.selectedVodSubtitleTrackId = id;
+        this.vodEmbeddedSubtitleEnabled = true;
+        this.clearSubtitleCue();
+      } else if (this.liveSubtitleMode && !this.setNativeSubtitleSilent(false)) {
+        if (previousIndex !== undefined) {
+          try { player.setSelectTrack("TEXT", previousIndex); } catch { /* Preserve best effort if firmware rejects rollback. */ }
+        }
+        return false;
+      }
+      this.emitEmbeddedSubtitleTracksIfChanged();
       return true;
     } catch {
       return false;
@@ -523,19 +602,42 @@ export class TizenAvPlayPlayer implements MediaPlayer {
 
   async setSubtitle(subtitleText: string, _label: string, _language: string): Promise<SubtitleAttachment> {
     if (!this.opened) return { enabled: false, reason: "AVPlay is not ready." };
-    this.subtitleCues = parseSrtCues(subtitleText);
+    const cues = parseSrtCues(subtitleText);
+    if (cues.length === 0) return { enabled: false, reason: "The selected subtitle has no usable SRT cues." };
+    const switchingFromEmbedded = this.selectedVodSubtitleTrackId !== undefined;
+    if ((this.liveSubtitleMode || this.vodSubtitleMode) && !this.setNativeSubtitleSilent(true)) {
+      return { enabled: false, reason: "AVPlay could not hide its embedded subtitle track." };
+    }
+    this.setNativeSubtitlePosition(0);
+    if (switchingFromEmbedded) this.subtitleOffsetMilliseconds = 0;
+    this.selectedVodSubtitleTrackId = undefined;
+    this.vodEmbeddedSubtitleEnabled = false;
+    this.clearSubtitleCue();
+    this.liveDvbEnabled = false;
+    this.liveDvbFeed?.setEnabled(false);
+    this.subtitleCues = cues;
     this.subtitlesEnabled = true;
     this.visibleCue = "";
     this.onSubtitleCue("");
     this.updateSubtitle(this.currentPlayheadMilliseconds);
-    return this.subtitleCues.length > 0
-      ? { enabled: true }
-      : { enabled: false, reason: "The selected subtitle has no usable SRT cues." };
+    return { enabled: true };
   }
 
   setSubtitleTimingOffset(offsetSeconds: number): void {
     this.subtitleOffsetMilliseconds = normalizeSubtitleOffsetSeconds(offsetSeconds) * 1_000;
+    if (this.selectedVodSubtitleTrackId) {
+      this.setNativeSubtitlePosition(this.subtitleOffsetMilliseconds);
+      return;
+    }
+    this.setNativeSubtitlePosition(0);
     this.updateSubtitle(this.currentPlayheadMilliseconds);
+  }
+
+  getSubtitleRenderingCapabilities(): { timingAdjustment: boolean; styling: boolean; sharedOverlay: boolean } {
+    if (this.selectedVodSubtitleTrackId) return { timingAdjustment: this.nativeSubtitleTimingSupported === true, styling: true, sharedOverlay: true };
+    return this.subtitleCues.length > 0
+      ? { timingAdjustment: true, styling: true, sharedOverlay: true }
+      : { timingAdjustment: false, styling: false, sharedOverlay: false };
   }
 
   setSubtitleEnabled(enabled: boolean): void {
@@ -544,12 +646,18 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       this.liveDvbFeed?.setEnabled(enabled);
       this.setLiveAvPlaySubtitleSilent(true);
     }
+    if (this.selectedVodSubtitleTrackId) {
+      this.vodEmbeddedSubtitleEnabled = enabled;
+      if (!enabled) this.clearSubtitleCue();
+    }
+    if (this.vodSubtitleMode && this.subtitleCues.length > 0) this.setNativeSubtitleSilent(true);
     if (this.subtitleCues.length === 0) return;
     this.subtitlesEnabled = enabled;
     this.updateSubtitle(this.currentPlayheadMilliseconds);
   }
 
   private updateSubtitle(milliseconds: number): void {
+    if (this.selectedVodSubtitleTrackId) return;
     const cue = this.subtitlesEnabled
       ? this.subtitleCues.find((candidate) => milliseconds >= candidate.startMs + this.subtitleOffsetMilliseconds
         && milliseconds < candidate.endMs + this.subtitleOffsetMilliseconds)
@@ -568,6 +676,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     if (!this.isCurrent(generation) || deltaMilliseconds === 0) return;
     const player = avplay();
     if (!player) return;
+    if (this.selectedVodSubtitleTrackId) this.clearSubtitleCue();
     this.jumpInFlight = true;
     const onComplete = (): void => {
       if (!this.isCurrent(generation)) return;
@@ -592,8 +701,48 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   private setLiveAvPlaySubtitleSilent(silent: boolean): boolean {
     const player = avplay();
     if (!this.liveSubtitleMode || !player || !this.opened || !player.setSilentSubtitle) return false;
+    return this.setNativeSubtitleSilent(silent);
+  }
+
+  private setNativeSubtitleSilent(silent: boolean): boolean {
+    const player = avplay();
+    if ((!this.liveSubtitleMode && !this.vodSubtitleMode) || !player || !this.opened || !player.setSilentSubtitle) return false;
     if (this.liveSubtitleSilent === silent) return true;
     try { player.setSilentSubtitle(silent); this.liveSubtitleSilent = silent; return true; } catch { return false; }
+  }
+
+  private clearSubtitleCue(): void {
+    if (this.subtitleCueTimer) clearTimeout(this.subtitleCueTimer);
+    this.subtitleCueTimer = undefined;
+    this.embeddedCueExpiresAtMilliseconds = undefined;
+    this.visibleCue = "";
+    this.onSubtitleCue("");
+  }
+
+  private subtitlePlayhead(player: AvPlayApi): number {
+    try {
+      const current = player.getCurrentTime?.();
+      if (current !== undefined && Number.isFinite(current) && current >= 0) return current;
+    } catch { /* Fall back to the latest playback-time callback. */ }
+    return this.currentPlayheadMilliseconds;
+  }
+
+  private expireEmbeddedSubtitleCue(milliseconds: number): void {
+    if (this.embeddedCueExpiresAtMilliseconds !== undefined && milliseconds >= this.embeddedCueExpiresAtMilliseconds) this.clearSubtitleCue();
+  }
+
+  private setNativeSubtitlePosition(milliseconds: number): void {
+    const player = avplay();
+    if (!player?.setSubtitlePosition || !this.opened) {
+      this.nativeSubtitleTimingSupported = false;
+      return;
+    }
+    try {
+      player.setSubtitlePosition(milliseconds);
+      this.nativeSubtitleTimingSupported = true;
+    } catch {
+      this.nativeSubtitleTimingSupported = false;
+    }
   }
 
   private startLiveDvbFeed(): void {
@@ -619,7 +768,8 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   }
 
   private emitEmbeddedSubtitleTracksIfChanged(): void {
-    if (!this.liveSubtitleMode) return;
+    if (!this.liveSubtitleMode && !this.vodSubtitleMode) return;
+    if (this.vodSubtitleMode && this.isPrepared) this.vodSubtitleDiscoveryComplete = true;
     const tracks = this.getEmbeddedSubtitleTracks();
     const signature = JSON.stringify(tracks);
     if (signature === this.embeddedSubtitleTracksSignature) return;
@@ -669,6 +819,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.jumpInFlight = false;
     this.queuedJumpMilliseconds = 0;
     this.onSubtitleCue("");
+    this.clearSubtitleCue();
     this.subtitleCues = [];
     this.visibleCue = "";
     this.subtitleOffsetMilliseconds = 0;
@@ -689,6 +840,9 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     this.liveAudioMetadataStatus = "not-started";
     this.liveAudioMetadataUrl = "";
     this.liveDvbSubtitleUrl = "";
+    this.selectedVodSubtitleTrackId = undefined;
+    this.vodEmbeddedSubtitleEnabled = false;
+    this.vodSubtitleDiscoveryComplete = false;
     if (!this.opened) return;
     const player = avplay();
     this.opened = false;
@@ -721,8 +875,27 @@ function subtitleTrackFromAvPlay(stream: AvPlayStreamInfo, selected: boolean): E
   const details = parseStreamDetails(stream.extra_info);
   const language = readStreamText(details, "language", "track_lang", "lang");
   const codec = readStreamText(details, "codec", "fourCC", "fourcc", "format");
+  const forced = readStreamBoolean(details, "forced", "is_forced");
+  const hearingImpaired = readStreamBoolean(details, "hearing_impaired", "hearingImpaired", "sdh");
   const label = [language, codec].filter(Boolean).join(" · ") || `Subtitle ${(avPlayTrackIndex(stream.index) ?? 0) + 1}`;
-  return { id: String(stream.index), label, ...(language ? { language } : {}), selected };
+  return {
+    id: String(stream.index), label, ...(language ? { language } : {}), ...(codec ? { codec } : {}),
+    ...(forced !== undefined ? { forced } : {}), ...(hearingImpaired !== undefined ? { hearingImpaired } : {}),
+    playable: true, selected,
+  };
+}
+
+function readStreamBoolean(details: Record<string, unknown>, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = details[key];
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number" && (value === 0 || value === 1)) return value === 1;
+    if (typeof value === "string") {
+      if (/^(true|yes|1)$/i.test(value.trim())) return true;
+      if (/^(false|no|0)$/i.test(value.trim())) return false;
+    }
+  }
+  return undefined;
 }
 
 function avPlayTrackIndex(index: number | string | undefined): number | undefined {

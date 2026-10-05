@@ -1,3 +1,5 @@
+import { VodSubtitleController } from "../../application/vod-subtitle-controller.ts";
+import { embeddedSubtitleLabel } from "../../app/subtitle-labels.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TizenAvPlayPlayer, isTizenAvPlayAvailable } from "./avplay-player.ts";
 
@@ -6,6 +8,7 @@ const originalTizen = (globalThis as typeof globalThis & { tizen?: unknown }).ti
 const originalXhr = globalThis.XMLHttpRequest;
 
 afterEach(() => {
+  vi.useRealTimers();
   if (originalWebapis === undefined) delete (globalThis as typeof globalThis & { webapis?: unknown }).webapis;
   else (globalThis as typeof globalThis & { webapis?: unknown }).webapis = originalWebapis;
   if (originalTizen === undefined) delete (globalThis as typeof globalThis & { tizen?: unknown }).tizen;
@@ -386,7 +389,7 @@ describe("TizenAvPlayPlayer", () => {
   it("keeps native subtitle tracks hidden until an explicit track is selected", () => {
     const setSelectTrack = vi.fn();
     const setSilentSubtitle = vi.fn();
-    let listener: { onbufferingcomplete?(): void } | undefined;
+    let listener: { onbufferingcomplete?(): void; onsubtitlechange?(duration: number, text: string): void } | undefined;
     const getTotalTrackInfo = vi.fn(() => [
       { type: "TEXT", index: 4, extra_info: '{"track_lang":"swe","codec":"DVB"}' },
       { type: "TEXT", index: 6, extra_info: '{"language":"fin","codec":"DVB"}' },
@@ -407,8 +410,8 @@ describe("TizenAvPlayPlayer", () => {
 
     expect(setSilentSubtitle).toHaveBeenCalledWith(true);
     expect(player.getEmbeddedSubtitleTracks()).toEqual([
-      { id: "4", label: "swe · DVB", language: "swe", selected: true },
-      { id: "6", label: "fin · DVB", language: "fin", selected: false },
+      { id: "4", label: "swe · DVB", language: "swe", codec: "DVB", playable: true, selected: false },
+      { id: "6", label: "fin · DVB", language: "fin", codec: "DVB", playable: true, selected: false },
     ]);
     expect(player.selectEmbeddedSubtitleTrack("6")).toBe(true);
     expect(setSelectTrack).toHaveBeenCalledWith("TEXT", 6);
@@ -418,9 +421,174 @@ describe("TizenAvPlayPlayer", () => {
     expect(player.selectEmbeddedSubtitleTrack("off")).toBe(true);
     expect(setSilentSubtitle).toHaveBeenLastCalledWith(true);
     expect(discovered).toContainEqual([
-      { id: "4", label: "swe · DVB", language: "swe", selected: true },
-      { id: "6", label: "fin · DVB", language: "fin", selected: false },
+      { id: "4", label: "swe · DVB", language: "swe", codec: "DVB", playable: true, selected: true },
+      { id: "6", label: "fin · DVB", language: "fin", codec: "DVB", playable: true, selected: false },
     ]);
+    player.destroy();
+  });
+
+  it("uses file languages for unnamed native VOD tracks and selects Finnish automatically", async () => {
+    const setSelectTrack = vi.fn();
+    const tracksChanged = vi.fn();
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), setSilentSubtitle: vi.fn(), setSelectTrack,
+      getTotalTrackInfo: vi.fn(() => [
+        { type: "VIDEO", index: 0 }, { type: "AUDIO", index: 0 },
+        { type: "TEXT", index: 0, extra_info: "{}" }, { type: "TEXT", index: 1, extra_info: '{"track_lang":"und"}' },
+      ]),
+    } };
+    const player = new TizenAvPlayPlayer({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as HTMLElement, vi.fn());
+    player.setVodSubtitleMode(true);
+    player.setEventHandlers({ onStateChange: () => undefined, onEmbeddedSubtitleTracksChange: tracksChanged });
+    player.load("https://provider.invalid/movie.mkv");
+    player.setVodSubtitleMetadata([
+      { trackNumber: 3, label: "", language: "eng", codecId: "S_TEXT/UTF8", forced: false, hearingImpaired: false, default: false },
+      { trackNumber: 4, label: "", language: "fin", codecId: "S_TEXT/UTF8", forced: false, hearingImpaired: false, default: true },
+    ]);
+    expect(embeddedSubtitleLabel(player.getEmbeddedSubtitleTracks()[1]!, "fi")).toBe("Suomi · S_TEXT/UTF8");
+    expect(tracksChanged).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ id: "1", language: "fin" })]));
+    const searchExternal = vi.fn(async () => null);
+    const controller = new VodSubtitleController({
+      preferredLanguage: "fi", discoverEmbedded: async () => player.getEmbeddedSubtitleTracks(),
+      selectEmbedded: (track) => player.selectEmbeddedSubtitleTrack(track.id), searchExternal,
+    });
+    expect(await controller.start()).toMatchObject({ source: "embedded", language: "fi", track: { id: "1", language: "fin" } });
+    expect(setSelectTrack).toHaveBeenCalledWith("TEXT", 1);
+    expect(searchExternal).toHaveBeenCalledExactlyOnceWith("fi");
+    player.load("https://provider.invalid/another-movie.mkv");
+    expect(player.getEmbeddedSubtitleTracks()[0]?.language).toBeUndefined();
+    player.destroy();
+  });
+
+  it("discovers and switches native VOD subtitles without enabling live DVB mode", async () => {
+    const setSelectTrack = vi.fn();
+    const setSilentSubtitle = vi.fn();
+    const setSubtitlePosition = vi.fn();
+    const onSubtitleCue = vi.fn();
+    let listener: { onsubtitlechange?(duration: number, text: string): void; oncurrentplaytime?(ms: number): void } | undefined;
+    const getTotalTrackInfo = vi.fn(() => [
+      { type: "TEXT", index: 3, extra_info: '{"language":"fin","codec":"S_TEXT/UTF8","forced":false}' },
+      { type: "TEXT", index: 5, extra_info: '{"language":"eng","codec":"S_TEXT/UTF8","hearing_impaired":true}' },
+    ]);
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), getTotalTrackInfo, setSelectTrack, setSilentSubtitle, setSubtitlePosition,
+      setListener: vi.fn((next: NonNullable<typeof listener>) => { listener = next; }),
+    } };
+    const player = new TizenAvPlayPlayer({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as HTMLElement, onSubtitleCue);
+    player.setVodSubtitleMode?.(true);
+    player.load("https://media.example.invalid/movie.mkv");
+
+    expect(player.isVodSubtitleDiscoveryComplete?.()).toBe(true);
+    expect(player.getEmbeddedSubtitleTracks()).toEqual([
+      { id: "3", label: "fin · S_TEXT/UTF8", language: "fin", codec: "S_TEXT/UTF8", forced: false, playable: true, selected: false },
+      { id: "5", label: "eng · S_TEXT/UTF8", language: "eng", codec: "S_TEXT/UTF8", hearingImpaired: true, playable: true, selected: false },
+    ]);
+    expect(setSilentSubtitle).toHaveBeenCalledWith(true);
+    await expect(player.setSubtitle("1\n00:00:00,000 --> 00:00:10,000\nOld external cue", "External", "fi")).resolves.toEqual({ enabled: true });
+    listener?.oncurrentplaytime?.(1_000);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("Old external cue");
+    expect(player.selectEmbeddedSubtitleTrack("3")).toBe(true);
+    const callsAtEmbeddedSelection = onSubtitleCue.mock.calls.length;
+    expect(setSelectTrack).toHaveBeenCalledWith("TEXT", 3);
+    expect(setSilentSubtitle).toHaveBeenLastCalledWith(true);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+    listener?.oncurrentplaytime?.(2_000);
+    expect(onSubtitleCue.mock.calls.slice(callsAtEmbeddedSelection).some(([text]) => text === "Old external cue")).toBe(false);
+    player.setSubtitleTimingOffset(1.5);
+    expect(setSubtitlePosition).toHaveBeenLastCalledWith(1_500);
+    expect(player.getSubtitleRenderingCapabilities().timingAdjustment).toBe(true);
+    listener?.onsubtitlechange?.(2_000, "Finnish embedded cue");
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("Finnish embedded cue");
+    expect(player.selectEmbeddedSubtitleTrack("off")).toBe(true);
+    expect(setSilentSubtitle).toHaveBeenLastCalledWith(true);
+    listener?.onsubtitlechange?.(2_000, "ignored after off");
+    expect(onSubtitleCue).not.toHaveBeenCalledWith("ignored after off");
+    player.destroy();
+  });
+
+  it.each(["2500", 2500])("cleans embedded markup and keeps cues visible for AVPlay duration %s in milliseconds", (duration) => {
+    vi.useFakeTimers();
+    const onSubtitleCue = vi.fn();
+    let playhead = 0;
+    let listener: { onsubtitlechange?(duration: number | string, text: string): void; oncurrentplaytime?(ms: number): void } | undefined;
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(), getCurrentTime: () => playhead, seekTo: vi.fn(),
+      getTotalTrackInfo: vi.fn(() => [{ type: "TEXT", index: 0, extra_info: '{"language":"fin"}' }]),
+      setSelectTrack: vi.fn(), setSilentSubtitle: vi.fn(),
+      setListener: vi.fn((next: NonNullable<typeof listener>) => { listener = next; }),
+    } };
+    const player = new TizenAvPlayPlayer({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as HTMLElement, onSubtitleCue);
+    player.setVodSubtitleMode(true);
+    player.load("https://provider.invalid/movie.mkv");
+    expect(player.selectEmbeddedSubtitleTrack("0")).toBe(true);
+    const advancePlayback = (milliseconds: number) => {
+      playhead += milliseconds;
+      vi.advanceTimersByTime(milliseconds);
+      listener?.oncurrentplaytime?.(playhead);
+    };
+    const dialogue = "First & second\nAnother line\nLast line";
+    listener?.onsubtitlechange?.(duration, '{\\an8}<i>First &amp; second</i><BR /><font color="red">Another line</font>\\NLast line<!-- provider comment -->');
+    advancePlayback(500);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith(dialogue);
+    advancePlayback(1999);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith(dialogue);
+    advancePlayback(1);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+
+    listener?.onsubtitlechange?.("1000", "First line");
+    advancePlayback(500);
+    listener?.onsubtitlechange?.("2000", "Replacement line");
+    advancePlayback(500);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("Replacement line");
+    advancePlayback(1500);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+
+    listener?.onsubtitlechange?.("2500", "Retained while playback is stopped");
+    advancePlayback(500);
+    player.pause();
+    vi.advanceTimersByTime(5000);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("Retained while playback is stopped");
+    player.play();
+    advancePlayback(1999);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("Retained while playback is stopped");
+    advancePlayback(1);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+
+    listener?.onsubtitlechange?.("2500", "Stale cue before seek");
+    player.seekTo(30);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+    const callsAfterSeek = onSubtitleCue.mock.calls.length;
+    vi.advanceTimersByTime(2500);
+    expect(onSubtitleCue).toHaveBeenCalledTimes(callsAfterSeek);
+
+    listener?.onsubtitlechange?.("2500", "Cleared by Off");
+    player.selectEmbeddedSubtitleTrack("off");
+    const callsAfterOff = onSubtitleCue.mock.calls.length;
+    vi.advanceTimersByTime(2500);
+    expect(onSubtitleCue).toHaveBeenLastCalledWith("");
+    expect(onSubtitleCue).toHaveBeenCalledTimes(callsAfterOff);
+    player.destroy();
+  });
+
+  it("reports embedded timing unavailable when AVPlay has no subtitle-position API", () => {
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), pause: vi.fn(),
+      jumpForward: vi.fn(), jumpBackward: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+      getTotalTrackInfo: vi.fn(() => [{ type: "TEXT", index: 2, extra_info: '{"language":"eng"}' }]),
+      setSelectTrack: vi.fn(), setSilentSubtitle: vi.fn(),
+    } };
+    const player = new TizenAvPlayPlayer({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } as HTMLElement, vi.fn());
+    player.setVodSubtitleMode?.(true);
+    player.load("https://media.example.invalid/movie.mkv");
+    expect(player.selectEmbeddedSubtitleTrack("2")).toBe(true);
+    expect(player.getSubtitleRenderingCapabilities().timingAdjustment).toBe(false);
     player.destroy();
   });
 

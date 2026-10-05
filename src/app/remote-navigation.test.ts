@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, detailsControlNavigationTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
+  it("keeps the subtitle source picker before local files and timing controls", () => {
+    const layout = subtitleFocusLayout({ subtitleAttached: true, timingAvailable: true, apiKeyConfigured: true, apiKeyEditorOpen: false, seriesSearch: false, sourcePickerAvailable: true, localSubtitleAvailable: true });
+    expect(layout.sourcePicker).toBe(12);
+    expect(layout.localSubtitle).toBe(13);
+    expect(layout.timingStart).toBe(14);
+    expect(layout.search).toBe(18);
+  });
+
   it("keeps Settings navigation in DOM order as conditional editors appear", () => {
     expect(settingsControlOrder({ confirmationOpen: false, apiKeyEditorOpen: false, hasSubtitleKey: false })).toEqual([
       "back", "companion-url", "companion-start", "ui-language", "playlist", "subtitle-language", "api-key-edit",

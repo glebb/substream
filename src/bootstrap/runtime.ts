@@ -6,6 +6,9 @@ import { createIndexedDbCatalogRepositoryFactory } from "../platform/web/catalog
 import { isTizenAvPlayAvailable } from "../platform/tizen/avplay-player.ts";
 import { isTizenRuntime, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
 
+import { stableId } from "../core/catalog/normalize.ts";
+import { discoverEmbeddedSubtitles, EmbeddedSubtitleMetadataCache } from "../platform/browser/embedded-subtitle-discovery.ts";
+
 const localPreferences: PreferencesRepository = {
   get(key) {
     try { return globalThis.localStorage?.getItem(key) ?? null; } catch { return null; }
@@ -26,6 +29,8 @@ export function createAppRuntime(overrides: AppRuntimeOverrides = {}): AppRuntim
   const nativeVideoSurface = isTizenAvPlayAvailable();
   const previewTvProfile = typeof __SUBSTREAM_TV_UI_PREVIEW__ !== "undefined" && __SUBSTREAM_TV_UI_PREVIEW__;
   const playbackFactory = new BrowserTizenPlaybackPlayerFactory();
+  const preferences = overrides.preferences ?? localPreferences;
+  const subtitleCache = new EmbeddedSubtitleMetadataCache({ getItem: (key) => preferences.get(key), setItem: (key, value) => preferences.set(key, value) });
   const defaults: AppRuntime = {
     platform: tizen ? "tizen" : "browser",
     interactionProfile: tizen || previewTvProfile ? "tv" : "desktop",
@@ -39,10 +44,18 @@ export function createAppRuntime(overrides: AppRuntimeOverrides = {}): AppRuntim
     },
     input: { registerKeys: registerTizenPlaybackKeys },
     transport: { fetch: browserFetch },
-    preferences: localPreferences,
+    preferences,
     playbackFactory,
     playbackRelease: new PlaybackReleaseBarrier(),
     catalogue: createIndexedDbCatalogRepositoryFactory(),
+    subtitleDiscovery: { discover: async (url, signal) => {
+      const cacheKey = stableId(url);
+      const cached = subtitleCache.get(cacheKey, "media");
+      if (cached) return cached;
+      const result = await discoverEmbeddedSubtitles(url, signal, (input, init) => (overrides.transport?.fetch ?? browserFetch)(input, init));
+      subtitleCache.set(cacheKey, "media", result);
+      return result;
+    } },
   };
   return {
     ...defaults,

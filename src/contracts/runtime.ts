@@ -24,6 +24,7 @@ export interface AppRuntime {
   transport: TransportRepository;
   preferences: PreferencesRepository;
   catalogue: CatalogueRepositoryFactory;
+  subtitleDiscovery?: { discover(streamUrl: string, signal?: AbortSignal): Promise<import("../platform/browser/embedded-subtitle-discovery.ts").EmbeddedSubtitleDiscoveryResult> };
 }
 
 /** Narrow overrides let platforms and tests replace device services without changing app code. */

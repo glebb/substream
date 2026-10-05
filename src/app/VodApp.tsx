@@ -5,10 +5,15 @@ import { DEFAULT_MAX_WHOLE_RESPONSE_BYTES, responseTextChunks, validateWholeResp
 import { isBackKey, isRedKey, normalizedRemoteKey } from "../contracts/input.ts";
 import { IndexedDbCatalogOpenError } from "../platform/web/indexed-db-catalog.ts";
 import type { AppCatalogueRepository, VodGroup, VodSort } from "../contracts/repository.ts";
-import type { AudioTrack, MediaPlayer, PlaybackProgress, VideoDisplayMode } from "../platform/media-player.ts";
+import type { AudioTrack, EmbeddedSubtitleTrack, MediaPlayer, PlaybackProgress, VideoDisplayMode } from "../platform/media-player.ts";
 
 import { OpenSubtitlesClient, OpenSubtitlesRequestError, type SubtitleResult } from "../platform/opensubtitles/client.ts";
-import { rankSubtitleResults } from "../core/subtitles/rank.ts";
+import { stableId } from "../core/catalog/normalize.ts";
+import { VodSubtitleController } from "../application/vod-subtitle-controller.ts";
+import { normalizeVodSubtitleLanguage } from "../core/subtitles/vod-selection.ts";
+import { VodSubtitlePreferences, type VodSubtitleTimingSource } from "../platform/browser/vod-subtitle-preferences.ts";
+import type { EmbeddedSubtitleDiscoveryResult } from "../platform/browser/embedded-subtitle-discovery.ts";
+import { rankSubtitleResults, type RankedSubtitleResult } from "../core/subtitles/rank.ts";
 import { adjustSubtitleOffsetSeconds } from "../core/subtitles/timing.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { fetchProviderPlaylist } from "../platform/browser/provider-fetch.ts";
@@ -20,6 +25,8 @@ import { type PlaybackHistoryItem } from "../platform/browser/playback-progress-
 import { LatestVodLoader } from "../platform/browser/latest-vod.ts";
 import { APP_SECTION_ORDER, BrowseRequestGate, browseGroupsForCollection, browsePageCount, favouriteGroupsFirst, favouriteToggleFocusIndex, groupsWithLatest, isLatestVirtualGroup, latestVirtualGroup, sortAndPageBrowseItems, type AppSection } from "./browse.ts";
 import { formatCategoryBadge, formatGroupDisplayName } from "./display-formatting.ts";
+import { SubtitleAvailability } from "./SubtitleAvailability.tsx";
+import { embeddedSubtitleLabel } from "./subtitle-labels.ts";
 import { TitleMetadataExtras } from "./TitleMetadataExtras.tsx";
 import { formatRuntime, titleDetailsFor } from "./title-details.ts";
 
@@ -146,7 +153,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const { language, setLanguage } = useContext(LanguageContext);
   const catalogue = runtime.catalogue;
   const makeXtreamClient = (url: string) => XtreamClient.fromPlaylistUrl(url, (requestUrl, init) => runtime.transport.fetch(providerRequestUrl(requestUrl), init));
-  const subtitleTimingAvailable = true;
+  const vodSubtitlePreferences = useMemo(() => new VodSubtitlePreferences(runtime.preferences), [runtime.preferences]);
+
   const isTvProfile = runtime.interactionProfile === "tv";
   const sectionOrder = APP_SECTION_ORDER;
   const [state, setState] = useState<ScreenState>(settingsOnOpen || localSource ? "ready" : "loading");
@@ -236,6 +244,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const [detailsMetadata, setDetailsMetadata] = useState<TmdbMetadata | null>(null);
   const [detailsMetadataStatus, setDetailsMetadataStatus] = useState("");
   const [detailsSubtitleLanguages, setDetailsSubtitleLanguages] = useState<string[]>([]);
+  const [detailsEmbeddedSubtitles, setDetailsEmbeddedSubtitles] = useState<EmbeddedSubtitleDiscoveryResult | null>(null);
   const [detailsPosterUrl, setDetailsPosterUrl] = useState<string | null>(null);
   const [detailsEpisodes, setDetailsEpisodes] = useState<VodCatalogItem[]>([]);
   const [detailsEpisodeId, setDetailsEpisodeId] = useState("");
@@ -285,6 +294,20 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const [editingSubtitleType, setEditingSubtitleType] = useState(false);
   const [editingSubtitleSeason, setEditingSubtitleSeason] = useState(false);
   const [editingSubtitleEpisode, setEditingSubtitleEpisode] = useState(false);
+  const [embeddedSubtitleTracks, setEmbeddedSubtitleTracks] = useState<EmbeddedSubtitleTrack[]>([]);
+  const [subtitleChoice, setSubtitleChoice] = useState("automatic");
+  const [activeSubtitleDescription, setActiveSubtitleDescription] = useState("");
+  const [editingSubtitleSource, setEditingSubtitleSource] = useState(false);
+  const [subtitleSourceDraft, setSubtitleSourceDraft] = useState("automatic");
+  const activeEmbeddedSubtitleRef = useRef<EmbeddedSubtitleTrack | null>(null);
+  const activeExternalSubtitleRef = useRef<SubtitleResult | null>(null);
+  const subtitleSourceControlRef = useRef<HTMLElement | null>(null);
+  const subtitleControllerRef = useRef<VodSubtitleController<EmbeddedSubtitleTrack> | null>(null);
+  const startAutomaticSubtitlesRef = useRef<(() => Promise<void>) | null>(null);
+  const activeSubtitleTimingSourceRef = useRef<VodSubtitleTimingSource>("external");
+  const subtitleChoiceRef = useRef("automatic");
+  const subtitleUserChoiceRevisionRef = useRef(0);
+  const subtitleSearchAbortRef = useRef<AbortController | null>(null);
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[]>([]);
   const [subtitleStatus, setSubtitleStatus] = useState("");
   const [visibleSubtitle, setVisibleSubtitle] = useState("");
@@ -373,6 +396,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   useEffect(() => { latestLoaderRef.current.invalidate(); latestRequestRef.current += 1; }, [playlistUrl, groups, favouriteGroupIds]);
   const remoteBrowseRef = useRef<{ key: string; items: VodCatalogItem[] } | null>(null);
   const playerRef = useRef<MediaPlayer | null>(null);
+  const subtitleRendering = playerRef.current?.getSubtitleRenderingCapabilities?.();
+  const subtitleTimingAvailable = true; // Keep TV focus indexes stable; unsupported actions are disabled below.
   const playbackSessionGuardRef = useRef<PlaybackSessionGuard | null>(null);
   if (!playbackSessionGuardRef.current) playbackSessionGuardRef.current = new PlaybackSessionGuard();
   const playbackProgressRef = useRef<PlaybackProgress | null>(null);
@@ -485,6 +510,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       playerAudioTrackButtonRef.current,
       subtitleSmallerButtonRef.current,
       subtitleLargerButtonRef.current,
+      subtitleSourceControlRef.current,
       ...(selectedTitleSource === "local" ? [openLocalSubtitleButtonRef.current] : []),
       ...(subtitleTimingAvailable ? [
         subtitleTimingMinusTwoButtonRef.current,
@@ -772,6 +798,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setResumeChoice(null);
     setShowVideoInfo(false);
     setShowPlayerTools(false);
+    setEditingSubtitleSource(false);
     setAudioTracks([]);
     setPlayerFocusIndex(0);
     setNextEpisode(followingEpisode);
@@ -814,6 +841,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setDetailsMetadata(null);
     setDetailsMetadataStatus("");
     setDetailsSubtitleLanguages([]);
+    setDetailsEmbeddedSubtitles(null);
     setDetailsPosterUrl(null);
     setDetailsEpisodes([]); setDetailsEpisodeId(""); setEpisodeStatus("");
     setEditingDetailsEpisode(false);
@@ -863,6 +891,79 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         if (request === detailsRequestRef.current) setDetailsSubtitleLanguages([...new Set(results.map((result) => result.language).filter((language) => language === "fi" || language === "en"))]);
       } catch { /* Details remain useful when subtitle lookup is unavailable. */ }
     }
+  };
+
+  useEffect(() => {
+    const title = detailsTitle?.providerSeriesId
+      ? detailsEpisodes.find((episode) => episode.id === detailsEpisodeId)
+      : detailsTitle;
+    setDetailsEmbeddedSubtitles(null);
+    if (!title || detailsOrigin?.kind === "local" || !runtime.subtitleDiscovery) return;
+    const controller = createAbortController();
+    let active = true;
+    void runtime.subtitleDiscovery.discover(title.streamUrl, controller?.signal).then((result) => {
+      if (active) setDetailsEmbeddedSubtitles(result);
+    }).catch(() => { if (active) setDetailsEmbeddedSubtitles({ status: "unavailable", tracks: [] }); });
+    return () => { active = false; controller?.abort(); };
+  }, [detailsTitle, detailsEpisodeId, detailsEpisodes, detailsOrigin?.kind, runtime]);
+
+  const subtitleTitleKey = (title: VodCatalogItem) => stableId(title.streamUrl) + ":" + title.id;
+  const applySubtitleOffset = (source: VodSubtitleTimingSource) => {
+    activeSubtitleTimingSourceRef.current = source;
+    const offset = selectedTitle && selectedTitleSource !== "local" ? vodSubtitlePreferences.getOffset(subtitleTitleKey(selectedTitle), source) : 0;
+    setSubtitleTimingOffsetSeconds(offset);
+    playerRef.current?.setSubtitleTimingOffset?.(offset);
+  };
+  const embeddedTrackSignature = (track: EmbeddedSubtitleTrack) => JSON.stringify([track.language ?? "", track.label, track.codec ?? "", !!track.forced, !!track.hearingImpaired]);
+  const selectEmbeddedSubtitle = (track: EmbeddedSubtitleTrack, manual = true): boolean => {
+    const player = playerRef.current;
+    if (!player) return false;
+    if (manual) { subtitleUserChoiceRevisionRef.current += 1; subtitleControllerRef.current?.chooseManual(); subtitleSearchAbortRef.current?.abort(); subtitleRequestRef.current += 1; }
+    if (!player.selectEmbeddedSubtitleTrack?.(track.id)) {
+      setSubtitleStatus("This included subtitle could not be enabled. Try another subtitle.");
+      return false;
+    }
+    activeEmbeddedSubtitleRef.current = track;
+    activeExternalSubtitleRef.current = null;
+    const trackLanguage = normalizeVodSubtitleLanguage(track.language ?? track.label) ?? track.language;
+    const signature = embeddedTrackSignature(track);
+    const identicalTracks = (player.getEmbeddedSubtitleTracks?.() ?? []).filter((candidate) => embeddedTrackSignature(candidate) === signature);
+    const occurrence = Math.max(0, identicalTracks.findIndex((candidate) => candidate.id === track.id));
+    applySubtitleOffset(`embedded:${stableId(signature)}:${occurrence}`);
+    setVisibleSubtitle("");
+    setIsSubtitleAttached(true); setIsSubtitleEnabled(true);
+    setActiveSubtitleDescription(embeddedSubtitleLabel(track, language) + " · " + translate("Included in video", language));
+    setEmbeddedSubtitleTracks(player.getEmbeddedSubtitleTracks?.() ?? []);
+    setSubtitleStatus("Subtitle enabled: " + embeddedSubtitleLabel(track, language) + " · " + translate("Included in video", language));
+    if (manual) {
+      subtitleChoiceRef.current = "embedded:" + track.id;
+      setSubtitleChoice(subtitleChoiceRef.current);
+      if (selectedTitle && selectedTitleSource !== "local" && trackLanguage) vodSubtitlePreferences.setChoice(subtitleTitleKey(selectedTitle), { mode: "embedded", language: trackLanguage, label: track.label, forced: !!track.forced, hearingImpaired: !!track.hearingImpaired, ...(track.codec ? { codec: track.codec } : {}), occurrence });
+    }
+    return true;
+  };
+  const changeSubtitleSource = (value: string) => {
+    if (!selectedTitle) return;
+    subtitleUserChoiceRevisionRef.current += 1;
+    subtitleSearchAbortRef.current?.abort();
+    if (value === "automatic") {
+      subtitleRequestRef.current += 1;
+      subtitleChoiceRef.current = value; setSubtitleChoice(value);
+      vodSubtitlePreferences.setChoice(subtitleTitleKey(selectedTitle), { mode: "automatic" });
+      void startAutomaticSubtitlesRef.current?.();
+    } else if (value === "off") {
+      subtitleControllerRef.current?.chooseOff(); subtitleRequestRef.current += 1;
+      playerRef.current?.selectEmbeddedSubtitleTrack?.("off"); playerRef.current?.setSubtitleEnabled(false);
+      setVisibleSubtitle(""); setIsSubtitleEnabled(false);
+      subtitleChoiceRef.current = value; setSubtitleChoice(value);
+      vodSubtitlePreferences.setChoice(subtitleTitleKey(selectedTitle), { mode: "off" });
+      setSubtitleStatus("Subtitles off");
+    } else if (value.startsWith("embedded:")) {
+      const track = embeddedSubtitleTracks.find((item) => "embedded:" + item.id === value);
+      if (track) selectEmbeddedSubtitle(track);
+    }
+    setEditingSubtitleSource(false);
+    window.requestAnimationFrame(() => subtitleSourceControlRef.current?.focus());
   };
 
   const companionOrigin = () => {
@@ -2443,7 +2544,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     const controls = playerControls();
     const control = controls[Math.min(playerFocusIndex, Math.max(0, controls.length - 1))];
     control?.focus();
-  }, [editingSubtitleEpisode, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, openSubtitlesApiKey, isSubtitleAttached, nextEpisode, playerFocusIndex, playerFullscreen, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, showPlayerTools, subtitleResults.length, subtitleSearchType]);
+  }, [editingSubtitleSource, editingSubtitleEpisode, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, openSubtitlesApiKey, isSubtitleAttached, nextEpisode, playerFocusIndex, playerFullscreen, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, showPlayerTools, subtitleResults.length, subtitleSearchType]);
 
   useEffect(() => {
     if (selectedTitle) window.scrollTo(0, 0);
@@ -2500,10 +2601,16 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       let ownedPlayer: MediaPlayer | null = null;
       let pageHideListener: (() => void) | null = null;
       let cleanupStarted = false;
+      const vodMetadataAbort = createAbortController();
+      let vodMetadataReady: Promise<void> = Promise.resolve();
       const cleanup = () => {
         if (cleanupStarted) return;
         cleanupStarted = true;
+        vodMetadataAbort?.abort();
         subtitleRequestRef.current += 1;
+        subtitleControllerRef.current?.cancel();
+        subtitleSearchAbortRef.current?.abort();
+        startAutomaticSubtitlesRef.current = null;
         playbackSessionGuardRef.current?.invalidate();
         if (skipFeedbackTimerRef.current !== null) {
           window.clearTimeout(skipFeedbackTimerRef.current);
@@ -2555,7 +2662,98 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         if (!player) { setPlaybackStatus(PLAYBACK_UNAVAILABLE_MESSAGE); setIsPlaybackPaused(true); return cleanup; }
         const playerSession = playbackSessionGuardRef.current!.next();
         playerRef.current = player;
-        player.setSubtitleTimingOffset?.(initialSubtitleOffset);
+        player.setVodSubtitleMode?.(true);
+        if (player.setVodSubtitleMetadata && runtime.subtitleDiscovery && selectedTitleSource !== "local") {
+          vodMetadataReady = runtime.subtitleDiscovery.discover(selectedTitle.streamUrl, vodMetadataAbort?.signal).then((result) => {
+            if (result.status === "ready" && !cleanupStarted && playbackSessionGuardRef.current?.isCurrent(playerSession) && playerRef.current === player) {
+              player.setVodSubtitleMetadata?.(result.tracks);
+            }
+          }).catch(() => undefined);
+        }
+        player.setSubtitleTimingOffset?.(0);
+        setEmbeddedSubtitleTracks([]);
+        setActiveSubtitleDescription("");
+        activeEmbeddedSubtitleRef.current = null; activeExternalSubtitleRef.current = null;
+        const rememberedChoice = selectedTitleSource === "local" ? null : vodSubtitlePreferences.getChoice(subtitleTitleKey(selectedTitle));
+        subtitleChoiceRef.current = rememberedChoice?.mode === "off" ? "off" : "automatic";
+        setSubtitleChoice(subtitleChoiceRef.current);
+        if (rememberedChoice?.mode === "off") setSubtitleStatus("Subtitles off");
+        const initialChoiceRevision = subtitleUserChoiceRevisionRef.current;
+        let autoStarted = false;
+        const startAutomatic = async () => {
+          subtitleControllerRef.current?.cancel();
+          let automaticPending = true;
+          const revision = subtitleUserChoiceRevisionRef.current;
+          let resultsPromise: Promise<RankedSubtitleResult[] | undefined> | null = null;
+          const controller = new VodSubtitleController<EmbeddedSubtitleTrack>({
+            preferredLanguage: subtitleLanguagePreference,
+            discoverEmbedded: () => new Promise((resolve) => {
+              const started = Date.now();
+              const poll = () => {
+                if (!playbackSessionGuardRef.current?.isCurrent(playerSession) || playerRef.current !== player) { resolve([]); return; }
+                const tracks = player.getEmbeddedSubtitleTracks?.() ?? [];
+                setEmbeddedSubtitleTracks(tracks);
+                if (tracks.length || player.isVodSubtitleDiscoveryComplete?.() || Date.now() - started >= 1600) {
+                  if (tracks.length && player.setVodSubtitleMetadata) {
+                    void vodMetadataReady.then(() => resolve(playbackSessionGuardRef.current?.isCurrent(playerSession) ? player.getEmbeddedSubtitleTracks?.() ?? [] : []));
+                  } else resolve(tracks);
+                }
+                else window.setTimeout(poll, 100);
+              };
+              poll();
+            }),
+            selectEmbedded: (track) => selectEmbeddedSubtitle(track, false),
+            searchExternal: async (language) => {
+              if (!openSubtitlesApiKey.trim()) return null;
+              resultsPromise ??= findSubtitles(true, true, () => automaticPending && subtitleUserChoiceRevisionRef.current === revision && subtitleControllerRef.current === controller && !!playbackSessionGuardRef.current?.isCurrent(playerSession));
+              const results = await resultsPromise;
+              const candidates = results?.filter((result) => result.language === language && result.highConfidence) ?? [];
+              const best = candidates.find((result) => !result.hearingImpaired) ?? candidates[0];
+              return best ? { language: best.language, activate: (isCurrent: () => boolean) => loadSubtitle(best, undefined, isCurrent) } : null;
+            },
+            discoveryTimeoutMs: player.setVodSubtitleMetadata ? 13_800 : 1800,
+          });
+          subtitleControllerRef.current = controller;
+          setSubtitleStatus("Choosing subtitles automatically…");
+          const selection = await controller.start();
+          automaticPending = false;
+          if (subtitleUserChoiceRevisionRef.current !== revision || !playbackSessionGuardRef.current?.isCurrent(playerSession) || subtitleControllerRef.current !== controller || subtitleChoiceRef.current !== "automatic") return;
+          subtitleSearchAbortRef.current?.abort();
+          if (selection.source === "off") {
+            player.selectEmbeddedSubtitleTrack?.("off"); player.setSubtitleEnabled(false);
+            setIsSubtitleEnabled(false); setVisibleSubtitle("");
+            setSubtitleStatus(openSubtitlesApiKey.trim() ? "No suitable subtitles found. Find another subtitle below." : "No playable preferred-language subtitles are included. Configure OpenSubtitles to search for others.");
+          }
+        };
+        startAutomaticSubtitlesRef.current = startAutomatic;
+        const restoreOrStart = async () => {
+          const revision = subtitleUserChoiceRevisionRef.current;
+          const isRestoreCurrent = () => subtitleUserChoiceRevisionRef.current === revision && !!playbackSessionGuardRef.current?.isCurrent(playerSession) && playerRef.current === player;
+          if (subtitleChoiceRef.current !== "automatic") return;
+          if (revision !== initialChoiceRevision) { await startAutomatic(); return; }
+          if (rememberedChoice?.mode === "off") { player.selectEmbeddedSubtitleTrack?.("off"); player.setSubtitleEnabled(false); setSubtitleStatus("Subtitles off"); return; }
+          if (rememberedChoice?.mode === "embedded") {
+            await vodMetadataReady;
+            if (!isRestoreCurrent()) return;
+            const started = Date.now();
+            while (!player.isVodSubtitleDiscoveryComplete?.() && Date.now() - started < 1600) {
+              await new Promise((resolve) => window.setTimeout(resolve, 100));
+              if (!isRestoreCurrent()) return;
+            }
+            const tracks = player.getEmbeddedSubtitleTracks?.() ?? [];
+            const matching = tracks.filter((track) => (normalizeVodSubtitleLanguage(track.language ?? track.label) ?? track.language?.toLowerCase()) === rememberedChoice.language && track.label === rememberedChoice.label
+              && (rememberedChoice.forced === undefined || !!track.forced === rememberedChoice.forced)
+              && (rememberedChoice.hearingImpaired === undefined || !!track.hearingImpaired === rememberedChoice.hearingImpaired)
+              && (rememberedChoice.codec === undefined || track.codec === rememberedChoice.codec))[rememberedChoice.occurrence ?? 0];
+            if (matching && selectEmbeddedSubtitle(matching)) return;
+          }
+          if (rememberedChoice?.mode === "external" && rememberedChoice.fileId) {
+            const restored = await loadSubtitle({ id: rememberedChoice.id, language: rememberedChoice.language, fileId: Number(rememberedChoice.fileId) } as SubtitleResult, undefined, isRestoreCurrent);
+            if (restored) { subtitleChoiceRef.current = "external"; setSubtitleChoice("external"); return; }
+            if (!isRestoreCurrent()) return;
+          }
+          if (isRestoreCurrent() && subtitleChoiceRef.current === "automatic") await startAutomatic();
+        };
         player.setEventHandlers({
           onStateChange: (playbackState) => {
             if (!playbackSessionGuardRef.current?.isCurrent(playerSession)) return;
@@ -2579,7 +2777,13 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
               setActiveRemoteLocalMedia(nextRemote);
               void reportLocalMediaState(remoteMedia.server, remoteMedia.tvCredential, remoteMedia.media.sessionId, remoteState).catch(() => undefined);
             }
-            if (playbackState === "playing") setAudioTracks(player.getAudioTracks?.() ?? []);
+            if (playbackState === "playing") {
+              setAudioTracks(player.getAudioTracks?.() ?? []);
+              setEmbeddedSubtitleTracks(player.getEmbeddedSubtitleTracks?.() ?? []);
+              if (!autoStarted && !(selectedTitleSource === "local" && localSubtitleSnapshotRef.current)) {
+                autoStarted = true; void restoreOrStart();
+              }
+            }
             setIsPlaybackBuffering(playbackState === "buffering");
             setIsPlaybackPaused(playbackState === "paused" || playbackState === "ended" || playbackState === "error");
             if (playbackState === "error") setShowFullscreenControls(true);
@@ -2590,6 +2794,16 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
                 setContinueHistory(loadPlaybackHistory());
               }
               if (nextEpisode) startPlayback(nextEpisode, 0, followingEpisodeFor(nextEpisode));
+            }
+          },
+          onEmbeddedSubtitleTracksChange: (tracks) => {
+            if (!playbackSessionGuardRef.current?.isCurrent(playerSession)) return;
+            setEmbeddedSubtitleTracks(tracks);
+            const active = activeEmbeddedSubtitleRef.current;
+            const enriched = active && tracks.find((track) => track.id === active.id);
+            if (enriched) {
+              activeEmbeddedSubtitleRef.current = enriched;
+              setActiveSubtitleDescription(embeddedSubtitleLabel(enriched, language) + " · " + translate("Included in video", language));
             }
           },
           onProgress: (value) => {
@@ -2618,6 +2832,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             player.setSubtitleTimingOffset?.(snapshot.offsetSeconds);
             player.setSubtitleEnabled(snapshot.enabled);
             setIsSubtitleAttached(true);
+            subtitleChoiceRef.current = snapshot.enabled ? "external" : "off"; setSubtitleChoice(subtitleChoiceRef.current);
+            setActiveSubtitleDescription(snapshot.label + " · Subtitle file");
             setIsSubtitleEnabled(snapshot.enabled);
             setSubtitleStatus("Subtitle enabled: " + snapshot.language.toUpperCase());
           }).catch(() => { if (!cancelled && playbackSessionGuardRef.current?.isCurrent(playerSession)) setSubtitleStatus("The preferred subtitle could not be attached. Try another subtitle file."); });
@@ -2625,8 +2841,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         if (resumeStartSecondsRef.current > 0) player.seekTo?.(resumeStartSecondsRef.current);
         resumeStartSecondsRef.current = 0;
         if (selectedTitleSource === "local") setSubtitleStatus("Search subtitles when you choose, or open an SRT/WebVTT subtitle file.");
-        else if (openSubtitlesApiKey.trim()) void findSubtitles(true);
-        else setSubtitleStatus("Add an OpenSubtitles API key below to search automatically.");
+        else setSubtitleStatus("Checking included subtitles…");
         return cleanup;
       } catch {
         cleanup();
@@ -2680,10 +2895,13 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         if (cancelled || remoteLocalMediaRef.current?.media.sessionId !== activeRemoteLocalMedia.media.sessionId
           || (existing?.sessionId === activeRemoteLocalMedia.media.sessionId && subtitle.version <= existing.version)) return;
         const player = playerRef.current;
-        if (!player) return;
+        if (!player || subtitleChoiceRef.current === "off" || subtitleChoiceRef.current.startsWith("embedded:")) return;
         if (subtitle.text) {
           const attachment = await player.setSubtitle(subtitle.text, subtitle.label, subtitle.language);
           if (cancelled || playerRef.current !== player || remoteLocalMediaRef.current?.media.sessionId !== activeRemoteLocalMedia.media.sessionId || !attachment.enabled) return;
+          subtitleControllerRef.current?.chooseManual(); subtitleRequestRef.current += 1;
+          subtitleChoiceRef.current = subtitle.enabled ? "external" : "off"; setSubtitleChoice(subtitleChoiceRef.current);
+          setActiveSubtitleDescription(subtitle.label + " · Subtitle file");
           player.setSubtitleTimingOffset?.(subtitle.offsetSeconds);
           player.setSubtitleEnabled(subtitle.enabled);
           setIsSubtitleAttached(true);
@@ -2729,7 +2947,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [browserCompanion, localSource, localUpload.session, localUpload.state]);
 
-  const findSubtitles = async (automatic = false) => {
+  const findSubtitles = async (automatic = false, selectionOnly = false, automaticGuard?: () => boolean): Promise<RankedSubtitleResult[] | undefined> => {
     const apiKey = openSubtitlesApiKeyRef.current
       ? openSubtitlesApiKeyRef.current.value.trim()
       : openSubtitlesApiKey.trim();
@@ -2737,13 +2955,19 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       setSubtitleStatus("Enter an OpenSubtitles API key before searching.");
       return;
     }
+    if (automaticGuard && !automaticGuard()) return;
+    if (!automatic) { subtitleUserChoiceRevisionRef.current += 1; subtitleControllerRef.current?.chooseManual(); }
+    subtitleSearchAbortRef.current?.abort();
+    const requestController = createAbortController();
+    subtitleSearchAbortRef.current = requestController ?? null;
     const requestId = ++subtitleRequestRef.current;
+    const isSearchCurrent = () => requestId === subtitleRequestRef.current && (!automaticGuard || automaticGuard());
     setSubtitleResults([]);
     setSubtitleStatus("Searching OpenSubtitles…");
     try {
       setOpenSubtitlesApiKey(apiKey);
       saveOpenSubtitlesApiKey(apiKey);
-      const client = new OpenSubtitlesClient(apiKey, (url, init) => runtime.transport.fetch(url, init), OPEN_SUBTITLES_BASE_URL);
+      const client = new OpenSubtitlesClient(apiKey, (url, init) => runtime.transport.fetch(url, { ...init, ...(requestController ? { signal: requestController.signal } : {}) }), OPEN_SUBTITLES_BASE_URL);
       const titleForSearch = normalizeTitle(selectedTitle.title);
       const defaultSearchTitle = titleForSearch.searchTitle || selectedTitle.searchTitle;
       const resolvedTitle = subtitleSearchQuery.trim() || defaultSearchTitle;
@@ -2756,7 +2980,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       let usedSeriesFallback = false;
       if (subtitleSearchType === "series" && season !== undefined && episode !== undefined) {
         const feature = await client.findSeriesFeature(resolvedTitle, resolvedYear);
-        if (requestId !== subtitleRequestRef.current) return;
+        if (!isSearchCurrent()) return;
         if (feature) {
           parentFeatureId = feature.id;
           results = await client.search({
@@ -2786,7 +3010,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           ...(subtitleSearchType === "series" && episode !== undefined ? { episode } : {}),
         });
       }
-      if (requestId !== subtitleRequestRef.current) return;
+      if (!isSearchCurrent()) return;
       const ranked = rankSubtitleResults({
         title: resolvedTitle,
         // A manual title search can target a different release than the VOD
@@ -2800,6 +3024,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       }, results).slice(0, 8);
       setSubtitleResults(ranked);
       const best = ranked[0];
+      if (selectionOnly) return ranked;
       if (automatic && best?.highConfidence) {
         setSubtitleStatus("Best match found. Loading " + best.language.toUpperCase() + " subtitles…");
         await loadSubtitle(best, apiKey);
@@ -2809,7 +3034,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           : usedSeriesFallback ? "No exact series record or matching episode subtitles were found." : "No subtitle matches found");
       }
     } catch (cause) {
-      if (requestId !== subtitleRequestRef.current) return;
+      if (!isSearchCurrent()) return;
       setSubtitleResults([]);
       const detail = cause instanceof OpenSubtitlesRequestError && cause.status ? " (HTTP " + cause.status + ")" : "";
       const localProxyHint = import.meta.env.DEV && !detail
@@ -2819,13 +3044,15 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     }
   };
 
-  const loadSubtitle = async (subtitle: SubtitleResult, apiKeyOverride?: string) => {
+  const loadSubtitle = async (subtitle: SubtitleResult, apiKeyOverride?: string, automaticGuard?: () => boolean): Promise<boolean> => {
+    if (automaticGuard && !automaticGuard()) return false;
+    if (!automaticGuard) { subtitleUserChoiceRevisionRef.current += 1; subtitleControllerRef.current?.chooseManual(); subtitleSearchAbortRef.current?.abort(); subtitleRequestRef.current += 1; }
     const apiKey = apiKeyOverride ?? (openSubtitlesApiKeyRef.current
       ? openSubtitlesApiKeyRef.current.value.trim()
       : openSubtitlesApiKey.trim());
     if (!apiKey || !playerRef.current) {
       setSubtitleStatus("Enter an OpenSubtitles API key to download a subtitle.");
-      return;
+      return false;
     }
     const player = playerRef.current;
     const requestId = ++subtitleRequestRef.current;
@@ -2834,12 +3061,21 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       const client = new OpenSubtitlesClient(apiKey, (url, init) => runtime.transport.fetch(url, init), OPEN_SUBTITLES_BASE_URL);
       const download = await client.download(subtitle.fileId);
       const text = await client.fetchSubtitleText(download.link);
-      if (requestId !== subtitleRequestRef.current || playerRef.current !== player) return;
+      if (requestId !== subtitleRequestRef.current || playerRef.current !== player || (automaticGuard && !automaticGuard())) return false;
       const attachment = await player.setSubtitle(text, subtitle.language.toUpperCase(), subtitle.language);
-      if (requestId !== subtitleRequestRef.current || playerRef.current !== player) return;
+      if (requestId !== subtitleRequestRef.current || playerRef.current !== player || (automaticGuard && !automaticGuard())) return false;
       setSubtitleStatus(attachment.enabled
         ? "Subtitle enabled: " + subtitle.language.toUpperCase()
         : "Subtitle downloaded, but the TV could not attach it. " + (attachment.reason ?? "Try another subtitle."));
+      if (attachment.enabled) {
+        activeEmbeddedSubtitleRef.current = null; activeExternalSubtitleRef.current = subtitle;
+        applySubtitleOffset(`external:${subtitle.fileId}`);
+        setActiveSubtitleDescription(subtitle.language.toUpperCase() + " · OpenSubtitles");
+        if (!automaticGuard) {
+          subtitleChoiceRef.current = "external"; setSubtitleChoice("external");
+          if (selectedTitle && selectedTitleSource !== "local") vodSubtitlePreferences.setChoice(subtitleTitleKey(selectedTitle), { mode: "external", id: subtitle.id, language: subtitle.language, fileId: String(subtitle.fileId) });
+        }
+      }
       setIsSubtitleAttached(attachment.enabled);
       setIsSubtitleEnabled(attachment.enabled);
       if (attachment.enabled && selectedTitleSource === "local") publishLocalSubtitleSnapshot({ text, label: subtitle.language.toUpperCase(), language: subtitle.language, enabled: true, offsetSeconds: subtitleTimingOffsetSeconds });
@@ -2849,10 +3085,12 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         setPlayerFocusIndex(1);
         window.requestAnimationFrame(() => playerStageRef.current?.scrollIntoView({ block: "start", inline: "nearest" }));
       }
+      return attachment.enabled;
     } catch {
-      if (requestId !== subtitleRequestRef.current) return;
+      if (requestId !== subtitleRequestRef.current) return false;
       setSubtitleStatus("Subtitle download is unavailable. Check the API key and network connection, then try again.");
     }
+    return false;
   };
 
   const attachLocalSubtitle = async (event: FormEvent<HTMLInputElement>) => {
@@ -2862,6 +3100,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     if (!file || selectedTitleSource !== "local") return;
     const player = playerRef.current;
     if (!player) { setSubtitleStatus("Start local playback before opening a subtitle file."); return; }
+    subtitleUserChoiceRevisionRef.current += 1;
+    subtitleControllerRef.current?.chooseManual(); subtitleSearchAbortRef.current?.abort();
     const requestId = ++subtitleRequestRef.current;
     setSubtitleStatus("Reading subtitle file…");
     try {
@@ -2876,6 +3116,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       setIsSubtitleAttached(true);
       setIsSubtitleEnabled(true);
       publishLocalSubtitleSnapshot({ text: subtitle.text, label: subtitle.label, language: subtitle.language, enabled: true, offsetSeconds: subtitleTimingOffsetSeconds });
+      applySubtitleOffset("external:local");
+      subtitleChoiceRef.current = "external"; setSubtitleChoice("external");
+      setActiveSubtitleDescription(subtitle.label + " · Subtitle file");
       setSubtitleStatus("Subtitle enabled: " + subtitle.label);
     } catch (cause) {
       if (requestId !== subtitleRequestRef.current || playerRef.current !== player) return;
@@ -2899,6 +3142,13 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const toggleSubtitles = () => {
     if (!isSubtitleAttached) return;
     const enabled = !isSubtitleEnabled;
+    if (!enabled) { changeSubtitleSource("off"); return; }
+    const remembered = activeEmbeddedSubtitleRef.current;
+    if (remembered) { selectEmbeddedSubtitle(remembered); return; }
+    subtitleControllerRef.current?.chooseManual(); subtitleRequestRef.current += 1;
+    subtitleChoiceRef.current = "external"; setSubtitleChoice("external");
+    const external = activeExternalSubtitleRef.current;
+    if (selectedTitle && external) vodSubtitlePreferences.setChoice(subtitleTitleKey(selectedTitle), { mode: "external", id: external.id, language: external.language, fileId: String(external.fileId) });
     playerRef.current?.setSubtitleEnabled(enabled);
     setIsSubtitleEnabled(enabled);
     const subtitle = localSubtitleSnapshotRef.current;
@@ -2950,9 +3200,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   };
 
   const adjustSubtitleTiming = (deltaSeconds: number) => {
-    if (!selectedTitle) return;
+    if (!selectedTitle || subtitleRendering?.timingAdjustment === false) return;
     const nextOffset = adjustSubtitleOffsetSeconds(subtitleTimingOffsetSeconds, deltaSeconds);
-    const offset = selectedTitleSource === "local" ? nextOffset : saveSubtitleTimingOffset(selectedTitle.id, nextOffset);
+    const offset = selectedTitleSource === "local" ? nextOffset : vodSubtitlePreferences.setOffset(subtitleTitleKey(selectedTitle), activeSubtitleTimingSourceRef.current, nextOffset);
     setSubtitleTimingOffsetSeconds(offset);
     showSubtitleOffset();
     playerRef.current?.setSubtitleTimingOffset?.(offset);
@@ -3084,6 +3334,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         clearPlaybackProgress();
         clearSubtitleTimingOffsets();
         clearSubtitlePreferences();
+        vodSubtitlePreferences.clear();
+        runtime.preferences.remove("substream.embedded-subtitle-metadata");
         setSubtitleLanguagePreference("fi");
         clearFavouriteGroups();
         clearCatalogClearedMarker();
@@ -3215,6 +3467,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     seriesSearch: subtitleSearchType === "series",
     controlOffset: playerControlOffset,
     localSubtitleAvailable: selectedTitleSource === "local",
+    sourcePickerAvailable: true,
   });
   const subtitleTimingStartFocusIndex = subtitleFocus.timingStart;
   const subtitleSettingsFocusIndex = subtitleFocus.setupKey ?? subtitleFocus.keyInput ?? subtitleFocus.search;
@@ -3461,7 +3714,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             {detailsMetadataStatus && detailsMetadataStatus !== "Loading title details…" && <p className="hint" role="status">{detailsMetadataStatus}</p>}
             {detailsOrigin?.kind === "local" && detailsTitle.contentType === "other" && <p className="hint">{detailsTitle.classification?.evidence.join(" ")}</p>}
             {detailsOrigin?.kind === "local" && (tmdbCredentials.readAccessToken || tmdbCredentials.apiKey) && <button type="button" onClick={() => void openTitle(detailsTitle, { kind: "local", focusIndex: detailsFocusIndex })}>Search details again</button>}
-            {details.subtitleLanguages.length > 0 ? <p className="hint">Subtitles available: {details.subtitleLanguages.join(", ")}</p> : <p className="hint">Subtitle languages will appear after searching OpenSubtitles.</p>}
+            <SubtitleAvailability language={language} embedded={detailsEmbeddedSubtitles} externalLanguages={details.subtitleLanguages} episodeRequired={!!detailsTitle.providerSeriesId && !detailsEpisodeId} local={detailsOrigin?.kind === "local"} />
             {detailsHistory && <p className="details-resume" role="status">Resume available at {formatPlaybackTime(detailsHistory.currentTimeSeconds)} of {formatPlaybackTime(detailsHistory.durationSeconds)}</p>}
             {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" translateValue={false} value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `${translate("Season", language)} ${episode.season}, ` : ""}${episode.episode !== undefined ? `${translate("Episode", language)} ${episode.episode}` : episode.title}` : translate("Choose episode", language); })()} editing={editingDetailsEpisode} remoteMode={isTvProfile} className={detailsFocusIndex === 1 ? "remote-focused" : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? "remote-focused" : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => { setDetailsFocusIndex(1); webEpisodeSelectionChangedRef.current = false; }} value={detailsEpisodeId} onChange={(event) => { webEpisodeSelectionChangedRef.current = true; setDetailsEpisodeId(event.target.value); setDetailsFocusIndex(2); window.requestAnimationFrame(() => { webEpisodeSelectionChangedRef.current = false; detailsControlsRef.current[2]?.focus(); }); }} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id} translate={episode.episode === undefined ? "no" : undefined}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
           </div>
@@ -3560,26 +3813,32 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             <button className={playerFocusIndex === aspectFocusIndex ? "remote-focused" : ""} type="button" onClick={cycleVideoDisplayMode} ref={playerAspectButtonRef}>Aspect: {videoDisplayMode === "auto" ? "Auto" : videoDisplayMode === "fit" ? "Fit" : "Fill"}</button>
             <button className={playerFocusIndex === 8 + playerControlOffset ? "remote-focused" : ""} type="button" onClick={() => setShowVideoInfo((visible) => !visible)} ref={playerTechnicalInfoButtonRef}>Info</button>
             <button className={playerFocusIndex === audioTrackFocusIndex ? "remote-focused" : ""} type="button" onClick={selectNextAudioTrack} ref={playerAudioTrackButtonRef}>{audioTracks.length === 0 ? "Audio: unavailable" : `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}`}</button>
-            <button className={playerFocusIndex === subtitleSmallerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(-.2)} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
-            <button className={playerFocusIndex === subtitleLargerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(.2)} ref={subtitleLargerButtonRef}>Subtitle A+</button>
+            <button className={playerFocusIndex === subtitleSmallerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(-.2)} disabled={subtitleRendering?.styling === false} ref={subtitleSmallerButtonRef}>Subtitle A−</button>
+            <button className={playerFocusIndex === subtitleLargerFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleFontSize(.2)} disabled={subtitleRendering?.styling === false} ref={subtitleLargerButtonRef}>Subtitle A+</button>
           </>}
           <span className={"playback-status " + ([PLAYBACK_UNAVAILABLE_MESSAGE, LOCAL_PLAYBACK_ERROR_MESSAGE, PLAYBACK_CLEANUP_MESSAGE].includes(playbackStatus) ? "error" : "")} role="status" aria-live="polite">{playbackStatus}</span>
         </div>
         {showPlayerTools && <section className="subtitles">
           <h3>Subtitles</h3>
+          <RemoteEditable label="Subtitle source" value={subtitleChoice === "automatic" ? "Automatic" + (activeSubtitleDescription ? " — " + activeSubtitleDescription : "") : subtitleChoice === "off" ? "Off" : activeSubtitleDescription || "External subtitle"} editing={editingSubtitleSource} remoteMode={isTvProfile} className={playerFocusIndex === subtitleFocus.sourcePicker ? "remote-focused" : ""} controlRef={(element) => { subtitleSourceControlRef.current = element; }} onBeginEdit={() => { setSubtitleSourceDraft(subtitleChoice); setEditingSubtitleSource(true); window.requestAnimationFrame(() => subtitleSourceControlRef.current?.focus()); }} renderEditor={(controlRef) => <label>Subtitle source<select aria-label="Subtitle source" value={isTvProfile && editingSubtitleSource ? subtitleSourceDraft : subtitleChoice} ref={controlRef} onChange={(event) => { if (isTvProfile && editingSubtitleSource) setSubtitleSourceDraft(event.target.value); else changeSubtitleSource(event.target.value); }} onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Enter") { const value = event.currentTarget.value; event.preventDefault(); changeSubtitleSource(value); return; }
+            if (isBackKey(event.nativeEvent) || event.key === "Escape") { event.preventDefault(); setEditingSubtitleSource(false); window.requestAnimationFrame(() => subtitleSourceControlRef.current?.focus()); }
+          }}><option value="automatic">Automatic</option><option value="off">Off</option>{[...embeddedSubtitleTracks].sort((left, right) => { const rank = (track: EmbeddedSubtitleTrack) => normalizeVodSubtitleLanguage(track.language ?? track.label) === subtitleLanguagePreference ? 0 : normalizeVodSubtitleLanguage(track.language ?? track.label) ? 1 : 2; return rank(left) - rank(right); }).map((track) => <option key={track.id} value={"embedded:" + track.id} disabled={track.playable === false}>{embeddedSubtitleLabel(track, language)} · {translate("Included in video", language)}</option>)}{subtitleChoice === "external" && <option value="external">{activeSubtitleDescription || "External subtitle"}</option>}</select></label>} />
           {selectedTitleSource === "local" && <div className="subtitle-actions">
             <input ref={localSubtitleInputRef} className="sr-only" type="file" accept=".srt,.vtt,application/x-subrip,text/vtt" onChange={attachLocalSubtitle} aria-label="Choose an SRT or WebVTT subtitle file" />
             <button className={playerFocusIndex === subtitleFocus.localSubtitle ? "remote-focused" : ""} type="button" ref={openLocalSubtitleButtonRef} onClick={() => localSubtitleInputRef.current?.click()}>Open subtitle file (SRT/WebVTT)</button>
             <p className="hint">Subtitle search uses the editable title only. Video bytes and file paths stay on this computer.</p>
           </div>}
           {subtitleTimingAvailable && <div className="subtitle-timing" aria-label="Subtitle timing controls">
+            {subtitleRendering?.timingAdjustment === false && <p className="hint">Timing adjustment is unavailable for this subtitle track.</p>}
             <p><strong>Current offset: {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</strong></p>
             <p className="hint">{selectedTitleSource === "local" ? "Positive values show subtitles later; negative values show them earlier. Kept in memory for this local session." : "Positive values show subtitles later; negative values show them earlier. Saved for this title on this device."}</p>
             <div className="subtitle-timing-actions">
-              <button className={playerFocusIndex === subtitleTimingStartFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-2)} ref={subtitleTimingMinusTwoButtonRef}>−2 s</button>
-              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 1 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-0.5)} ref={subtitleTimingMinusHalfButtonRef}>−0.5 s</button>
-              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 2 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(0.5)} ref={subtitleTimingPlusHalfButtonRef}>+0.5 s</button>
-              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 3 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(2)} ref={subtitleTimingPlusTwoButtonRef}>+2 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-2)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingMinusTwoButtonRef}>−2 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 1 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(-0.5)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingMinusHalfButtonRef}>−0.5 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 2 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(0.5)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingPlusHalfButtonRef}>+0.5 s</button>
+              <button className={playerFocusIndex === subtitleTimingStartFocusIndex + 3 ? "remote-focused" : ""} type="button" onClick={() => adjustSubtitleTiming(2)} disabled={subtitleRendering?.timingAdjustment === false} ref={subtitleTimingPlusTwoButtonRef}>+2 s</button>
             </div>
           </div>}
           {!hasSubtitleKey && <div className="subtitle-actions">

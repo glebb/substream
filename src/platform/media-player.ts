@@ -1,7 +1,16 @@
+import type { MatroskaSubtitleTrack } from "../core/subtitles/matroska.ts";
+
 export interface SubtitleAttachment {
   enabled: boolean;
   /** Safe, user-facing reason when a platform cannot attach the subtitle. */
   reason?: string;
+}
+
+/** Capabilities of the currently selected subtitle source, for honest UI controls. */
+export interface SubtitleRenderingCapabilities {
+  timingAdjustment: boolean;
+  styling: boolean;
+  sharedOverlay: boolean;
 }
 
 export type VideoDisplayMode = "auto" | "fit" | "fill";
@@ -59,6 +68,11 @@ export interface EmbeddedSubtitleTrack {
   label: string;
   /** ISO 639 language code when the playback engine exposes one. */
   language?: string;
+  forced?: boolean;
+  hearingImpaired?: boolean;
+  codec?: string;
+  /** False when discovered but the active playback engine cannot render it. */
+  playable?: boolean;
   selected: boolean;
 }
 
@@ -76,6 +90,12 @@ export interface MediaPlayer {
   setEventHandlers(handlers: MediaPlayerEventHandlers | null): void;
   /** Enables automatic Finnish/English selection for embedded live subtitles. */
   setLiveSubtitleMode?(enabled: boolean): void;
+  /** Enables discovery/selection of embedded VOD text tracks independently of live captions. */
+  setVodSubtitleMode?(enabled: boolean): void;
+  /** True once embedded VOD track discovery has completed for the current item. */
+  isVodSubtitleDiscoveryComplete?(): boolean;
+  /** Supplies file metadata to enrich native VOD tracks; never creates playable tracks. */
+  setVodSubtitleMetadata?(tracks: readonly MatroskaSubtitleTrack[]): void;
   /** Supplies the direct transport-stream URL for bounded live track metadata probing. */
   setLiveAudioMetadataUrl?(url: string): void;
   /** Supplies a direct transport-stream URL for Tizen's standalone DVB sideband reader. */
@@ -131,6 +151,8 @@ export interface MediaPlayer {
   setSubtitleEnabled(enabled: boolean): void;
   /** Shifts attached subtitle cues; positive values display later and negative values earlier. */
   setSubtitleTimingOffset?(offsetSeconds: number): void;
+  /** Describes controls supported by the currently selected subtitle renderer. */
+  getSubtitleRenderingCapabilities?(): SubtitleRenderingCapabilities;
 }
 
 /** Shared web UI request; the factory binds the available platform video surface. */
