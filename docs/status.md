@@ -28,7 +28,7 @@ Embedded subtitles prefer Finnish, then English. The browser's DVB worker requir
 
 Personal Tizen builds automatically enable the relay for all provider titles marked `Multi-Sub`; `npm run relay:personal` discovers the matching channel IDs and runs the Mac service using gitignored `.env.live-relay`. Standard/public builds do not embed its device credential. Saved TV settings override bundled defaults. The relay prepares three completed chunks, requests eight-second TV buffering, and tries two fresh relay sessions after a playback failure before direct fallback. It closes the old session first; fallback omits the separate TS audio-language probe.
 
-The last recorded hosted setup uses native systemd/Nginx and relay-only Finnish Mullvad egress. Basic HTTPS playback on Tizen was accepted on 2026-10-03. This is historical device acceptance, not validation of the architecture refactor. Direct server egress returned 456 in that deployment check. Subtitle timing remains `clock=unverified`; sustained resource use, recovery controls and a soak remain unrecorded. See [deployment](live-subtitle-relay-deployment.md) and [operations](../deploy/live-subtitle-relay/OPERATIONS.md).
+Hosted relay setup and playback acceptance records are kept in ignored local deployment notes. The repository provides generic [deployment](live-subtitle-relay-deployment.md) and [operations](../deploy/live-subtitle-relay/OPERATIONS.md) guides. Subtitle timing remains `clock=unverified`; sustained resource use, recovery controls and a soak remain unrecorded.
 
 ## VOD playback and configuration
 

@@ -1,0 +1,8 @@
+{
+  "googleClientId": "replace-with-google-oauth-client-id",
+  "googleClientSecret": "replace-with-google-oauth-client-secret",
+  "allowedEmails": ["authorized.synthetic@example.invalid"],
+  "portalOrigin": "https://substream.example.invalid",
+  "playerOrigin": "http://substream.example.invalid",
+  "databasePath": "/var/lib/substream-access/access.sqlite"
+}

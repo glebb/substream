@@ -7,6 +7,8 @@
     "dev": "vite",
     "companion:dev": "node scripts/companion-server.mjs",
     "relay:dev": "node services/live-subtitle-relay/main.ts",
+    "access:dev": "node services/substream-access/main.ts",
+    "access:test": "vitest run services/substream-access",
     "relay:personal": "node scripts/live-relay-personal.ts",
     "relay:test": "vitest run services/live-subtitle-relay src/platform/live-relay src/core/live-relay",
     "relay:smoke": "node scripts/relay-smoke.ts",
@@ -15,6 +17,11 @@
     "dev:personal": "node scripts/dev-personal.mjs",
     "build": "vite build",
     "build:public": "PUBLIC_BUILD=1 vite build",
+    "package:web": "node scripts/substream-web.mjs package",
+    "deploy:web": "node scripts/substream-web.mjs deploy",
+    "rollback:web": "node scripts/substream-web.mjs rollback",
+    "test:web-deploy": "vitest run scripts/substream-web.test.mjs",
+    "test:web-integration": "python3 scripts/substream-web-integration.py",
     "build:personal": "PERSONAL_BUILD=1 vite build",
     "build:tizen": "vite build --outDir tizen/dist",
     "build:tizen:personal": "PERSONAL_BUILD=1 vite build --outDir tizen/dist",
@@ -38,7 +45,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "package:access": "node deploy/substream-access/package.mjs package",
+    "deploy:access": "node deploy/substream-access/package.mjs deploy",
+    "rollback:access": "node deploy/substream-access/package.mjs rollback"
   },
   "devDependencies": {
     "@types/node": "^24.3.1",
@@ -52,6 +62,7 @@
   "dependencies": {
     "@vitejs/plugin-react": "^5.2.0",
     "fflate": "^0.8.3",
+    "google-auth-library": "^11.1.0",
     "hls.js": "^1.6.13",
     "libbitsub": "^1.12.1",
     "react": "^19.3.0",

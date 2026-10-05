@@ -64,6 +64,13 @@ VOD still owns subtitle search, resume, next-episode and much of its player UI o
 
 ## Device-owned data and requests
 
+Client credential ownership is a mandatory architecture boundary. User-entered
+provider, OpenSubtitles and TMDb credentials are stored on the device and sent
+directly only to their intended provider/API. Hosting, access, companion and
+subtitle-relay services must not collect, proxy or synchronize them. See the
+[mandatory client credential policy](client-credential-policy.md) for scope,
+review requirements, separate service authentication and HTTP security limits.
+
 Catalogue sessions wrap the existing IndexedDB implementation. An interrupted import preserves the last ready generation, unknown entries retain classification evidence, and closing one session does not close another. Preferences preserve existing setting keys and denied-storage fallbacks. Provider/metadata/guide requests use injected transport where wired into the shared screens; some optional local-media clients still use their web adapters directly.
 
 Search uses the device's imported M3U catalogue or account-scoped Xtream cache. It does not require pairing or a relay. The Xtream cache still loads/searches large record collections; indexed per-record storage, worker indexing and measured performance budgets remain separate work.

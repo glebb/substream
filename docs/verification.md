@@ -15,6 +15,12 @@ npm run build:tizen:6
 
 For documentation-only changes, check links, script names, and claims against source; no personal playlist or TV session is needed.
 
+Changes to settings, credential storage, transport, API clients, helper services,
+logging or deployment must preserve the [mandatory client credential
+policy](client-credential-policy.md). For credential-routing changes, verify
+destinations and payloads with synthetic values, including error/retry paths;
+Substream and helper endpoints must not receive client provider/API credentials.
+
 ## Legacy UI preview
 
 Start Docker Desktop, then use `npm run preview:chromium47` for a standard preview or `npm run preview:chromium47:personal` for the established local flow with private `.env` defaults. The preview enables TV layout/navigation while retaining browser video playback; it does not emulate AVPlay or Samsung APIs.

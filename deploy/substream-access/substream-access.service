@@ -1,0 +1,31 @@
+[Unit]
+Description=Substream Google-auth access portal and private authorizer
+After=network.target
+
+[Service]
+Type=simple
+User=substream-access
+Group=substream-access
+WorkingDirectory=/opt/substream-access/current
+Environment=SUBSTREAM_ACCESS_CONFIG_FILE=/etc/substream-access/config.json
+Environment=SUBSTREAM_PORTAL_PORT=8792
+Environment=SUBSTREAM_AUTH_PORT=8791
+ExecStart=/opt/live-subtitle-relay/node/bin/node /opt/substream-access/current/services/substream-access/main.ts
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/etc/substream-access/config.json
+ReadWritePaths=/var/lib/substream-access
+
+[Install]
+WantedBy=multi-user.target

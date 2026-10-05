@@ -47,6 +47,13 @@ Standard builds do not embed those credentials. The optional `COMPANION_SERVER_U
 
 ## Public static deployment
 
+The [mandatory client credential policy](docs/client-credential-policy.md)
+requires user-entered provider, OpenSubtitles and TMDb credentials to remain
+stored on the client. The client sends them directly to their intended APIs;
+Substream hosting and helper services must not collect, proxy or synchronize
+them. This requirement applies to future changes. Local storage is not a secret
+vault, and HTTP delivery cannot guarantee protection against altered app code.
+
 Use the public build for an internet-facing browser deployment:
 
 ```sh
@@ -56,6 +63,10 @@ npm run build:public
 It always emits a static `dist/` directory, never starts the companion service, and ignores every `.env` package default. In particular, it does not embed `COMPANION_SERVER_URL`, playlist URLs, or OpenSubtitles/TMDb credentials. Deploy only `dist/`, never `scripts/companion-server.mjs` or any `/api/*` service.
 
 The web server must reject `/api/` rather than routing it through the single-page-app fallback. Browser-entered credentials remain in that browser's local storage and are not a secure vault. Provider requests are made directly from the browser, so the provider will still receive its own request URLs and credentials.
+
+Keep actual deployment domains, IPs and operations records in Git-ignored `.local/deployment/`; checked-in deployment templates use example hostnames.
+
+The hosted web app uses temporary IP-bound access links created from the independent [Substream access portal]. Google login is restricted to the portal's private email allowlist. See [access service](deploy/substream-access/README.md), [web deployment](deploy/substream-web/README.md) and [hosted operations](deploy/substream-web/OPERATIONS.md) for configuration, packaging and rollback. The player is served over HTTP to support HTTP-only providers; its files and access URL remain unencrypted in transit.
 
 ## Common commands
 

@@ -1,9 +1,23 @@
 # Live subtitle relay deployment
 
-The last recorded hosted deployment, from 2026-10-03, used a native systemd service behind the host's existing Nginx at `https://subtitles.displayofpatience.com`. The host and service were not queried during this documentation update, so this is historical deployment context rather than a current health report. The personal Tizen 3 package was confirmed to play through hosted HTTPS at that time. See the [operations guide](../deploy/live-subtitle-relay/OPERATIONS.md) for the recorded host setup, private configuration refresh, service commands and rollback.
+Use the native systemd and Nginx templates in `deploy/live-subtitle-relay` for
+host preparation. The example hostname is `subtitles.example.invalid`; set
+actual hostnames and certificate paths only in ignored local copies under
+`.local/deployment/`. The [operations guide](../deploy/live-subtitle-relay/OPERATIONS.md)
+is generic. Actual host inventories, VPN details and dated playback acceptance
+records belong in private local notes.
 
-The checked-in Docker/Compose/Caddy files are an alternative deployment preparation. Docker was not installed on the recorded host, and this container path has not been deployed or validated. The deployed service was native systemd; do not assume the container files describe its current state.
+The Docker/Compose/Caddy files provide an alternative deployment preparation;
+they do not establish that a container release has been deployed or validated.
+The [relay implementation and local setup](live-subtitle-relay.md) describe
+session behavior and configuration. The [Tizen guide](../tizen/README.md) covers
+preparing, signing and installing personal packages.
 
-The [relay implementation and local setup](live-subtitle-relay.md) describe session behavior and configuration. The [Tizen guide](../tizen/README.md) covers preparing, signing and installing personal packages. The user reported installing a fresh personal TV package after the cross-platform refactor on 2026-10-04. Showtime 1 initially fell back after an upstream response ended during relay preparation; a subsequent authorized hosted diagnostic passed with four subtitle tracks and PNG captions. The user subsequently confirmed Showtime 1 relay playback works again on the TV; detailed recovery, sustained playback and timing checks remain outstanding. See the dated operations entry. No relay server change is implied by that refactor.
-
-The service code enforces session-only ingestion, one upstream connection per session, explicit teardown and a demand deadline renewed by successful video segment requests. The recorded hosted configuration limits the service to one session; the configurable service default is two. These are source-level behaviors; the historical host release was not inspected here. Sustained playback and measured subtitle synchronization were not recorded, and `clock=unverified` remains the timing status. Preserve private configuration and certificates during upgrades or rollback, keep capability-bearing URLs out of logs, and use only synthetic fixtures for local verification.
+The service enforces session-only ingestion, one upstream connection per
+session, explicit teardown and a demand deadline renewed by successful video
+segment requests. Configure capacity for your provider's connection limit.
+Source behavior and passing synthetic checks do not establish hosted playback,
+sustained stability or measured subtitle synchronization. Timing remains
+`clock=unverified`. Preserve private configuration and certificates during
+upgrades or rollback, keep capability URLs out of logs, and use only synthetic
+fixtures for local verification.

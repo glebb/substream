@@ -11,7 +11,16 @@ Samsung Tizen IPTV live TV and VOD player. The shared core is platform-independe
 
 - Never print or commit `.env`, playlist URLs, OpenSubtitles credentials, tokens, or signed media URLs.
 - Sanitize network errors before presenting them.
+- Keep real deployment domains, IPs, SSH identities/destinations, production inventories and backup/migration records in Git-ignored `.local/deployment/`. Use synthetic example hostnames in committed templates, docs and tests. Do not copy private local deployment notes into source or release archives.
 - Tests must use synthetic fixtures, never the user's real playlist.
+
+# Mandatory client credential boundary
+
+- Follow `docs/client-credential-policy.md`. This is a hard product requirement, not an implementation preference. Do not remove, weaken or bypass it without the user's explicit authorization to change this specific policy; ordinary feature/fix/deployment requests do not authorize an exception.
+- User-entered provider/playlist credentials, OpenSubtitles credentials and TMDb API keys/tokens must remain stored on the client device. Send them directly from that client only to their intended provider/API for authentication and use.
+- Never upload, synchronize, proxy, log, include in telemetry/crash reports, or persist these credentials through Substream hosting/access services, the existing bot service, companion services, or subtitle relays. Do not add server-side credential settings, credential forwarding, or a CORS/mixed-content workaround that violates this boundary.
+- Keep service-specific Google login, access grants and companion/relay authentication separate from provider/API credentials. Independently configured private relay credentials and isolated development tooling are not permission to collect client credentials in shipped apps.
+- Review changes to settings, storage, transport, optional integrations, logging and deployment against this policy. Credential-routing changes require synthetic regression checks of destinations and payloads. Document HTTP integrity limits honestly; never describe local browser storage as a secret vault or promise an absolute security guarantee.
 
 # Architecture
 

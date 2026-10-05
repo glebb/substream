@@ -19,3 +19,6 @@ coverage/
 
 # Generated editor code-count reports
 .VSCodeCounter/
+
+# Private deployment notes and host-specific configuration
+/.local/
