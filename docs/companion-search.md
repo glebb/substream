@@ -42,6 +42,8 @@ For Vite development, an empty service address uses the `/api` proxy. `COMPANION
 
 During local browser development only, the companion can prepare a remote H.264 MKV for browser playback when AC-3/E-AC-3 audio support is missing. Run `npm run dev:personal` with `ffmpeg` and `ffprobe` available. Unsupported AC-3/E-AC-3 audio becomes stereo AAC while video is copied when compatible. DTS and TrueHD are not converted by this fallback. Production builds and Tizen AVPlay do not use this browser compatibility path; local-file TV preparation is a separate flow.
 
+The hosted browser player has a separate client-only `.mkv` path that copies compatible AVC/HEVC video and supported audio into fragmented MP4 using direct provider byte-range requests. When native Dolby audio playback is unsupported, it converts only that audio to AAC on the device. It does not use the companion or proxy provider traffic. See [browser VOD remux](browser-vod-remux.md) for its CORS requirements and supported formats.
+
 For local-file ownership, quotas, supported media preparation, and troubleshooting, see [local file playback](local-file-playback.md). For relay setup and protocol verification, see the [live subtitle relay guide](live-subtitle-relay.md) and [verification guide](verification.md).
 
 ## Troubleshooting

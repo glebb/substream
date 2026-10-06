@@ -1,3 +1,5 @@
+import { PlaybackSeekControls } from "./PlaybackSeekControls.tsx";
+import { StreamInfoOverlay } from "./StreamInfoOverlay.tsx";
 import { requestPlayerFullscreen, exitBrowserFullscreen, releasePlayerOrientation } from "../platform/browser/fullscreen.ts";
 import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FocusEvent, type FormEvent, type SetStateAction } from "react";
 import { importM3uChunks, normalizeTitle, type VodCatalogItem } from "../core/catalog/index.ts";
@@ -234,6 +236,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const [showFullscreenControls, setShowFullscreenControls] = useState(false);
   const [videoDisplayMode, setVideoDisplayMode] = useState<VideoDisplayMode>("auto");
   const [playbackStatus, setPlaybackStatus] = useState("Loading…");
+  const [playbackDiagnostics, setPlaybackDiagnostics] = useState("");
   const [playbackCleanupBlocked, setPlaybackCleanupBlocked] = useState(false);
   const [playbackRetryCount, setPlaybackRetryCount] = useState(0);
   const [playbackProgress, setPlaybackProgress] = useState<PlaybackProgress | null>(null);
@@ -824,6 +827,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     }
     setVideoDisplayMode("auto");
     setPlaybackStatus("Loading…");
+    setPlaybackDiagnostics("");
     setPlaybackProgress(null);
     setIsPlaybackPaused(false);
     setVisibleSubtitle("");
@@ -2693,6 +2697,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         if (rememberedChoice?.mode === "off") setSubtitleStatus("Subtitles off");
         const initialChoiceRevision = subtitleUserChoiceRevisionRef.current;
         let autoStarted = false;
+        let hasPlayed = false;
         const startAutomatic = async () => {
           subtitleControllerRef.current?.cancel();
           let automaticPending = true;
@@ -2779,6 +2784,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
               error: selectedTitleSource === "local" ? LOCAL_PLAYBACK_ERROR_MESSAGE : PLAYBACK_UNAVAILABLE_MESSAGE,
             };
             setPlaybackStatus(status[playbackState]);
+            setPlaybackDiagnostics(playbackState === "error" || (playbackState === "paused" && !hasPlayed) ? player.getPlaybackDiagnostics?.() ?? "" : "");
             const remoteMedia = remoteLocalMediaRef.current;
             if (remoteMedia && selectedTitle.id === `companion-local-${remoteMedia.media.sessionId}`) {
               const remoteState = playbackState === "playing" ? "playing"
@@ -2791,6 +2797,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
               void reportLocalMediaState(remoteMedia.server, remoteMedia.tvCredential, remoteMedia.media.sessionId, remoteState).catch(() => undefined);
             }
             if (playbackState === "playing") {
+              hasPlayed = true;
               setAudioTracks(player.getAudioTracks?.() ?? []);
               setEmbeddedSubtitleTracks(player.getEmbeddedSubtitleTracks?.() ?? []);
               if (!autoStarted && !(selectedTitleSource === "local" && localSubtitleSnapshotRef.current)) {
@@ -2799,7 +2806,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             }
             setIsPlaybackBuffering(playbackState === "buffering");
             setIsPlaybackPaused(playbackState === "paused" || playbackState === "ended" || playbackState === "error");
-            if (playbackState === "error") setShowFullscreenControls(true);
+            if (playbackState === "error" || (playbackState === "paused" && !hasPlayed)) setShowFullscreenControls(true);
             if (playbackState === "paused") persistCurrentProgress(playbackProgressRef.current);
             if (playbackState === "ended") {
               if (selectedTitleSource !== "local") {
@@ -3490,7 +3497,6 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const findSubtitleFocusIndex = subtitleFocus.find;
   const firstSubtitleFocusIndex = subtitleFocus.firstResult;
   const continueActionCount = browseCollection === "recent" ? continueHistory.length * 2 : 0;
-  const videoResolution = showVideoInfo ? playerRef.current?.getVideoResolution?.() ?? "Unavailable" : "";
   const details = detailsTitle ? {
     ...titleDetailsFor(detailsTitle),
     ...(detailsMetadata?.posterUrl ? { posterUrl: detailsMetadata.posterUrl } : {}),
@@ -3772,7 +3778,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           <button ref={historyCancelRef} type="button" onClick={() => { setPendingHistoryRemoval(null); window.requestAnimationFrame(() => tileRefs.current[focusIndex]?.focus()); }}>Cancel</button>
           <button ref={historyConfirmRef} className="danger-button" type="button" onClick={confirmHistoryRemoval}>Remove</button>
         </div>
-      </section></div> : selectedTitle ? <section className={"player-screen " + (playerFullscreen ? "is-fullscreen" : "") + (playerFullscreen && showFullscreenControls ? " has-visible-controls" : "") + (showPlayerTools ? " show-tools" : "")} onFocusCapture={(event) => {
+      </section></div> : selectedTitle ? <section className={"player-screen " + (isTouchProfile ? "is-touch " : "") + (playerFullscreen ? "is-fullscreen" : "") + (playerFullscreen && showFullscreenControls ? " has-visible-controls" : "") + (showPlayerTools ? " show-tools" : "")} onFocusCapture={(event) => {
         const target = event.target as HTMLElement;
         const controls = playerControls();
         const index = target === playerStageRef.current || playerStageRef.current?.contains(target)
@@ -3801,12 +3807,17 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             : <video className="player" autoPlay playsInline ref={videoRef} />}
           {playerFullscreen && isPlaybackBuffering && <div className="buffering-overlay" role="status" aria-live="polite">Buffering…</div>}
           {playerFullscreen && playbackStatus === "Paused" && <div className="paused-title-overlay">{selectedTitle.title}</div>}
-          {(playbackStatus === PLAYBACK_UNAVAILABLE_MESSAGE || playbackStatus === LOCAL_PLAYBACK_ERROR_MESSAGE || playbackStatus === PLAYBACK_CLEANUP_MESSAGE) && <div className="playback-error-overlay" role="alert"><strong>Video unavailable</strong><span>{playbackStatus}</span></div>}
-          {showVideoInfo && <aside className="video-info-overlay" role="status" aria-live="polite"><strong>Video information</strong><span>Resolution: {videoResolution}</span></aside>}
+          {(playbackStatus === PLAYBACK_UNAVAILABLE_MESSAGE || playbackStatus === LOCAL_PLAYBACK_ERROR_MESSAGE || playbackStatus === PLAYBACK_CLEANUP_MESSAGE || (playbackStatus === "Paused" && playbackDiagnostics)) && <div className="playback-error-overlay" role="alert"><strong>{playbackStatus === "Paused" ? "Playback has not started" : "Video unavailable"}</strong><span>{playbackStatus}</span>{playbackDiagnostics && <span>{playbackDiagnostics}</span>}</div>}
+          {showVideoInfo && <StreamInfoOverlay playerRef={playerRef} />}
           {visibleSubtitle && <p className="subtitle-overlay" aria-live="off" style={{ fontSize: subtitleFontSize + "rem" }}><span translate="no">{visibleSubtitle}</span></p>}
           {subtitleTimingAvailable && isSubtitleAttached && isSubtitleOffsetVisible && <div className="subtitle-offset-overlay" aria-live="polite">Subtitle offset {formatSubtitleTimingOffset(subtitleTimingOffsetSeconds)}</div>}
         </div>
-        {playbackProgress && (!playerFullscreen || playbackStatus === "Paused" || isSkipFeedbackVisible) && <div className="playback-progress" aria-label="Playback progress">
+        {isTouchProfile && playbackProgress && (!playerFullscreen || showFullscreenControls || playbackStatus === "Paused" || isSkipFeedbackVisible) && <PlaybackSeekControls progress={playbackProgress} formatTime={formatPlaybackTime} onSeek={(seconds) => {
+          const player = playerRef.current;
+          if (player?.seekTo) player.seekTo(seconds);
+          else player?.skip(seconds - playbackProgress.currentTimeSeconds);
+        }} onSkip={skipVideo} />}
+        {!isTouchProfile && playbackProgress && (!playerFullscreen || showFullscreenControls || playbackStatus === "Paused" || isSkipFeedbackVisible) && <div className="playback-progress" aria-label="Playback progress">
           <span>{formatPlaybackTime(playbackProgress.currentTimeSeconds)}</span>
           <progress max={playbackProgress.durationSeconds} value={Math.min(playbackProgress.currentTimeSeconds, playbackProgress.durationSeconds)} aria-label="Video progress" onClick={isTvProfile ? undefined : (event) => {
             const { left, width } = event.currentTarget.getBoundingClientRect();
@@ -3834,7 +3845,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           <span className={"playback-status " + ([PLAYBACK_UNAVAILABLE_MESSAGE, LOCAL_PLAYBACK_ERROR_MESSAGE, PLAYBACK_CLEANUP_MESSAGE].includes(playbackStatus) ? "error" : "")} role="status" aria-live="polite">{playbackStatus}</span>
         </div>
         {showPlayerTools && <section className="subtitles">
-          <h3>Subtitles</h3>
+          <div className="subtitle-panel-heading"><h3>Subtitles</h3>{!isTvProfile && <div><button type="button" onClick={() => { setShowVideoInfo((visible) => !visible); setShowPlayerTools(false); if (playerFullscreen) setShowFullscreenControls(false); }}>Info</button><button type="button" onClick={() => { setShowPlayerTools(false); window.requestAnimationFrame(() => playerInfoButtonRef.current?.focus()); }}>Close</button></div>}</div>
+          <div className="subtitle-panel-content">
           <RemoteEditable label="Subtitle source" value={subtitleChoice === "automatic" ? "Automatic" + (activeSubtitleDescription ? " — " + activeSubtitleDescription : "") : subtitleChoice === "off" ? "Off" : activeSubtitleDescription || "External subtitle"} editing={editingSubtitleSource} remoteMode={isTvProfile} className={playerFocusIndex === subtitleFocus.sourcePicker ? remoteFocusClass : ""} controlRef={(element) => { subtitleSourceControlRef.current = element; }} onBeginEdit={() => { setSubtitleSourceDraft(subtitleChoice); setEditingSubtitleSource(true); window.requestAnimationFrame(() => subtitleSourceControlRef.current?.focus()); }} renderEditor={(controlRef) => <label>Subtitle source<select aria-label="Subtitle source" value={isTvProfile && editingSubtitleSource ? subtitleSourceDraft : subtitleChoice} ref={controlRef} onChange={(event) => { if (isTvProfile && editingSubtitleSource) setSubtitleSourceDraft(event.target.value); else changeSubtitleSource(event.target.value); }} onKeyDown={(event) => {
             event.stopPropagation();
             if (event.key === "Enter") { const value = event.currentTarget.value; event.preventDefault(); changeSubtitleSource(value); return; }
@@ -3877,6 +3889,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
               <span>{subtitle.downloads.toLocaleString()} downloads{subtitle.hearingImpaired ? " · HI" : ""}</span>
               <button className={playerFocusIndex === index + firstSubtitleFocusIndex ? remoteFocusClass : ""} type="button" onClick={() => void loadSubtitle(subtitle)} ref={(element) => { subtitleButtonRefs.current[index] = element; }}>Use this subtitle</button>
             </article>)}
+          </div>
           </div>
         </section>}
       </section> : activeGroup ? <>

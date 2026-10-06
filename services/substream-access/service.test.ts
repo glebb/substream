@@ -87,6 +87,7 @@ describe('standalone Substream access service', () => {
       configPath,
       databasePath,
       writeConfig,
+      now: () => currentTime,
       setNow: (milliseconds: number) => { currentTime = milliseconds; },
       portal: `http://127.0.0.1:${listeningPort(activeService!.portal)}`,
       auth: `http://127.0.0.1:${listeningPort(activeService!.authorizer)}`,
@@ -240,7 +241,7 @@ describe('standalone Substream access service', () => {
 
   it('keeps only grant hashes and serves a grant after process restart', async () => {
     const context = await start();
-    const token = activeService!.store.createOrReplaceGrant(EMAIL, '192.0.2.9', Date.UTC(2026, 9, 5, 12) / 1000).token;
+    const token = activeService!.store.createOrReplaceGrant(EMAIL, '192.0.2.9', context.now() / 1000).token;
     const beforeRestart = await request(`${context.auth}/authorize`, {
       headers: { 'X-Substream-Original-URI': `/${token}/index.html`, 'X-Substream-Client-IP': '192.0.2.9' },
     });
@@ -248,7 +249,7 @@ describe('standalone Substream access service', () => {
     await activeService!.close();
     activeService = undefined;
 
-    activeService = await createAccessService({ configPath: context.configPath, portalPort: 0, authPort: 0 });
+    activeService = await createAccessService({ configPath: context.configPath, portalPort: 0, authPort: 0, now: context.now });
     await activeService.listen();
     const afterRestart = await request(`http://127.0.0.1:${listeningPort(activeService.authorizer)}/authorize`, {
       headers: { 'X-Substream-Original-URI': `/${token}/index.html`, 'X-Substream-Client-IP': '192.0.2.9' },

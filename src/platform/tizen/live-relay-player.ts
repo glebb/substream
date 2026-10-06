@@ -526,6 +526,7 @@ export class TizenLiveRelayPlayer implements MediaPlayer {
   setDisplayMode(mode: VideoDisplayMode): void { this.inner.setDisplayMode(mode); this.positionOverlay(); }
   resize(): void { this.inner.resize(); this.positionOverlay(); }
   getVideoResolution(): string | null { return this.inner.getVideoResolution(); }
+  getStreamInformation() { return this.inner.getStreamInformation(); }
   getAudioTracks(): AudioTrack[] { return this.inner.getAudioTracks(); }
   selectAudioTrack(id: string): boolean { return this.inner.selectAudioTrack(id); }
   getEmbeddedSubtitleTracks(): EmbeddedSubtitleTrack[] {

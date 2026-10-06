@@ -1,6 +1,7 @@
+import { positiveMetadataNumber, technicalToken } from "../stream-information.ts";
 import { enrichEmbeddedSubtitleTracks } from "../../core/subtitles/embedded-metadata.ts";
 import type { MatroskaSubtitleTrack } from "../../core/subtitles/matroska.ts";
-import type { AudioTrack, EmbeddedSubtitleTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import type { AudioTrack, EmbeddedSubtitleTrack, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, StreamInformation, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { parseSrtCues, type SubtitleCue } from "../../core/subtitles/srt-cues.ts";
 import { normalizeSubtitleText } from "../../core/subtitles/normalize.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
@@ -401,6 +402,39 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       // Firmware can reject stream-info queries before a video track is ready.
     }
     return null;
+  }
+
+  getStreamInformation(): StreamInformation {
+    const info: StreamInformation = {};
+    const player = avplay();
+    if (!this.opened || !player) return info;
+    try {
+      const current = player.getCurrentStreamInfo?.() ?? [];
+      const video = parseStreamDetails(current.find((track) => track.type?.toUpperCase() === "VIDEO")?.extra_info);
+      const audio = parseStreamDetails(current.find((track) => track.type?.toUpperCase() === "AUDIO")?.extra_info);
+      info.videoCodec = technicalToken(readStreamText(video, "codec", "fourCC", "fourcc"));
+      info.audioCodec = technicalToken(readStreamText(audio, "codec", "fourCC", "fourcc"));
+      info.frameRate = positiveMetadataNumber(video.frame_rate ?? video.framerate);
+      info.videoBitrate = positiveMetadataNumber(video.bit_rate ?? video.bitrate);
+      info.audioBitrate = positiveMetadataNumber(audio.bit_rate ?? audio.bitrate);
+      info.audioChannels = positiveMetadataNumber(audio.channels);
+      info.audioSampleRate = positiveMetadataNumber(audio.sample_rate);
+      info.audioLanguage = technicalToken(readStreamText(audio, "language", "track_lang", "lang"));
+    } catch { /* Firmware may not expose current metadata until prepared. */ }
+    try {
+      const tracks = player.getTotalTrackInfo?.();
+      if (tracks) {
+        info.audioTrackCount = tracks.filter((track) => track.type?.toUpperCase() === "AUDIO").length;
+        info.subtitleTrackCount = tracks.filter((track) => track.type?.toUpperCase() === "TEXT").length + this.liveDvbTracks.length;
+      }
+      const audio = this.getAudioTracks().find((track) => track.selected);
+      info.audioCodec ??= technicalToken(audio?.codec);
+      info.audioLanguage ??= technicalToken(audio?.language);
+      const subtitle = this.getEmbeddedSubtitleTracks().find((track) => track.selected);
+      info.subtitleLanguage = technicalToken(subtitle?.language);
+      info.subtitleCodec = technicalToken(subtitle?.codec);
+    } catch { /* Track queries are state-dependent. */ }
+    return info;
   }
 
   getAudioTracks(): AudioTrack[] {

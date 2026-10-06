@@ -1,3 +1,4 @@
+import { StreamInfoOverlay } from "./StreamInfoOverlay.tsx";
 import { requestPlayerFullscreen, exitBrowserFullscreen, releasePlayerOrientation } from "../platform/browser/fullscreen.ts";
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
@@ -135,6 +136,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const [guideRefresh, setGuideRefresh] = useState(0);
   const [categoryFocusIndex, setCategoryFocusIndex] = useState(0);
   const [selected, setSelected] = useState<LiveChannel | null>(null);
+  const [showStreamInfo, setShowStreamInfo] = useState(false);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [playbackState, setPlaybackState] = useState<PlaybackState>("loading");
   const [hasStartedPlayback, setHasStartedPlayback] = useState(false);
@@ -707,6 +709,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const tune = (channel: LiveChannel) => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     setPlaybackState("loading");
+    setShowStreamInfo(false);
     setRetryCount(0);
     setLiveSubtitleStatus(liveSubtitlesEnabledRef.current ? "Finding Finnish subtitles…" : "Subtitles: Off");
     setEmbeddedSubtitleTracks([]);
@@ -829,6 +832,7 @@ export function LiveTv({ onMainMenu }: Props) {
       const key = normalizedRemoteKey(event);
       if (isBackKey(event)) { event.preventDefault(); selected ? leavePlayer() : selectedCategory ? leaveCategory() : onMainMenu(); return; }
       if (selected) {
+        if (key === "Info") { event.preventDefault(); setShowStreamInfo((visible) => !visible); return; }
         if (playerFullscreen && key === "ArrowUp") { event.preventDefault(); changeChannel(-1); }
         else if (playerFullscreen && key === "ArrowDown") { event.preventDefault(); changeChannel(1); }
         else if (playerFullscreen && (key === "Enter" || key === "ArrowLeft" || key === "ArrowRight")) {
@@ -905,6 +909,7 @@ export function LiveTv({ onMainMenu }: Props) {
     <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span>{!isTvProfile && <button type="button" onClick={leavePlayer}>Back to channels</button>}</header>
     <div className="player-stage" ref={playerStageRef} tabIndex={-1} onClick={() => { if (!isTvProfile && playerFullscreen) setShowTouchControls((visible) => !visible); else if (playerFullscreen) showControls(); }}>
       {runtime.capabilities.nativeVideoSurface ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
+      {showStreamInfo && <StreamInfoOverlay playerRef={playerRef} />}
       {playbackState === "loading" || (playbackState === "buffering" && !hasStartedPlayback) ? <div className="buffering-overlay">Connecting…</div> : null}
       {playbackState === "paused" && !isTvProfile && <div className="playback-error-overlay"><button type="button" onClick={(event) => { event.stopPropagation(); playerRef.current?.play(); }}>Play</button></div>}
       {playbackState === "error" && <div className="playback-error-overlay"><strong>{relayFailureMessage ? "Channel connection failed" : "Channel unavailable"}</strong><span>{relayFailureMessage || "The stream could not be played on this device."}</span></div>}
@@ -925,6 +930,7 @@ export function LiveTv({ onMainMenu }: Props) {
       <button type="button" aria-pressed={liveSubtitlesEnabled} onClick={toggleLiveSubtitles} ref={(element) => { playerControlRefs.current[8] = element; }}>{`Subtitles: ${liveSubtitlesEnabled ? "On" : "Off"}`}</button>
       {runtime.capabilities.nativeVideoSurface && !playerFullscreen && <button type="button" onClick={toggleLiveSource} ref={(element) => { playerControlRefs.current[9] = element; }}>{liveSource === "hls" ? "Try direct TS source" : "Switch back to HLS"}</button>}
       {embeddedSubtitleTracks.length > 1 && <button type="button" onClick={selectNextSubtitleTrack} ref={(element) => { playerControlRefs.current[10] = element; }}>Subtitle language</button>}
+      <button type="button" onClick={() => setShowStreamInfo((visible) => !visible)} aria-pressed={showStreamInfo} ref={(element) => { playerControlRefs.current[11] = element; }}>Info</button>
       {audioStatus && <span className="live-buffer-status" role="status">{audioStatus}</span>}
       <span className="playback-status" role="status" aria-live="polite">{relayPlaybackLabel === "Channel connection lost · Reconnecting…" ? relayPlaybackLabel : <>{relayPlaybackLabel || (liveSource === "hls" ? "HLS" : "Direct TS")}{" · "}{playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}{relayDiagnostics ? ` · ${relayDiagnostics}` : ""}</>}</span>
       {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}

@@ -1,12 +1,17 @@
-import type { AudioTrack, EmbeddedSubtitleTrack, LiveBufferWindow, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import { positiveMetadataNumber, technicalToken } from "../stream-information.ts";
+import type { AudioTrack, EmbeddedSubtitleTrack, LiveBufferWindow, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, StreamInformation, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { srtToWebVtt } from "../../core/subtitles/srt-to-vtt.ts";
 import { shiftWebVttCues } from "../../core/subtitles/webvtt-timing.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
 import { createLiveDvbWorkerClient, LIVE_DVB_MAX_FRAGMENT_BYTES, type LiveDvbWorkerClient, type LiveDvbWorkerResponse, type LiveDvbWorkerTrack, type WorkerPort } from "./live-dvb-worker-protocol.ts";
 import { LiveDvbOverlay } from "./live-dvb-overlay.ts";
 import { LiveAudioTsProcessor, processLiveAudioFragment } from "./live-audio-ts.ts";
+import { BrowserVodRemuxSession, canRemuxBrowserVod } from "./browser-vod-remux.ts";
 
 const PLAYBACK_START_TIMEOUT_MS = 8_000;
+// VOD files can need additional metadata/range requests before the first frame,
+// especially on mobile networks. Keep the shorter deadline for live tuning.
+const VOD_PLAYBACK_START_TIMEOUT_MS = 45_000;
 const BUFFERING_GRACE_MS = 750;
 const DVB_WORKER_WATCHDOG_MS = 8_000;
 const TS_PACKET_BYTES = 188;
@@ -128,6 +133,12 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private eventHandlers: MediaPlayerEventHandlers | null = null;
   private pendingSeekSeconds: number | null = null;
   private playbackStartTimer: ReturnType<typeof setTimeout> | undefined;
+  private startupTimedOut = false;
+  private playbackFailed = false;
+  private playFailure = "none";
+  private playAttempt = 0;
+  private remuxSession: BrowserVodRemuxSession | undefined;
+  private remuxStatus = "none";
   private bufferingTimer: ReturnType<typeof setTimeout> | undefined;
   private bufferingStartTime: number | undefined;
   private readonly eventListeners: Array<[string, EventListener]>;
@@ -195,6 +206,13 @@ export class HtmlVideoPlayer implements MediaPlayer {
   isVodSubtitleDiscoveryComplete(): boolean { return this.vodSubtitleDiscoveryComplete; }
 
   load(streamUrl: string): void {
+    this.remuxSession?.dispose();
+    this.remuxSession = undefined;
+    this.remuxStatus = "none";
+    this.startupTimedOut = false;
+    this.playbackFailed = false;
+    this.playFailure = "none";
+    this.playAttempt += 1;
     this.sourceUrl = streamUrl;
     const generation = ++this.loadGeneration;
     this.stopCompatibilityPlayback();
@@ -224,6 +242,51 @@ export class HtmlVideoPlayer implements MediaPlayer {
       return;
     }
     this.armPlaybackStartTimer(generation);
+    if (this.vodSubtitleMode && /\.mkv(?:[?#]|$)/i.test(streamUrl)) {
+      if (!canRemuxBrowserVod()) {
+        this.remuxStatus = "browser streaming unavailable";
+        this.video.pause();
+        this.video.removeAttribute("src");
+        this.video.load();
+        this.clearPlaybackStartTimer();
+        this.emit("error");
+        return;
+      }
+      this.remuxStatus = "preparing";
+      const session = new BrowserVodRemuxSession(this.video, {
+        onReady: () => {
+          if (generation !== this.loadGeneration || this.remuxSession !== session) return;
+          this.remuxStatus = "copying tracks to MP4";
+          void this.requestPlay();
+        },
+        onAudioTracksChange: (tracks) => {
+          if (generation === this.loadGeneration && this.remuxSession === session) this.eventHandlers?.onAudioTracksChange?.(tracks);
+        },
+        onError: (reason, audioCodec) => {
+          if (generation !== this.loadGeneration || this.remuxSession !== session) return;
+          const reasons = {
+            "cors-range": "provider request rejected: CORS or network",
+            "provider-redirect": "provider redirects media; redirect not followed",
+            "provider-timeout": "provider range request timed out after 15 seconds",
+            "range-unsupported": "provider did not return HTTP 206 partial content",
+            "range-metadata": "Content-Range missing or hidden by provider CORS",
+            "range-invalid": "provider returned an invalid byte range",
+            "unsupported-video": "video requires conversion",
+            "unsupported-audio": "audio requires conversion",
+            "invalid-media": "invalid media container",
+            "processing-failed": "remux processing failed",
+            "browser-unsupported": "MP4 streaming unsupported on this browser",
+            "buffer-failed": "browser media buffer failed",
+          };
+          this.remuxStatus = reasons[reason] + (audioCodec ? ` (${audioCodec})` : "");
+          this.clearPlaybackStartTimer();
+          this.emit("error");
+        },
+      });
+      this.remuxSession = session;
+      session.start(streamUrl);
+      return;
+    }
     const isHlsStream = /\.m3u8(?:[?#]|$)/i.test(streamUrl);
     const supportsNativeHls = isHlsStream && !!this.video.canPlayType("application/vnd.apple.mpegurl");
     if (isHlsStream && (this.liveSubtitleMode || !supportsNativeHls)) {
@@ -294,7 +357,18 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   seekTo(seconds: number): void {
-    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    if (!Number.isFinite(seconds) || seconds < 0) return;
+    if (this.remuxSession) {
+      this.playbackFailed = false;
+      this.startupTimedOut = false;
+      this.playFailure = "none";
+      this.remuxStatus = "preparing";
+      this.pendingSeekSeconds = null;
+      this.emit("loading");
+      this.armPlaybackStartTimer(this.loadGeneration);
+      this.remuxSession.seek(seconds);
+      return;
+    }
     this.pendingSeekSeconds = seconds;
     this.applyPendingSeek();
   }
@@ -340,7 +414,57 @@ export class HtmlVideoPlayer implements MediaPlayer {
       : null;
   }
 
+  getStreamInformation(): StreamInformation {
+    const audioTracks = this.getAudioTracks();
+    const subtitles = this.getEmbeddedSubtitleTracks();
+    const audio = audioTracks.find((track) => track.selected);
+    const subtitle = subtitles.find((track) => track.selected);
+    const level = this.hls?.levels?.[this.hls.currentLevel ?? -1];
+    const remuxCodecs = this.remuxSession?.getPlaybackCodecs();
+    const hlsAudio = this.hls?.audioTracks?.[this.hls.audioTrack ?? -1];
+    const hlsSubtitle = this.hls?.subtitleTracks?.[this.hls.subtitleTrack ?? -1];
+    const info: StreamInformation = {
+      videoCodec: technicalToken(remuxCodecs?.videoCodec ?? level?.videoCodec),
+      audioCodec: technicalToken(remuxCodecs?.audioCodec ?? audio?.codec ?? hlsAudio?.audioCodec ?? level?.audioCodec),
+      frameRate: positiveMetadataNumber(level?.frameRate),
+      streamBitrate: positiveMetadataNumber(level?.bitrate),
+      audioLanguage: technicalToken(audio?.language ?? hlsAudio?.lang),
+      subtitleLanguage: technicalToken(subtitle?.language ?? hlsSubtitle?.lang),
+      subtitleCodec: technicalToken(subtitle?.codec),
+      audioTrackCount: audioTracks.length || (audioTrackList(this.video) || this.remuxSession ? 0 : undefined),
+      subtitleTrackCount: Math.max(subtitles.length, this.hls?.subtitleTracks?.length ?? 0) || (this.isVodSubtitleDiscoveryComplete() ? 0 : undefined),
+    };
+    const ranges = this.video.buffered;
+    if (ranges) for (let index = 0; index < ranges.length; index += 1) {
+      if (ranges.start(index) <= this.video.currentTime && ranges.end(index) >= this.video.currentTime) {
+        info.bufferedSeconds = ranges.end(index) - this.video.currentTime;
+        break;
+      }
+    }
+    const quality = this.video.getVideoPlaybackQuality?.();
+    if (quality) {
+      info.decodedFrames = quality.totalVideoFrames;
+      info.droppedFrames = quality.droppedVideoFrames;
+    }
+    return info;
+  }
+
+  getPlaybackDiagnostics(): string {
+    // Only fixed labels and native numeric states: never expose currentSrc,
+    // redirect URLs or browser error messages, which may contain credentials.
+    let container = "unknown";
+    try {
+      const extension = new URL(this.sourceUrl ?? "").pathname.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+      if (extension && ["mp4", "m4v", "mov", "mkv", "webm", "m3u8", "ts", "avi"].includes(extension)) container = extension.toUpperCase();
+    } catch { /* No usable URL; keep the fixed unknown label. */ }
+    const readiness = ["no metadata", "metadata received", "current frame available", "future frames available", "enough data"][this.video.readyState] ?? "unknown";
+    const network = ["empty", "idle", "loading", "no source"][this.video.networkState] ?? "unknown";
+    const mediaError = ["none", "aborted", "network error", "decode error", "source unsupported"][this.video.error?.code ?? 0] ?? "unknown";
+    return `Source: ${container} · Media: ${readiness} · Network: ${network} · Error: ${mediaError} · Play: ${this.playFailure}${this.remuxStatus !== "none" ? ` · Remux: ${this.remuxStatus}` : ""}${this.remuxSession ? ` · ${this.remuxSession.getBufferDiagnostics()}` : ""}${this.startupTimedOut ? " · Startup timed out" : ""}`;
+  }
+
   getAudioTracks(): AudioTrack[] {
+    if (this.remuxSession) return this.remuxSession.getAudioTracks();
     const hlsTracks = this.hls?.audioTracks;
     const hlsResult = hlsTracks?.map((track, index) => {
       const language = cleanTrackText(track.lang);
@@ -370,6 +494,16 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   selectAudioTrack(id: string): boolean {
+    if (this.remuxSession) {
+      if (!this.remuxSession.getAudioTracks().some((track) => track.id === id)) return false;
+      this.playbackFailed = false;
+      this.startupTimedOut = false;
+      this.playFailure = "none";
+      this.remuxStatus = "preparing";
+      this.emit("loading");
+      this.armPlaybackStartTimer(this.loadGeneration);
+      return this.remuxSession.selectAudioTrack(id);
+    }
     if (id.startsWith("hls:")) {
       const index = Number(id.slice(4));
       const tracks = this.hls?.audioTracks;
@@ -487,6 +621,13 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   play(): void {
+    if (this.remuxSession && this.playbackFailed) {
+      this.seekTo(this.video.currentTime);
+      return;
+    }
+    this.startupTimedOut = false;
+    this.playbackFailed = false;
+    this.playFailure = "none";
     this.armPlaybackStartTimer(this.loadGeneration);
     void this.requestPlay();
   }
@@ -496,6 +637,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   restart(): void {
+    if (this.remuxSession) { this.seekTo(0); return; }
     if (this.compatibilitySourceUrl && this.compatibilityOffsetSeconds > 0) {
       // A resumed HLS job's local timeline starts at the saved source position.
       // Re-prepare from source zero so Restart retains its usual meaning.
@@ -512,6 +654,10 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   skip(seconds: number): void {
     if (!Number.isFinite(seconds) || !Number.isFinite(this.video.duration)) return;
+    if (this.remuxSession) {
+      this.seekTo(Math.max(0, Math.min(this.video.duration, this.video.currentTime + seconds)));
+      return;
+    }
     if (this.compatibilityPath) {
       const sourceTime = this.video.currentTime + this.compatibilityOffsetSeconds;
       this.seekTo(Math.max(this.compatibilityOffsetSeconds, sourceTime + seconds));
@@ -530,6 +676,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   destroy(): void {
     this.loadGeneration += 1;
+    this.remuxSession?.dispose();
+    this.remuxSession = undefined;
     this.stopCompatibilityPlayback();
     this.compatibilitySourceUrl = undefined;
     this.disposeDvbSubtitlePath();
@@ -632,16 +780,33 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   private async requestPlay(): Promise<void> {
+    const attempt = ++this.playAttempt;
+    const generation = this.loadGeneration;
     try {
       await this.video.play();
     } catch (error) {
-      // Autoplay restrictions require an explicit gesture; the video remains paused.
-      if (error && typeof error === "object" && "name" in error && error.name === "NotAllowedError") this.clearPlaybackStartTimer();
-      this.emit(this.video.error ? "error" : "paused");
+      if (attempt !== this.playAttempt || generation !== this.loadGeneration) return;
+      const name = error && typeof error === "object" && "name" in error ? error.name : undefined;
+      // Source replacement and native autoplay can interrupt an earlier play
+      // request. Keep waiting for media rather than presenting a false pause.
+      if (name === "AbortError") return;
+      if (name === "NotAllowedError" && !this.video.error) {
+        this.playFailure = "permission required";
+        this.clearPlaybackStartTimer();
+        this.emit("paused");
+      } else {
+        this.playFailure = name === "NotSupportedError" ? "source unsupported" : "request failed";
+        this.clearPlaybackStartTimer();
+        this.emit("error");
+      }
     }
   }
 
   private emit(state: PlaybackState): void {
+    // pause() dispatches asynchronously. A timeout/failure must remain visible
+    // when its cleanup pause event arrives after the error notification.
+    if (this.playbackFailed && state !== "error") return;
+    if (state === "error") this.playbackFailed = true;
     this.eventHandlers?.onStateChange(state);
   }
 
@@ -666,9 +831,11 @@ export class HtmlVideoPlayer implements MediaPlayer {
         || (!this.video.paused && this.video.readyState >= 2 && this.video.currentTime > 0)) return;
       this.hls?.destroy();
       this.hls = undefined;
+      this.startupTimedOut = true;
+      this.remuxSession?.stop();
       this.video.pause();
       this.emit("error");
-    }, PLAYBACK_START_TIMEOUT_MS);
+    }, this.vodSubtitleMode ? VOD_PLAYBACK_START_TIMEOUT_MS : PLAYBACK_START_TIMEOUT_MS);
   }
 
   private clearPlaybackStartTimer(): void {
@@ -1028,13 +1195,15 @@ function cleanTrackText(value: unknown): string | undefined {
 }
 
 interface HlsSubtitleController {
+  levels?: Array<{ videoCodec?: string | undefined; audioCodec?: string | undefined; frameRate?: number | undefined; bitrate?: number | undefined }>;
+  currentLevel?: number;
   destroy(): void;
   on?(event: string, callback: (event: string, data: Record<string, unknown>) => void): void;
   off?(event: string, callback: (event: string, data: Record<string, unknown>) => void): void;
   subtitleTracks?: Array<{ lang?: string; name?: string }>;
   subtitleTrack?: number;
   subtitleDisplay?: boolean;
-  audioTracks?: Array<{ lang?: string; name?: string }>;
+  audioTracks?: Array<{ lang?: string; name?: string; audioCodec?: string }>;
   audioTrack?: number;
 }
 

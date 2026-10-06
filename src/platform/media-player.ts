@@ -76,6 +76,26 @@ export interface EmbeddedSubtitleTrack {
   selected: boolean;
 }
 
+/** Allowlisted technical values only; never URLs or raw provider metadata. */
+export interface StreamInformation {
+  videoCodec?: string | undefined;
+  audioCodec?: string | undefined;
+  frameRate?: number | undefined;
+  videoBitrate?: number | undefined;
+  streamBitrate?: number | undefined;
+  audioBitrate?: number | undefined;
+  audioChannels?: number | undefined;
+  audioSampleRate?: number | undefined;
+  audioTrackCount?: number | undefined;
+  subtitleTrackCount?: number | undefined;
+  audioLanguage?: string | undefined;
+  subtitleLanguage?: string | undefined;
+  subtitleCodec?: string | undefined;
+  bufferedSeconds?: number | undefined;
+  decodedFrames?: number | undefined;
+  droppedFrames?: number | undefined;
+}
+
 export interface MediaPlayerEventHandlers {
   onStateChange(state: PlaybackState): void;
   onProgress?(progress: PlaybackProgress): void;
@@ -117,8 +137,10 @@ export interface MediaPlayer {
   seekLiveBuffer?(seconds: number): void;
   /** Returns playback to the newest available point of a live/DVR window. */
   goLive?(): void;
-  /** Returns source dimensions only; adapters must not expose stream metadata or URLs. */
+  /** Returns source dimensions only; never includes URLs. */
   getVideoResolution?(): string | null;
+  /** Returns safe technical metadata exposed by the active playback engine. */
+  getStreamInformation?(): StreamInformation;
   /** Safe player diagnostics for live audio/subtitle status UI. */
   getPlaybackDiagnostics?(): string;
   getLiveAudioLanguageStatus?(): string;

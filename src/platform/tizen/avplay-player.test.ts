@@ -17,6 +17,25 @@ afterEach(() => {
 });
 
 describe("TizenAvPlayPlayer", () => {
+  it("reads only allowlisted stream metadata and reports the full native track counts", () => {
+    const current = [
+      { type: "VIDEO", index: 0, extra_info: JSON.stringify({ fourCC: "H264", frame_rate: "25", bit_rate: "5000000", url: "https://example.invalid/private?token=synthetic" }) },
+      { type: "AUDIO", index: 1, extra_info: JSON.stringify({ fourCC: "AACL", channels: "2", sample_rate: "48000", bit_rate: "128000", language: "eng" }) },
+    ];
+    const total = [...current, { type: "AUDIO", index: 2 }, { type: "TEXT", index: 3 }];
+    (globalThis as typeof globalThis & { webapis?: unknown }).webapis = { avplay: {
+      open: vi.fn(), prepareAsync: vi.fn((success: () => void) => success()), play: vi.fn(), stop: vi.fn(), close: vi.fn(),
+      setDisplayRect: vi.fn(), setDisplayMethod: vi.fn(),
+      getCurrentStreamInfo: () => current, getTotalTrackInfo: () => total,
+    } };
+    const player = new TizenAvPlayPlayer({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }) } as HTMLElement, vi.fn());
+    player.load("https://example.invalid/live.ts");
+    expect(player.getStreamInformation()).toMatchObject({ videoCodec: "H264", audioCodec: "AACL", frameRate: 25, audioChannels: 2, audioSampleRate: 48000, audioTrackCount: 2, subtitleTrackCount: 1, audioLanguage: "eng" });
+    expect(JSON.stringify(player.getStreamInformation())).not.toContain("token");
+    player.destroy();
+    expect(player.getStreamInformation()).toEqual({});
+  });
+
   it.each(["movie.mkv", "movie.mp4", "episode.mkv", "live.m3u8", "live.ts"])(
     "sets a provider-compatible User-Agent before preparing %s, including subsequent loads",
     (filename) => {

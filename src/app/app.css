@@ -209,7 +209,7 @@ button:disabled { cursor: default; opacity: .45; }
 .player-title .hint { margin: .35rem 0 0; }
 .player-stage { margin-top: 1.25rem; position: relative; }
 .player-stage.video-area-focused { outline: 4px solid var(--focus); outline-offset: 5px; }
-.video-info-overlay { background: rgba(0, 0, 0, .82); border: 1px solid rgba(219, 233, 255, .45); border-radius: .5rem; color: #fff; display: grid; max-width: 20rem; padding: .8rem 1rem; pointer-events: none; position: absolute; right: 1rem; top: 1rem; z-index: 7; }
+.video-info-overlay { background: rgba(0, 0, 0, .82); border: 1px solid rgba(219, 233, 255, .45); border-radius: .5rem; color: #fff; display: flex; flex-direction: column; max-width: 28rem; padding: .8rem 1rem; pointer-events: none; position: absolute; right: 1rem; top: 1rem; z-index: 7; }
 .video-info-overlay > * + * { margin-top: .3rem; }
 .video-info-overlay span { color: #dbe9ff; font-variant-numeric: tabular-nums; }
 .player { background: #000; display: block; margin: 0; width: 100%; }
@@ -738,3 +738,18 @@ button:disabled { cursor: default; opacity: .45; }
 .touch-navigation .tile:focus span { color: #b8c4d7; }
 .touch-navigation .player-stage.video-area-focused { outline: 0; }
 .touch-navigation .live-controls button:focus { background: #82b7ff !important; color: #061426 !important; }
+
+.subtitle-panel-heading { align-items: center; display: flex; justify-content: space-between; }
+.subtitle-panel-heading h3 { margin-right: 16px; }
+.subtitle-panel-heading button { flex-shrink: 0; margin-bottom: 12px; min-height: 44px; }
+.touch-seek-controls input[type="range"] { flex: 1; height: 44px; min-width: 0; padding: 0; }
+.touch-skip-buttons { display: flex; justify-content: center; }
+.touch-skip-buttons button { margin: 0 8px; min-height: 44px; min-width: 80px; }
+.player-screen.is-fullscreen .touch-seek-controls { background: rgba(0, 0, 0, .78); bottom: 12px; left: 5vw; padding: 0 12px 8px; position: fixed; right: 5vw; z-index: 6; }
+.player-screen.is-fullscreen .touch-seek-controls .playback-progress { background: transparent; margin: 0; padding: 0; position: static; }
+.player-screen.is-touch.is-fullscreen.has-visible-controls .player-controls { bottom: 120px; max-height: 45vh; overflow-y: auto; }
+.player-screen.is-touch.is-fullscreen.show-tools.has-visible-controls .subtitles { bottom: 12px; display: flex; flex-direction: column; left: 12px; overflow: hidden; padding: 16px; right: 12px; top: 12px; z-index: 9; }
+.player-screen.is-touch.is-fullscreen .subtitle-panel-heading { flex-shrink: 0; }
+.player-screen.is-touch.is-fullscreen .subtitle-panel-content { flex: 1; min-height: 0; overflow-y: auto; }
+.subtitle-panel-heading > div { display: flex; flex-shrink: 0; }
+.subtitle-panel-heading > div > button { margin-left: 8px; }

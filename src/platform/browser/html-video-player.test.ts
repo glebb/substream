@@ -3,6 +3,20 @@ import { HtmlVideoPlayer } from "./html-video-player.ts";
 import { VodSubtitleController } from "../../application/vod-subtitle-controller.ts";
 
 const { isHlsSupported, hlsInstances } = vi.hoisted(() => ({ isHlsSupported: vi.fn(() => false), hlsInstances: [] as unknown[] }));
+const { canRemux, remuxInstances } = vi.hoisted(() => ({ canRemux: vi.fn(() => false), remuxInstances: [] as Array<{
+  start: ReturnType<typeof vi.fn>; seek: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>;
+  handlers: { onReady(): void; onError(reason: "cors-range" | "unsupported-audio"): void };
+}> }));
+vi.mock("./browser-vod-remux.ts", () => ({
+  canRemuxBrowserVod: canRemux,
+  BrowserVodRemuxSession: class {
+    start = vi.fn(); seek = vi.fn(); dispose = vi.fn(); stop = vi.fn();
+    getBufferDiagnostics = () => "Buffer: 0.0s · Refill: active";
+    constructor(_video: HTMLVideoElement, readonly handlers: { onReady(): void; onError(reason: "cors-range" | "unsupported-audio"): void }) {
+      remuxInstances.push(this);
+    }
+  },
+}));
 vi.mock("hls.js", () => ({ default: class MockHls {
   static Events = { ERROR: "error" };
   static isSupported = isHlsSupported;
@@ -35,9 +49,81 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
   return { video, dispatch: (type) => listeners.get(type)?.forEach((listener) => listener(new Event(type))), tracks };
 }
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); isHlsSupported.mockReset().mockReturnValue(false); hlsInstances.length = 0; });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); isHlsSupported.mockReset().mockReturnValue(false); hlsInstances.length = 0; canRemux.mockReset().mockReturnValue(false); remuxInstances.length = 0; });
 
 describe("HtmlVideoPlayer", () => {
+  it("reports the active HLS rendition and discovered track counts without copying URLs", () => {
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    const hls = {
+      currentLevel: 0, levels: [{ videoCodec: "avc1.640028", audioCodec: "mp4a.40.2", frameRate: 50, bitrate: 6000000, url: "https://example.invalid/private?token=synthetic" }],
+      audioTrack: 0, audioTracks: [{ lang: "en", audioCodec: "mp4a.40.2" }, { lang: "fi" }],
+      subtitleTrack: 0, subtitleTracks: [{ lang: "fi" }, { lang: "en" }], destroy: vi.fn(),
+    };
+    (player as unknown as { hls: unknown }).hls = hls;
+    expect(player.getStreamInformation()).toMatchObject({ videoCodec: "avc1.640028", audioCodec: "mp4a.40.2", frameRate: 50, streamBitrate: 6000000, audioTrackCount: 2, subtitleTrackCount: 2, audioLanguage: "en", subtitleLanguage: "fi" });
+    expect(JSON.stringify(player.getStreamInformation())).not.toContain("token");
+    player.destroy();
+  });
+
+  it("routes browser MKV VOD through the client remux session and preserves seek/restart controls", async () => {
+    canRemux.mockReturnValue(true);
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    player.load("https://provider.example.invalid/movie/synthetic-user/synthetic-password/1.mkv");
+    const session = remuxInstances[0]!;
+    expect(session.start).toHaveBeenCalledWith("https://provider.example.invalid/movie/synthetic-user/synthetic-password/1.mkv");
+    expect(video.src).toBe("");
+    session.handlers.onReady();
+    await Promise.resolve();
+    expect(video.play).toHaveBeenCalledOnce();
+    player.seekTo(60);
+    expect(session.seek).toHaveBeenLastCalledWith(60);
+    player.restart();
+    expect(session.seek).toHaveBeenLastCalledWith(0);
+    video.currentTime = 20;
+    player.skip(10);
+    expect(session.seek).toHaveBeenLastCalledWith(30);
+    player.destroy();
+    expect(session.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("reports remux failures safely and ignores a replaced session", () => {
+    canRemux.mockReturnValue(true);
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://provider.example.invalid/movie/synthetic-user/synthetic-password/1.mkv");
+    const oldSession = remuxInstances[0]!;
+    player.load("https://provider.example.invalid/movie/synthetic-user/synthetic-password/2.mkv");
+    oldSession.handlers.onError("cors-range");
+    expect(states).not.toContain("error");
+    remuxInstances[1]!.handlers.onError("unsupported-audio");
+    expect(states.at(-1)).toBe("error");
+    expect(player.getPlaybackDiagnostics()).toContain("Remux: audio requires conversion");
+    expect(player.getPlaybackDiagnostics()).not.toContain("synthetic-password");
+    player.destroy();
+  });
+
+  it("stops timed-out remux work while keeping the session available for retry", async () => {
+    vi.useFakeTimers();
+    canRemux.mockReturnValue(true);
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    player.load("https://media.example.invalid/movie.mkv");
+    vi.advanceTimersByTime(45_000);
+    const session = remuxInstances[0]!;
+    expect(session.stop).toHaveBeenCalledOnce();
+    player.play();
+    expect(session.seek).toHaveBeenCalledWith(0);
+    expect(player.getPlaybackDiagnostics()).not.toContain("Startup timed out");
+    player.destroy();
+  });
+
   it("keeps an autoplay-blocked stream available for an explicit Play tap", async () => {
     vi.useFakeTimers();
     const { video, dispatch } = fakeVideo();
@@ -48,6 +134,7 @@ describe("HtmlVideoPlayer", () => {
     player.load("https://media.example.invalid/movie.mp4");
     await Promise.resolve();
     expect(states).toContain("paused");
+    expect(player.getPlaybackDiagnostics()).toContain("Play: permission required");
     vi.advanceTimersByTime(10_000);
     expect(states).not.toContain("error");
     player.play();
@@ -245,6 +332,129 @@ describe("HtmlVideoPlayer", () => {
     vi.useRealTimers();
   });
 
+  it("allows VOD to start after the live startup deadline", async () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    const media = video as unknown as { paused: boolean; readyState: number };
+    media.paused = false;
+    media.readyState = 1;
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    player.load("https://media.example.invalid/movie.mp4");
+    await Promise.resolve();
+    vi.advanceTimersByTime(12_000);
+    expect(states).not.toContain("error");
+    expect(video.pause).not.toHaveBeenCalled();
+
+    media.readyState = 4;
+    video.currentTime = 1;
+    dispatch("playing");
+    dispatch("timeupdate");
+    vi.advanceTimersByTime(45_000);
+    expect(states.at(-1)).toBe("playing");
+    expect(states).not.toContain("error");
+    player.destroy();
+  });
+
+  it("still times out stalled VOD and gives an explicit retry the VOD deadline", async () => {
+    vi.useFakeTimers();
+    const { video } = fakeVideo();
+    const media = video as unknown as { paused: boolean; readyState: number };
+    media.paused = false;
+    media.readyState = 1;
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+
+    player.load("https://media.example.invalid/movie.mp4");
+    await Promise.resolve();
+    vi.advanceTimersByTime(45_000);
+    expect(states.at(-1)).toBe("error");
+    expect(player.getPlaybackDiagnostics()).toContain("Media: metadata received");
+    expect(player.getPlaybackDiagnostics()).toContain("Startup timed out");
+    expect(video.pause).toHaveBeenCalledTimes(1);
+
+    states.length = 0;
+    player.play();
+    await Promise.resolve();
+    expect(player.getPlaybackDiagnostics()).not.toContain("Startup timed out");
+    vi.advanceTimersByTime(8_000);
+    expect(states).not.toContain("error");
+    vi.advanceTimersByTime(37_000);
+    expect(states.at(-1)).toBe("error");
+    expect(video.pause).toHaveBeenCalledTimes(2);
+    player.destroy();
+  });
+
+  it("reports only fixed diagnostic labels even when browser errors contain credentials", async () => {
+    const { video } = fakeVideo();
+    Object.assign(video, {
+      readyState: 0, networkState: 2,
+      error: { code: 4, message: "https://provider.example.invalid/movie/synthetic-user/synthetic-password/1.mkv?token=synthetic-token" },
+    });
+    const player = new HtmlVideoPlayer(video);
+    player.load("https://provider.example.invalid/movie/synthetic-user/synthetic-password/1.mp4?token=synthetic-token");
+    await Promise.resolve();
+    expect(player.getPlaybackDiagnostics()).toBe("Source: MP4 · Media: no metadata · Network: loading · Error: source unsupported · Play: none");
+    expect(player.getPlaybackDiagnostics()).not.toMatch(/provider|synthetic|https|token/);
+    player.destroy();
+  });
+
+  it("keeps a startup failure visible after the asynchronous cleanup pause event", async () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/movie.mp4");
+    await Promise.resolve();
+    vi.advanceTimersByTime(45_000);
+    dispatch("pause");
+    expect(states.at(-1)).toBe("error");
+    expect(states).not.toContain("paused");
+    player.play();
+    await Promise.resolve();
+    dispatch("playing");
+    player.pause();
+    dispatch("pause");
+    expect(states.at(-1)).toBe("paused");
+    player.destroy();
+  });
+
+  it("surfaces an unsupported play request as an error even without video.error", async () => {
+    const { video } = fakeVideo();
+    vi.mocked(video.play).mockRejectedValueOnce(new DOMException("synthetic private URL", "NotSupportedError"));
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/movie.mp4");
+    await Promise.resolve();
+    expect(states.at(-1)).toBe("error");
+    expect(player.getPlaybackDiagnostics()).toContain("Play: source unsupported");
+    expect(player.getPlaybackDiagnostics()).not.toContain("synthetic private URL");
+    player.destroy();
+  });
+
+  it("ignores a play rejection from the previous source", async () => {
+    const { video } = fakeVideo();
+    let rejectPrevious: (reason: unknown) => void = () => {};
+    vi.mocked(video.play).mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectPrevious = reject; }));
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/old.mp4");
+    player.load("https://media.example.invalid/new.mp4");
+    rejectPrevious(new DOMException("Interrupted", "AbortError"));
+    await Promise.resolve();
+    expect(states).toEqual(["loading", "loading"]);
+    player.destroy();
+  });
+
   it("reports elapsed time and duration when browser media metadata is available", () => {
     const { video, dispatch } = fakeVideo();
     const player = new HtmlVideoPlayer(video);
@@ -291,6 +501,10 @@ describe("HtmlVideoPlayer", () => {
     dispatch("loadedmetadata");
     expect(video.currentTime).toBe(84);
     expect(player.getVideoResolution()).toBe("1920 × 1080");
+    (video as unknown as { buffered: TimeRanges }).buffered = { length: 1, start: () => 80, end: () => 100 };
+    (video as unknown as { getVideoPlaybackQuality: () => { totalVideoFrames: number; droppedVideoFrames: number } }).getVideoPlaybackQuality = () => ({ totalVideoFrames: 120, droppedVideoFrames: 2 });
+    expect(player.getStreamInformation()).toMatchObject({ bufferedSeconds: 16, decodedFrames: 120, droppedFrames: 2 });
+    expect(player.getStreamInformation().audioTrackCount).toBeUndefined();
     player.destroy();
   });
 
