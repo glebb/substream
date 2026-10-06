@@ -37,6 +37,8 @@ describe("automatic personal subtitle relay", () => {
         { stream_id: 123, name: "Sky [Multi-Sub]" },
         { stream_id: "456", name: "Other multi-sub HD" },
         { stream_id: 789, name: "Plain HD" },
+        { stream_id: 790, name: "FI: MTV Viihde FHD" },
+        { stream_id: 791, name: "FI: Sky Showtime 1 FHD" },
         { stream_id: "../invalid", name: "Multi-Sub" },
         null,
       ]));
@@ -45,12 +47,14 @@ describe("automatic personal subtitle relay", () => {
     expect(channels).toEqual({
       "stream-123": "https://provider.example/iptv/live/test-user/test-pass/123.ts",
       "stream-456": "https://provider.example/iptv/live/test-user/test-pass/456.ts",
+      "stream-790": "https://provider.example/iptv/live/test-user/test-pass/790.ts",
+      "stream-791": "https://provider.example/iptv/live/test-user/test-pass/791.ts",
     });
     expect(requests).toBe(1);
   });
 
   it("fails closed when provider metadata cannot produce an allowlist", async () => {
-    await expect(discoverPersonalRelayChannels("https://provider.example/get.php?username=u&password=p", async () => new Response("[]"))).rejects.toThrow("No Multi-Sub");
+    await expect(discoverPersonalRelayChannels("https://provider.example/get.php?username=u&password=p", async () => new Response("[]"))).rejects.toThrow("No eligible");
     await expect(discoverPersonalRelayChannels("https://provider.example/get.php?username=u&password=p", async () => new Response("{}"))).rejects.toThrow("Invalid provider");
   });
 });

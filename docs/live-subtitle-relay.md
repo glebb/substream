@@ -45,9 +45,9 @@ The server has configurable limits for sessions, leases, request sizes, temporar
 
 Existing `.env.live-relay` endpoint/token values are reused. If they select the hosted HTTPS service, building a personal package preserves that endpoint; starting the Mac launcher does not move TV playback to the Mac. For an explicit local test, privately set matching LAN defaults with LAN HTTP opt-in before building.
 
-For a personal build, `npm run relay:personal` starts the local relay and derives channel mappings from provider metadata using private local configuration. The launcher creates/refreshes ignored local files; keep them private and do not print their contents. It does not contact streams during discovery. A provider stream opens only when an active TV session requests a mapped channel.
+For a personal build, `npm run relay:personal` starts the local relay and derives an allowlist of all Finnish live channels plus legacy marked channels from provider metadata using private local configuration. The launcher creates/refreshes ignored local files; keep them private and do not print their contents. It does not contact streams during discovery. A provider stream opens only when an active TV session requests a mapped channel.
 
-Build and install with the existing Tizen workflow, then check a channel marked `Multi-Sub`. Personal defaults can route marked channels automatically; stored TV settings take precedence over build defaults, including an explicit opt-out. Unmarked channels retain direct playback unless settings map them. The relay must be reachable from the TV, and the computer must remain awake while it runs.
+Build and install with the existing Tizen workflow, then check both marked and unmarked Finnish channels. With relay enabled, Finnish channels use a single relay upstream for video and dynamic DVB subtitle discovery, independent of the title. There is no device-side provider-media preflight. Explicit mappings retain precedence; relay opt-out retains direct playback. Finnish video remains on the relay even when no usable subtitle track is found. Stored TV settings take precedence over build defaults, including an explicit opt-out. Refresh the server allowlist with the updated metadata discovery script before rolling out the dynamic client. See [dynamic routing limits](live-dvb-subtitles.md#dynamic-finnish-subtitle-discovery-on-one-upstream). The relay must be reachable from the TV, and the computer must remain awake while it runs.
 
 If manually configuring a local relay, create a private JSON config outside the checkout. The `channels` map assigns stable IDs to direct MPEG-TS URLs owned by the server. The service accepts IDs, not arbitrary client-supplied URLs.
 
@@ -70,7 +70,7 @@ For a manually configured TV, open the live-subtitle Settings section, enable it
 
 ## Troubleshooting
 
-- **No relay route:** confirm the channel is mapped or automatically marked in this build, relay is enabled, and TV settings have not overridden the build defaults.
+- **No relay route:** confirm the channel is explicitly mapped or it is eligible for Finnish server-side discovery, and the server allowlist includes its ID, relay is enabled, and TV settings have not overridden the build defaults.
 - **Authentication/connection failure:** verify the local endpoint and device credential without displaying them, and ensure TV-to-computer connectivity.
 - **Initial setup fails:** the client closes the partial session and tries direct playback. Direct fallback may not provide DVB subtitles.
 - **The relay fails after playback began:** the TV shows reconnecting, closes the old session, and tries up to twice to establish a fresh one before direct fallback. The change resets the subtitle clock and pauses while preparing.

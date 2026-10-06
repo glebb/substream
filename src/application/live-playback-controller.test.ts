@@ -1,3 +1,4 @@
+import type { CancellationSignal } from "../contracts/cancellation.ts";
 import { describe, expect, it, vi } from "vitest";
 import { LivePlaybackController, PlaybackCleanupError, type RelayServiceState } from "./live-playback-controller.ts";
 import { disposeMediaPlayer, PlaybackSessionGuard } from "./playback-lifecycle.ts";
@@ -18,6 +19,54 @@ function player(relay = false) {
 }
 
 describe("LivePlaybackController", () => {
+  it("opens direct live channels on Chromium 47 without AbortController", async () => {
+    vi.stubGlobal("AbortController", undefined);
+    try {
+      const direct = player();
+      const controller = new LivePlaybackController({ directStreamUrl: "fixture://live", createDirect: () => direct, onPlayer: () => {} });
+      await controller.start();
+      expect(direct.load).toHaveBeenCalledWith("fixture://live");
+      await controller.close();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("cancels discovery on Chromium 47 without opening a competing player", async () => {
+    vi.stubGlobal("AbortController", undefined);
+    try {
+      const direct = player();
+      let signal!: CancellationSignal;
+      const controller = new LivePlaybackController({ directStreamUrl: "fixture://live", createDirect: () => direct, onPlayer: () => {},
+        prepareRelay: (value) => new Promise<void>((resolve) => { signal = value; value.addEventListener("abort", resolve); }) });
+      const pending = controller.start();
+      await controller.close(); await pending;
+      expect(signal.aborted).toBe(true);
+      expect(direct.load).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("finishes discovery before opening relay or direct playback", async () => {
+    let finish!: () => void;
+    const direct = player();
+    const createRelay = vi.fn(() => null);
+    const controller = new LivePlaybackController({ directStreamUrl: "fixture://stream", createDirect: () => direct,
+      createRelay, onPlayer: () => {}, prepareRelay: () => new Promise<void>((resolve) => { finish = resolve; }) });
+    const start = controller.start();
+    expect(createRelay).not.toHaveBeenCalled(); expect(direct.load).not.toHaveBeenCalled();
+    finish(); await start;
+    expect(createRelay).toHaveBeenCalledOnce(); expect(direct.load).toHaveBeenCalledOnce();
+    await controller.close();
+  });
+
+  it("cancels discovery on exit and never opens an obsolete player", async () => {
+    const direct = player();
+    let signal!: CancellationSignal;
+    const controller = new LivePlaybackController({ directStreamUrl: "fixture://stream", createDirect: () => direct, onPlayer: () => {},
+      prepareRelay: (value) => new Promise<void>((resolve) => { signal = value; value.addEventListener("abort", () => resolve()); }) });
+    const start = controller.start();
+    await controller.close(); await start;
+    expect(signal.aborted).toBe(true); expect(direct.load).not.toHaveBeenCalled();
+  });
+
   it("falls back only after relay cleanup and starts the direct stream once", async () => {
     const hosted = player(true) as RelayMediaPlayer & ReturnType<typeof player>;
     const direct = player();

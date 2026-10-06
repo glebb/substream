@@ -1,14 +1,22 @@
 # Embedded live subtitles
 
-Embedded subtitles are optional to live playback. The app supports browser-side DVB bitmap decoding from HLS fragments and uses native AVPlay text tracks on Tizen when the device exposes them. A separate live subtitle relay is available for configured channels, including personal-build routing for channels marked `Multi-Sub`. Setup and relay behavior are described in the [live subtitle relay guide](live-subtitle-relay.md); validation steps are in the [verification guide](verification.md).
+Embedded subtitles are optional to live playback. The app supports browser-side DVB bitmap decoding from HLS fragments and uses native AVPlay text tracks on Tizen when the device exposes them. A separate live subtitle relay is available for configured channels, including stream-based routing for Finnish channels in configured Tizen builds. Setup and relay behavior are described in the [live subtitle relay guide](live-subtitle-relay.md); validation steps are in the [verification guide](verification.md).
 
 ## Current behavior
 
 In browsers using hls.js, MPEG-TS fragments are scanned in a worker. DVB subtitle PES is decoded to bounded RGBA frames and drawn in an overlay. A DVB track becomes selectable only after packets are observed on the advertised PID; a PMT descriptor without subtitle packets is not a usable track. When hls.js is unavailable but native HLS playback exists, video may still play, though fragment-based DVB discovery is unavailable.
 
-Tizen uses AVPlay tracks when available. The separate continuous TV-side TS scanner remains disabled. The optional live subtitle relay provides an alternate single-upstream route for configured channels; it keeps video and subtitle timing on the same relayed stream and displays decoded images above AVPlay. Both direct embedded-track selection and the relay prefer Finnish and then English when available. Availability depends on provider packets and device support.
+Tizen uses AVPlay tracks when available. With relay enabled, Finnish channels use the relay for single-upstream video and dynamic DVB discovery. The retired continuous TV-side TS scanner remains disabled. The optional live subtitle relay provides an alternate single-upstream route for configured channels; it keeps video and subtitle timing on the same relayed stream and displays decoded images above AVPlay. Both direct embedded-track selection and the relay prefer Finnish and then English when available. Availability depends on provider packets and device support.
 
 Browser subtitle processing is isolated from video playback. Worker startup, parsing, rendering, or acknowledgement failures release subtitle resources while video continues. Browser HLS disables WebVTT, IMSC1, and CEA-708 hls.js decoders because they made an affected provider stream unresponsive. Native browser `TextTrack` support is not assumed for DVB bitmap subtitles.
+
+## Dynamic Finnish subtitle discovery on one upstream
+
+With relay enabled, Finnish live channels (`FI:`, `FIN:` or `FINLAND:` prefixes) select the stable server-owned relay channel ID regardless of `Multi-Sub` naming. Explicit device mappings take precedence. The relay scans the same upstream used for video and exposes usable DVB tracks only after observing subtitle packets. Finnish and then English are preferred when available. The route records `server-dvb-discovery` evidence; eligibility is not a claim that a programme has captions.
+
+There is no device-side provider-media preflight. A preliminary HLS sample followed by a separate relay TS connection can compete for a one-connection provider account even after the sample request closes. Finnish channels retain relay video when no usable subtitle packets are found, avoiding another provider handover merely to choose a route. If relay setup fails, existing exclusive cleanup and direct fallback still apply. Stored relay opt-out retains direct playback and native AVPlay subtitle support. Other-country legacy marked-channel routing is unchanged.
+
+Refresh the private relay allowlist to include all Finnish IDs, including unmarked feeds, before deploying this client. Allowlisting does not ingest a channel or declare subtitle support. Relay session creation contains only the stable channel ID and service-specific authentication; provider URLs and credentials come exclusively from the relay's independently provisioned server configuration. Public bundles contain no personal relay credentials. Physical-TV caption rendering and timing still require observation.
 
 ## Why continuous TV-side scanning stays disabled
 

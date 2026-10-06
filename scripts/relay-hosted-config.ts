@@ -11,7 +11,7 @@ try {
   // from restoring the generic two-session default.
   await writeFile(path, JSON.stringify({ ...config, maxSessions: 1, sessionRoot: '/tmp/live-subtitle-relay/sessions' }), { mode: 0o600 });
   await chmod(path, 0o600);
-  console.log(`Private hosted configuration refreshed: ${Object.keys(config.channels).length} Multi-Sub channels. Device credential preserved.`);
+  console.log(`Private hosted configuration refreshed: ${Object.keys(config.channels).length} eligible channels. Device credential preserved.`);
 } catch {
   console.error('Hosted configuration refresh failed. Check private configuration, destination permissions and provider metadata access.');
   process.exitCode = 1;

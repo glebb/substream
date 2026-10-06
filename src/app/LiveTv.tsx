@@ -5,7 +5,7 @@ import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurren
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { preferredAudioTrackIndex } from "../core/media/audio.ts";
 import type { AudioTrack, LiveBufferWindow, MediaPlayer, PlaybackState } from "../platform/media-player.ts";
-import { relayChannelId } from "../platform/live-relay/config.ts";
+import { resolveLiveRelayChannel } from "../application/live-relay-routing.ts";
 import { isBackKey, normalizedRemoteKey } from "../contracts/input.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
 import { DnaGuideClient } from "../platform/dna/client.ts";
@@ -586,7 +586,7 @@ export function LiveTv({ onMainMenu }: Props) {
     let directFallback = false;
     let diagnosticTimer: ReturnType<typeof setInterval> | undefined;
     const config = settings.loadLiveRelayConfig();
-    const hostedChannelId = config ? relayChannelId(config, selected.providerStreamId, selected.name) : null;
+    const hostedChannelId = resolveLiveRelayChannel(config, selected.providerStreamId, selected.name).channelId;
     const streamUrl = client.liveStreamUrl(selected.providerStreamId, liveSource === "hls" ? "m3u8" : "ts");
     const controller = new LivePlaybackController({
       directStreamUrl: streamUrl,

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
+import { isFinnishLiveChannel, providerRelayChannelId } from "../src/core/live/relay-candidates.ts";
 import { classifyMultiSubChannel } from "../src/core/live/multi-sub-relay.ts";
 import { validateRelayConfig, type RelayConfig } from "../services/live-subtitle-relay/config.ts";
 import { ensurePersonalRelayEnvironment } from "./live-relay-personal-config.ts";
@@ -10,7 +11,7 @@ import { ensurePersonalRelayEnvironment } from "./live-relay-personal-config.ts"
 type LiveRecord = { stream_id?: unknown; name?: unknown };
 const MAX_METADATA_BYTES = 32 * 1024 * 1024;
 
-/** Discover every marked live channel; this never opens a live media connection. */
+/** Allowlist Finnish live channels plus legacy marked channels; this never opens a live media connection. */
 export async function discoverPersonalRelayChannels(playlistUrl: string, request: typeof fetch = fetch): Promise<Record<string, string>> {
   const playlist = new URL(playlistUrl);
   const username = playlist.searchParams.get("username");
@@ -41,9 +42,10 @@ export async function discoverPersonalRelayChannels(playlistUrl: string, request
     const id = String(record.stream_id ?? "");
     if (!/^\d{1,20}$/.test(id)) continue;
     const classified = classifyMultiSubChannel(record.name, id);
-    if (classified.channelId) channels[classified.channelId] = `${base}live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${id}.ts`;
+    const channelId = isFinnishLiveChannel(record.name) ? providerRelayChannelId(id) : classified.channelId;
+    if (channelId) channels[channelId] = `${base}live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${id}.ts`;
   }
-  if (!Object.keys(channels).length) throw new Error("No Multi-Sub live channels found in provider metadata.");
+  if (!Object.keys(channels).length) throw new Error("No eligible live subtitle relay channels found in provider metadata.");
   return channels;
 }
 
@@ -71,7 +73,7 @@ export async function preparePersonalRelay(root: string): Promise<{ config: Rela
 async function main(): Promise<void> {
   const root = fileURLToPath(new URL("../", import.meta.url));
   const prepared = await preparePersonalRelay(root);
-  process.stdout.write(`Personal subtitle relay configured for ${Object.keys(prepared.config.channels).length} Multi-Sub channels.\n`);
+  process.stdout.write(`Personal subtitle relay configured for ${Object.keys(prepared.config.channels).length} eligible channels.\n`);
   process.env.RELAY_CONFIG_FILE = prepared.configPath;
   process.env.RELAY_HOST = prepared.host;
   process.env.RELAY_PORT = String(prepared.port);

@@ -1,8 +1,11 @@
+import { createCancellationController, type CancellationSignal } from "../contracts/cancellation.ts";
 import type { AudioTrack, EmbeddedSubtitleTrack, LiveBufferWindow, MediaPlayer, PlaybackState, RelayMediaPlayer } from "../platform/media-player.ts";
 
 export type RelayServiceState = "disabled" | "starting" | "ready" | "recovering" | "fallback" | "unavailable" | "cleanup-blocked";
 
 export interface LivePlaybackControllerOptions {
+  /** Finite, cancellable discovery completes before any playback connection. */
+  prepareRelay?(signal: CancellationSignal): Promise<void>;
   createDirect(): MediaPlayer | null;
   directStreamUrl: string;
   createRelay?(): RelayMediaPlayer | null;
@@ -21,6 +24,7 @@ export interface LivePlaybackControllerOptions {
 
 /** Owns one live playback session, including relay recovery and exclusive-player teardown. */
 export class LivePlaybackController {
+  private readonly preparationAbort = createCancellationController();
   private player: MediaPlayer | null = null;
   private generation = 0;
   private closed = false;
@@ -47,7 +51,11 @@ export class LivePlaybackController {
   start(): Promise<void> {
     if (this.closed) return Promise.reject(new Error("Playback session is closed."));
     if (this.starting) return this.starting;
-    this.starting = this.startRelayOrDirect(++this.generation).finally(() => { this.starting = null; });
+    const generation = ++this.generation;
+    this.starting = (async () => {
+      try { if (this.options.prepareRelay) await this.options.prepareRelay(this.preparationAbort.signal); } catch { /* Discovery failure retains direct playback. */ }
+      if (this.isSession(generation)) await this.startRelayOrDirect(generation);
+    })().finally(() => { this.starting = null; });
     return this.starting;
   }
 
@@ -191,6 +199,7 @@ export class LivePlaybackController {
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
+    this.preparationAbort.abort();
     ++this.generation;
     this.player = null;
     this.options.onPlayer(null);
@@ -201,6 +210,7 @@ export class LivePlaybackController {
   /** Explicit retry after a bounded close failed; callers must keep other playback blocked until this resolves. */
   retryCleanup(): Promise<void> {
     this.closed = true;
+    this.preparationAbort.abort();
     ++this.generation;
     this.ownedPlayers.forEach((player) => this.disposal.delete(player));
     this.closePromise = this.cleanupOwnedPlayers();
