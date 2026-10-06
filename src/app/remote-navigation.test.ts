@@ -1,7 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, detailsControlNavigationTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, detailsControlNavigationTarget, enabledPlayerControlTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
+  it("skips disabled size and timing buttons without changing subtitle layout indexes", () => {
+    const controls = Array.from({ length: 22 }, (_, index) => ({ disabled: [10, 11, 13, 14, 15, 16].includes(index) }));
+    for (const key of ["ArrowDown", "ArrowRight"]) {
+      expect(enabledPlayerControlTarget(key, 9, controls)).toBe(12);
+      expect(enabledPlayerControlTarget(key, 12, controls)).toBe(17);
+      expect(enabledPlayerControlTarget(key, 9, controls, 1)).toBe(12);
+    }
+    for (const key of ["ArrowUp", "ArrowLeft"]) {
+      expect(enabledPlayerControlTarget(key, 17, controls)).toBe(12);
+      expect(enabledPlayerControlTarget(key, 12, controls)).toBe(9);
+    }
+    expect(enabledPlayerControlTarget("ArrowDown", 21, controls)).toBeNull();
+    expect(enabledPlayerControlTarget("ArrowUp", 2, controls, 1)).toBe(0);
+  });
+
   it("keeps the subtitle source picker before local files and timing controls", () => {
     const layout = subtitleFocusLayout({ subtitleAttached: true, timingAvailable: true, apiKeyConfigured: true, apiKeyEditorOpen: false, seriesSearch: false, sourcePickerAvailable: true, localSubtitleAvailable: true });
     expect(layout.sourcePicker).toBe(12);

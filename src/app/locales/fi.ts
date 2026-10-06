@@ -576,6 +576,7 @@ export const fi: Record<keyof typeof en, string> = {
   "Included in video": "Sisältyy videoon",
   "Included in video: ": "Sisältyy videoon: ",
   "No embedded subtitles found": "Videosta ei löytynyt tekstityksiä",
+  "The TV will check included tracks when playback starts. You can select them from Subtitle source.": "TV tarkistaa videon tekstitysraidat toiston alkaessa. Voit valita ne Tekstityksen lähde -valikosta.",
   "Availability could not be checked": "Saatavuutta ei voitu tarkistaa",
   "Checking included subtitles…": "Tarkistetaan videon tekstityksiä…",
   "Choose an episode to check included subtitles.": "Valitse jakso tarkistaaksesi sen tekstitykset.",

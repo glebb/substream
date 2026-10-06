@@ -60,6 +60,8 @@ export function isTizenAvPlayAvailable(): boolean {
 export interface TizenAvPlayPlayerOptions {
   /** Overrides the normal five second live/VOD buffer target. */
   bufferSeconds?: number;
+  /** Native rendering avoids relying on silent-mode cue delivery on TV firmware. */
+  embeddedSubtitleRendering?: "native" | "overlay";
 }
 
 /**
@@ -199,6 +201,9 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     try {
       player.open(streamUrl);
       this.opened = true;
+      // prepareAsync READY does not permit setSilentSubtitle on all firmware.
+      // Configure callbacks while IDLE, then reassert after playback/selection.
+      if (this.liveSubtitleMode || this.vodSubtitleMode) this.setNativeSubtitleSilent(true);
       // Match the local browser media proxy: some providers reject requests
       // with no User-Agent. AVPlay properties must be set after open(), before
       // prepareAsync(), while the player is IDLE.
@@ -233,7 +238,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
           this.emitAudioTracksIfChanged();
         },
         onsubtitlechange: (durationMilliseconds, text) => {
-          if (!this.isCurrent(generation) || !this.vodSubtitleMode || this.liveSubtitleMode || !this.vodEmbeddedSubtitleEnabled || !this.selectedVodSubtitleTrackId) return;
+          if (!this.isCurrent(generation) || !this.vodSubtitleMode || this.liveSubtitleMode || !this.vodEmbeddedSubtitleEnabled || !this.selectedVodSubtitleTrackId || this.options.embeddedSubtitleRendering !== "overlay") return;
           if (typeof text !== "string") return;
           if (this.subtitleCueTimer) clearTimeout(this.subtitleCueTimer);
           const cue = normalizeSubtitleText(text).trim();
@@ -300,6 +305,13 @@ export class TizenAvPlayPlayer implements MediaPlayer {
       const player = avplay();
       if (!player) throw new Error("AVPlay unavailable");
       player.play();
+      if (this.liveSubtitleMode || this.vodSubtitleMode) {
+        const silent = this.selectedVodSubtitleTrackId
+          ? !this.vodEmbeddedSubtitleEnabled || this.options.embeddedSubtitleRendering === "overlay"
+          : this.liveSubtitleSilent ?? true;
+        this.liveSubtitleSilent = undefined;
+        this.setNativeSubtitleSilent(silent);
+      }
       this.paused = false;
       this.emit("playing");
       this.emitEmbeddedSubtitleTracksIfChanged();
@@ -554,8 +566,11 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     const previousIndex = this.getSelectedTrackIndex(player, "TEXT");
     try {
       player.setSelectTrack("TEXT", index);
+      // Selecting TEXT can reset AVPlay's silent mode. Never let the cached
+      // value prevent restoring callback delivery for the shared overlay.
+      this.liveSubtitleSilent = undefined;
       if (this.vodSubtitleMode && !this.liveSubtitleMode) {
-        if (!this.setNativeSubtitleSilent(true)) {
+        if (!this.setNativeSubtitleSilent(this.options.embeddedSubtitleRendering === "overlay")) {
           if (previousIndex !== undefined) {
             try { player.setSelectTrack("TEXT", previousIndex); } catch { /* Preserve best effort if firmware rejects rollback. */ }
           }
@@ -668,7 +683,11 @@ export class TizenAvPlayPlayer implements MediaPlayer {
   }
 
   getSubtitleRenderingCapabilities(): { timingAdjustment: boolean; styling: boolean; sharedOverlay: boolean } {
-    if (this.selectedVodSubtitleTrackId) return { timingAdjustment: this.nativeSubtitleTimingSupported === true, styling: true, sharedOverlay: true };
+    if (this.selectedVodSubtitleTrackId) return {
+      timingAdjustment: this.nativeSubtitleTimingSupported === true,
+      styling: this.options.embeddedSubtitleRendering === "overlay",
+      sharedOverlay: this.options.embeddedSubtitleRendering === "overlay",
+    };
     return this.subtitleCues.length > 0
       ? { timingAdjustment: true, styling: true, sharedOverlay: true }
       : { timingAdjustment: false, styling: false, sharedOverlay: false };
@@ -682,6 +701,7 @@ export class TizenAvPlayPlayer implements MediaPlayer {
     }
     if (this.selectedVodSubtitleTrackId) {
       this.vodEmbeddedSubtitleEnabled = enabled;
+      this.setNativeSubtitleSilent(!enabled || this.options.embeddedSubtitleRendering === "overlay");
       if (!enabled) this.clearSubtitleCue();
     }
     if (this.vodSubtitleMode && this.subtitleCues.length > 0) this.setNativeSubtitleSilent(true);

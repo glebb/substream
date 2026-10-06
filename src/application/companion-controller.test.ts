@@ -147,4 +147,20 @@ describe("application companion lifecycle", () => {
     controller.dispose();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each([
+    "TV app and LAN service versions do not match. Restart the LAN service and install the latest TV app.",
+    "The LAN service rejected this TV's saved pairing. Restart the LAN service, then connect and pair this TV again.",
+    "The LAN service rejected this app's origin. Check the relay's allowed origins.",
+    "The LAN service has reached its TV connection limit. Disconnect unused TVs or restart the LAN service.",
+    "Companion service did not respond within 10 seconds. Check the LAN address and service, then try again.",
+  ])("preserves a safe connection diagnostic while retrying: %s", async (message) => {
+    const { controller, dependencies, start } = setup({ connect: vi.fn().mockRejectedValueOnce(new Error(message)).mockResolvedValue(connection) });
+    start(); await flush();
+    expect(controller.getSnapshot()).toMatchObject({ state: "unavailable", error: message });
+    await vi.advanceTimersByTimeAsync(2_000); await flush();
+    expect(dependencies.connect).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot()).toMatchObject({ state: "available", error: "" });
+    controller.dispose();
+  });
 });

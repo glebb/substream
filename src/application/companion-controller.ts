@@ -33,6 +33,16 @@ export function companionRetryDelay(attempt: number): number {
   return Math.min(2_000 * 2 ** Math.max(0, attempt), 30_000);
 }
 
+// Only fixed, client-authored diagnostics may reach the screen. Never display
+// arbitrary transport errors, which can contain URLs or credentials.
+const connectionDiagnostics = new Set([
+  "TV app and LAN service versions do not match. Restart the LAN service and install the latest TV app.",
+  "The LAN service rejected this TV's saved pairing. Restart the LAN service, then connect and pair this TV again.",
+  "The LAN service rejected this app's origin. Check the relay's allowed origins.",
+  "The LAN service has reached its TV connection limit. Disconnect unused TVs or restart the LAN service.",
+  "Companion service did not respond within 10 seconds. Check the LAN address and service, then try again.",
+]);
+
 /** One application-owned input source. Screens never own registration or polling. */
 export class CompanionController {
   private snapshot: CompanionSnapshot = { state: "disabled", server: "", paired: false, pairingCode: "", status: "", error: "" };
@@ -173,7 +183,9 @@ export class CompanionController {
       } catch (cause) {
         if (!this.active(generation)) return;
         if (cause instanceof Error && cause.message === "Companion connection expired.") this.connection = null;
-        this.update({ state: "unavailable", error: "TV connection was interrupted. Reconnecting…" });
+        const error = cause instanceof Error && connectionDiagnostics.has(cause.message)
+          ? cause.message : "TV connection was interrupted. Reconnecting…";
+        this.update({ state: "unavailable", error });
         await this.wait(companionRetryDelay(failures++));
       }
     }

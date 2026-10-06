@@ -573,6 +573,7 @@ export const en = {
   "Included in video": "Included in video",
   "Included in video: ": "Included in video: ",
   "No embedded subtitles found": "No embedded subtitles found",
+  "The TV will check included tracks when playback starts. You can select them from Subtitle source.": "The TV will check included tracks when playback starts. You can select them from Subtitle source.",
   "Availability could not be checked": "Availability could not be checked",
   "Checking included subtitles…": "Checking included subtitles…",
   "Choose an episode to check included subtitles.": "Choose an episode to check included subtitles.",

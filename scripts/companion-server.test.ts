@@ -122,6 +122,17 @@ describe("LAN relay playback route", () => {
     } finally { log.mockRestore(); }
   });
 
+  it("logs accepted and rejected connection preflights without request data", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      expect((await callRoute("OPTIONS", "/api/connect", undefined, "null", undefined, { "access-control-request-method": "POST" })).status).toBe(204);
+      expect(log).toHaveBeenCalledWith('[companion-connect] {"result":"preflight-accepted","status":204}');
+      expect((await callRoute("OPTIONS", "/api/connect", undefined, "https://private.invalid", "Bearer synthetic-secret", { "access-control-request-method": "POST" })).status).toBe(403);
+      expect(log).toHaveBeenCalledWith('[companion-connect] {"status":403,"result":"origin-rejected","relayProtocol":4}');
+      expect(JSON.stringify(log.mock.calls)).not.toMatch(/private\.invalid|synthetic-secret/);
+    } finally { log.mockRestore(); }
+  });
+
   it("coalesces concurrent EPG fetches and serves the cached bounded payload", async () => {
     const originalFetch = globalThis.fetch;
     let resolveFetch;

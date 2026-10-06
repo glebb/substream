@@ -6,6 +6,8 @@ import { createIndexedDbCatalogRepositoryFactory } from "../platform/web/catalog
 import { isTizenAvPlayAvailable } from "../platform/tizen/avplay-player.ts";
 import { isTizenRuntime, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
 
+import { discoverTizenEmbeddedSubtitles } from "../platform/tizen/embedded-subtitle-discovery.ts";
+
 import { stableId } from "../core/catalog/normalize.ts";
 import { discoverEmbeddedSubtitles, EmbeddedSubtitleMetadataCache } from "../platform/browser/embedded-subtitle-discovery.ts";
 
@@ -53,7 +55,9 @@ export function createAppRuntime(overrides: AppRuntimeOverrides = {}): AppRuntim
       const cacheKey = stableId(url);
       const cached = subtitleCache.get(cacheKey, "media");
       if (cached) return cached;
-      const result = await discoverEmbeddedSubtitles(url, signal, (input, init) => (overrides.transport?.fetch ?? browserFetch)(input, init));
+      const result = tizen && !overrides.transport?.fetch
+        ? await discoverTizenEmbeddedSubtitles(url, signal)
+        : await discoverEmbeddedSubtitles(url, signal, (input, init) => (overrides.transport?.fetch ?? browserFetch)(input, init));
       subtitleCache.set(cacheKey, "media", result);
       return result;
     } },

@@ -35,7 +35,7 @@ import { formatRuntime, titleDetailsFor } from "./title-details.ts";
 
 import { TmdbClient, type TmdbMetadata } from "../platform/tmdb/client.ts";
 import { TmdbArtworkCache, TmdbImageCache, TmdbMetadataCache } from "../platform/browser/tmdb-cache.ts";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, detailsControlNavigationTarget, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, type HeldTitleKeyState, type SettingsControlKey } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, detailsControlNavigationTarget, enabledPlayerControlTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout, type HeldTitleKeyState, type SettingsControlKey } from "./remote-navigation.ts";
 import { focusPageItem, focusTitleListItem } from "./title-list-focus.ts";
 import { RemoteEditable } from "./remote-editable.tsx";
 import "./app.css";
@@ -2094,7 +2094,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         if (key === "ArrowLeft" || key === "ArrowRight") {
           event.preventDefault();
           if (playerFullscreen && showFullscreenControls) {
-            const targetIndex = fullscreenControlNavigationTarget(key, currentIndex, controls.length, videoAreaFocusIndex);
+            const targetIndex = enabledPlayerControlTarget(key, currentIndex, controls as HTMLButtonElement[], videoAreaFocusIndex);
             if (targetIndex !== null) {
               setPlayerFocusIndex(targetIndex);
               controls[targetIndex]?.focus();
@@ -2102,7 +2102,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           } else if (playerFullscreen || controls[currentIndex] === playerStageRef.current) {
             skipVideo(key === "ArrowLeft" ? -60 : 60);
           } else {
-            setPlayerFocusIndex(Math.max(0, Math.min(controls.length - 1, currentIndex + (key === "ArrowLeft" ? -1 : 1))));
+            const targetIndex = enabledPlayerControlTarget(key, currentIndex, controls as HTMLButtonElement[]);
+            if (targetIndex !== null) setPlayerFocusIndex(targetIndex);
           }
           return;
         }
@@ -2113,7 +2114,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             return;
           }
           if (playerFullscreen && showFullscreenControls) {
-            const targetIndex = fullscreenControlNavigationTarget(key, currentIndex, controls.length, videoAreaFocusIndex);
+            const targetIndex = enabledPlayerControlTarget(key, currentIndex, controls as HTMLButtonElement[], videoAreaFocusIndex);
             if (targetIndex !== null) {
               setPlayerFocusIndex(targetIndex);
               controls[targetIndex]?.focus();
@@ -2126,7 +2127,8 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             window.requestAnimationFrame(() => playerTogglePlaybackButtonRef.current?.focus());
             return;
           }
-          setPlayerFocusIndex(Math.max(0, Math.min(controls.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1))));
+          const targetIndex = enabledPlayerControlTarget(key, currentIndex, controls as HTMLButtonElement[]);
+          if (targetIndex !== null) setPlayerFocusIndex(targetIndex);
           return;
         }
         if (key === "Enter") {
@@ -2559,9 +2561,13 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       return;
     }
     const controls = playerControls();
-    const control = controls[Math.min(playerFocusIndex, Math.max(0, controls.length - 1))];
-    control?.focus();
-  }, [editingSubtitleSource, editingSubtitleEpisode, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, openSubtitlesApiKey, isSubtitleAttached, nextEpisode, playerFocusIndex, playerFullscreen, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, showPlayerTools, subtitleResults.length, subtitleSearchType]);
+    const index = Math.min(playerFocusIndex, Math.max(0, controls.length - 1));
+    if ((controls[index] as HTMLButtonElement | undefined)?.disabled) {
+      const target = enabledPlayerControlTarget("ArrowDown", index, controls as HTMLButtonElement[])
+        ?? enabledPlayerControlTarget("ArrowUp", index, controls as HTMLButtonElement[]);
+      if (target !== null) { setPlayerFocusIndex(target); controls[target]?.focus(); }
+    } else controls[index]?.focus();
+  }, [editingSubtitleSource, editingSubtitleEpisode, editingSubtitleQuery, editingSubtitleSeason, editingSubtitleType, openSubtitlesApiKey, isSubtitleAttached, nextEpisode, playerFocusIndex, playerFullscreen, selectedTitle, showFullscreenControls, showPlayerApiKeyEditor, showPlayerTools, subtitleResults.length, subtitleSearchType, subtitleRendering?.styling, subtitleRendering?.timingAdjustment]);
 
   useEffect(() => {
     if (selectedTitle) window.scrollTo(0, 0);
@@ -3732,7 +3738,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             {detailsMetadataStatus && detailsMetadataStatus !== "Loading title details…" && <p className="hint" role="status">{detailsMetadataStatus}</p>}
             {detailsOrigin?.kind === "local" && detailsTitle.contentType === "other" && <p className="hint">{detailsTitle.classification?.evidence.join(" ")}</p>}
             {detailsOrigin?.kind === "local" && (tmdbCredentials.readAccessToken || tmdbCredentials.apiKey) && <button type="button" onClick={() => void openTitle(detailsTitle, { kind: "local", focusIndex: detailsFocusIndex })}>Search details again</button>}
-            <SubtitleAvailability language={language} embedded={detailsEmbeddedSubtitles} externalLanguages={details.subtitleLanguages} episodeRequired={!!detailsTitle.providerSeriesId && !detailsEpisodeId} local={detailsOrigin?.kind === "local"} />
+            <SubtitleAvailability nativePlaybackDiscovery={runtime.capabilities.nativeVideoSurface} language={language} embedded={detailsEmbeddedSubtitles} externalLanguages={details.subtitleLanguages} episodeRequired={!!detailsTitle.providerSeriesId && !detailsEpisodeId} local={detailsOrigin?.kind === "local"} />
             {detailsHistory && <p className="details-resume" role="status">Resume available at {formatPlaybackTime(detailsHistory.currentTimeSeconds)} of {formatPlaybackTime(detailsHistory.durationSeconds)}</p>}
             {detailsTitle.providerSeriesId && detailsEpisodes.length > 0 && <RemoteEditable label="Season / episode" translateValue={false} value={(() => { const episode = detailsEpisodes.find((item) => item.id === detailsEpisodeId); return episode ? `${episode.season !== undefined ? `${translate("Season", language)} ${episode.season}, ` : ""}${episode.episode !== undefined ? `${translate("Episode", language)} ${episode.episode}` : episode.title}` : translate("Choose episode", language); })()} editing={editingDetailsEpisode} remoteMode={isTvProfile} className={detailsFocusIndex === 1 ? remoteFocusClass : ""} controlRef={(element) => { detailsEpisodeControlRef.current = element; }} onBeginEdit={() => { setEditingDetailsEpisode(true); window.requestAnimationFrame(() => detailsEpisodeSelectRef.current?.focus()); }} renderEditor={(controlRef) => <label className="details-episode-picker" htmlFor="details-episode-picker">Season / episode<select className={detailsFocusIndex === 1 ? remoteFocusClass : ""} id="details-episode-picker" ref={(element) => { detailsEpisodeSelectRef.current = element; controlRef(element); }} onFocus={() => { setDetailsFocusIndex(1); webEpisodeSelectionChangedRef.current = false; }} value={detailsEpisodeId} onChange={(event) => { webEpisodeSelectionChangedRef.current = true; setDetailsEpisodeId(event.target.value); setDetailsFocusIndex(2); window.requestAnimationFrame(() => { webEpisodeSelectionChangedRef.current = false; detailsControlsRef.current[2]?.focus(); }); }} aria-label="Choose season and episode">{detailsEpisodes.map((episode) => <option key={episode.id} value={episode.id} translate={episode.episode === undefined ? "no" : undefined}>{episode.season !== undefined ? `Season ${episode.season}, ` : ""}{episode.episode !== undefined ? `Episode ${episode.episode}` : episode.title}</option>)}</select></label>} />}
           </div>

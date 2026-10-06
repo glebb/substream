@@ -3,6 +3,27 @@ import { VodSubtitleController } from "./vod-subtitle-controller.ts";
 import type { VodEmbeddedSubtitleCandidate } from "../core/subtitles/vod-selection.ts";
 
 describe("VodSubtitleController", () => {
+  it("allows sequential OpenSubtitles requests more than eight seconds before embedded fallback", async () => {
+    vi.useFakeTimers();
+    try {
+      const discoverEmbedded = vi.fn(async () => [{ id: "native", language: "fi", label: "Finnish" }]);
+      const controller = new VodSubtitleController({
+        preferredLanguage: "fi", discoverEmbedded, selectEmbedded: () => true,
+        searchExternal: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 9_000));
+          return { language: "fi", activate: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 9_000));
+            return true;
+          } };
+        },
+      });
+      const selection = controller.start();
+      await vi.advanceTimersByTimeAsync(18_000);
+      expect(await selection).toEqual({ source: "external", language: "fi" });
+      expect(discoverEmbedded).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("skips unplayable file tracks and automatically activates preferred external subtitles", async () => {
     const selectEmbedded = vi.fn(() => true);
     const activate = vi.fn(() => true);

@@ -19,6 +19,12 @@ describe("subtitle availability", () => {
     expect(failed).toContain("Availability could not be checked");
     expect(failed).not.toContain("No embedded subtitles found");
   });
+  it("explains native playback discovery while keeping a failed details check unknown", () => {
+    const html = renderToStaticMarkup(<SubtitleAvailability nativePlaybackDiscovery embedded={{ status: "unsupported", tracks: [] }} externalLanguages={[]} />);
+    expect(html).toContain("Availability could not be checked");
+    expect(html).toContain("The TV will check included tracks when playback starts");
+    expect(html).not.toContain("No embedded subtitles found");
+  });
   it("asks for the episode rather than probing a series container", () => {
     const html = renderToStaticMarkup(<SubtitleAvailability embedded={null} externalLanguages={[]} episodeRequired />);
     expect(html).toContain("Choose an episode");

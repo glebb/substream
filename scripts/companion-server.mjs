@@ -759,7 +759,7 @@ async function localMediaRoute(request, response, url) {
 export async function route(request, response, url) {
   // Log only fixed outcomes and primitive negotiation flags, never request data,
   // origins, device identities, pairing codes, credentials, or provider details.
-  if (request.method === "POST" && url.pathname === "/api/connect") {
+  if (["POST", "OPTIONS"].includes(request.method) && url.pathname === "/api/connect") {
     response.companionConnectDiagnostic = {};
   }
   const origin = request.headers?.origin;
@@ -769,6 +769,7 @@ export async function route(request, response, url) {
   if (originAllowed) response.corsOrigin = origin;
   if (request.method === "OPTIONS") {
     if (!originAllowed) return json(response, 403, { error: "Request origin is not allowed." });
+    if (url.pathname === "/api/connect") console.info('[companion-connect] {"result":"preflight-accepted","status":204}');
     response.writeHead(204, { "access-control-allow-origin": origin, "access-control-allow-methods": "GET,HEAD,POST,PUT,DELETE,OPTIONS", "access-control-allow-headers": "content-type, authorization", vary: "Origin" });
     response.end();
     return;

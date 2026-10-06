@@ -78,7 +78,7 @@ export class VodSubtitleController<T extends VodEmbeddedSubtitleCandidate> {
   }
 
   private async tryExternal(language: VodSubtitleLanguage, generation: number): Promise<VodSubtitleSelection | null> {
-    const timeout = Math.max(0, this.options.externalTimeoutMs ?? 8000);
+    const timeout = Math.max(0, this.options.externalTimeoutMs ?? 20_000);
     const candidate = await this.withTimeout(Promise.resolve().then(() => this.options.searchExternal(language)), timeout);
     if (!candidate || !this.isCurrent(generation)) return null;
     let attemptActive = true;

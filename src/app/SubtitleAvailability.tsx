@@ -3,11 +3,12 @@ import { Localized, translate, type UiLanguage } from "./language.tsx";
 import { subtitleLanguageLabel } from "./subtitle-labels.ts";
 
 /** File presence and device playability are deliberately separate facts. */
-export function SubtitleAvailability({ embedded, externalLanguages, episodeRequired = false, local = false, language = "en" }: {
+export function SubtitleAvailability({ embedded, externalLanguages, episodeRequired = false, local = false, nativePlaybackDiscovery = false, language = "en" }: {
   embedded: EmbeddedSubtitleDiscoveryResult | null;
   externalLanguages: string[];
   episodeRequired?: boolean;
   local?: boolean;
+  nativePlaybackDiscovery?: boolean;
   language?: UiLanguage;
 }) {
   const includedLanguages = [...new Set(embedded?.tracks.map((track) => translate(subtitleLanguageLabel(track.language), language)) ?? [])];
@@ -17,6 +18,7 @@ export function SubtitleAvailability({ embedded, externalLanguages, episodeRequi
       {embedded?.status === "ready" ? includedLanguages.length ? <span translate="no">{includedLanguages.join(", ")}</span> : <span>No embedded subtitles found</span>
         : embedded ? <span>Availability could not be checked</span> : <span>Checking included subtitles…</span>}
     </p>}
+    {!episodeRequired && !local && nativePlaybackDiscovery && embedded && embedded.status !== "ready" && <p className="hint">The TV will check included tracks when playback starts. You can select them from Subtitle source.</p>}
     {includedLanguages.length > 0 && <p className="hint">Included tracks are available when supported by this device's player.</p>}
     {externalLanguages.length > 0 ? <p className="hint"><span>OpenSubtitles: </span><span translate="no">{[...new Set(externalLanguages.map((code) => translate(subtitleLanguageLabel(code), language)))].join(", ")}</span></p>
       : <p className="hint">Subtitle languages will appear after searching OpenSubtitles.</p>}

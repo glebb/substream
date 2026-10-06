@@ -104,7 +104,9 @@ function isCacheRecord(value: unknown): value is CacheRecord {
   const record = value as Partial<CacheRecord>;
   if (!Number.isFinite(record.savedAt) || !record.result || typeof record.result !== "object") return false;
   const result = record.result as Partial<EmbeddedSubtitleDiscoveryResult>;
-  if (result.status !== "ready" && result.status !== "unsupported") return false;
+  // Unknown/unsupported checks can be temporary device/network limitations.
+  // Never let a cached failure suppress a later successful check.
+  if (result.status !== "ready") return false;
   if (!Array.isArray(result.tracks) || result.tracks.length > 128) return false;
   return result.tracks.every((track) => Boolean(track && typeof track === "object"
     && Number.isSafeInteger(track.trackNumber) && typeof track.label === "string" && track.label.length <= 512

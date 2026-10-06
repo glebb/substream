@@ -234,6 +234,16 @@ export function fullscreenControlNavigationTarget(key: string, currentIndex: num
   return controls[current + direction] ?? null;
 }
 
+/** Preserves player layout indexes while skipping disabled controls in either direction. */
+export function enabledPlayerControlTarget(key: string, currentIndex: number, controls: readonly { disabled?: boolean }[], stageIndex?: number): number | null {
+  const direction = key === "ArrowLeft" || key === "ArrowUp" ? -1 : key === "ArrowRight" || key === "ArrowDown" ? 1 : 0;
+  if (!direction) return null;
+  for (let index = currentIndex + direction; index >= 0 && index < controls.length; index += direction) {
+    if (index !== stageIndex && !controls[index]?.disabled) return index;
+  }
+  return null;
+}
+
 /** Moves through a row of dialog actions without letting focus escape the dialog. */
 export function actionRowNavigationTarget(key: string, currentIndex: number, itemCount: number): number | null {
   if (itemCount <= 0 || !["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(key)) return null;

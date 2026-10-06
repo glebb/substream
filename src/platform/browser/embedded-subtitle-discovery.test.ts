@@ -63,6 +63,15 @@ describe("discoverEmbeddedSubtitles", () => {
     cache.set("https://provider.invalid/movie?token=secret", "vod_abc", result, 100);
     expect([...values.values()][0]).not.toContain("secret");
   });
+  it("does not retain unsupported checks or reuse older cached failures", () => {
+    const values = new Map<string, string>();
+    const cache = new EmbeddedSubtitleMetadataCache({ getItem: (key) => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); } });
+    cache.set("movie-42", "media", { status: "unsupported", tracks: [] }, 100);
+    expect(cache.get("movie-42", "media", 101)).toBeNull();
+    values.set("substream.embedded-subtitle-metadata", JSON.stringify({ "movie-42:media": { savedAt: 100, result: { status: "unsupported", tracks: [] } } }));
+    expect(cache.get("movie-42", "media", 101)).toBeNull();
+  });
+
   it("ignores corrupt cache records and expires old metadata", () => {
     const values = new Map<string, string>();
     const cache = new EmbeddedSubtitleMetadataCache({ getItem: (key) => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); } }, 100);
