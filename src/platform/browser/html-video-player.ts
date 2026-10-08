@@ -321,6 +321,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
           enableCEA708Captions: false,
           // Keep a modest live cushion so a short worker/UI task cannot turn a
           // transient append delay into a visible rebuffer.
+          // Buffer capacity alone does not move playback away from the edge.
+          // Four complete segments leave time for network and append jitter.
+          ...(this.liveSubtitleMode ? { liveSyncDurationCount: 4, liveSyncOnStallIncrease: 2 } : {}),
           maxBufferLength: 60,
           maxMaxBufferLength: 120,
           backBufferLength: 30,
@@ -405,7 +408,13 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   goLive(): void {
     const window = this.getLiveBufferWindow();
-    if (window) this.seekLiveBuffer(window.endSeconds);
+    if (!window) return;
+    // Use the engine's safety delay rather than seeking into the final fraction
+    // of a segment, which immediately drains the playable buffer.
+    const sync = this.hls?.liveSyncPosition;
+    const target = typeof sync === "number" && Number.isFinite(sync)
+      ? sync : window.endSeconds - 10;
+    this.seekLiveBuffer(Math.max(window.startSeconds, Math.min(window.endSeconds - 0.25, target)));
   }
 
   getVideoResolution(): string | null {
@@ -1195,6 +1204,7 @@ function cleanTrackText(value: unknown): string | undefined {
 }
 
 interface HlsSubtitleController {
+  liveSyncPosition?: number | null;
   levels?: Array<{ videoCodec?: string | undefined; audioCodec?: string | undefined; frameRate?: number | undefined; bitrate?: number | undefined }>;
   currentLevel?: number;
   destroy(): void;

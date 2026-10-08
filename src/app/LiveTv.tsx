@@ -92,7 +92,7 @@ const LiveChannelRow = memo(function LiveChannelRow({ channel, index, focused, g
         : <span className="live-guide">
           <span className="live-guide-current"><strong>{translate(current.title, language)}</strong><span>{translate(`${programmeTime(current.startTime)}–${programmeTime(current.endTime)} · ${remaining} min left`, language)}</span></span>
           <progress className="live-guide-progress" max={100} value={progress} aria-label={translate(`${progress.toFixed(0)}% of ${current.title}`, language)} />
-          {focused && next && <span className="live-guide-next">{translate(`Next: ${next.title} · ${programmeTime(next.startTime)}`, language)}</span>}
+          {next && <span className="live-guide-next">{translate(`Next: ${next.title} · ${programmeTime(next.startTime)}`, language)}</span>}
         </span>}
     </span>
   </button>;

@@ -39,7 +39,13 @@ export class LiveAudioTsProcessor {
   }
 
   process(input: Uint8Array): Uint8Array {
-    const output = input.slice();
+    // Fragments may already have the selected audio first. Discover tracks
+    // without copying megabytes of video; copy only if a PMT must change.
+    let output = input;
+    const writableOutput = (): Uint8Array => {
+      if (output === input) output = input.slice();
+      return output;
+    };
     let section: number[] = [];
     let sectionOffsets: number[] = [];
     let expectedLength = 0;
@@ -61,7 +67,7 @@ export class LiveAudioTsProcessor {
         if (section.length && pointer > 0) {
           const take = Math.min(pointer, offset + PACKET_BYTES - cursor);
           for (let i = 0; i < take; i += 1) { section.push(output[cursor + i]!); sectionOffsets.push(cursor + i); }
-          const parsed = this.rewriteSection(section, sectionOffsets, output);
+          const parsed = this.rewriteSection(section, sectionOffsets, writableOutput);
           if (parsed) { section = []; sectionOffsets = []; expectedLength = 0; }
         }
         cursor += pointer;
@@ -75,7 +81,7 @@ export class LiveAudioTsProcessor {
         sectionOffsets.push(cursor);
         if (section.length === 3) expectedLength = 3 + (((section[1]! & 15) << 8) | section[2]!);
         if (expectedLength > 0 && section.length >= expectedLength) {
-          this.rewriteSection(section, sectionOffsets, output);
+          this.rewriteSection(section, sectionOffsets, writableOutput);
           section = [];
           sectionOffsets = [];
           expectedLength = 0;
@@ -100,7 +106,7 @@ export class LiveAudioTsProcessor {
     }
   }
 
-  private rewriteSection(sectionInput: number[], offsets: number[], output: Uint8Array): boolean {
+  private rewriteSection(sectionInput: number[], offsets: number[], writableOutput: () => Uint8Array): boolean {
     if (sectionInput.length < 16 || sectionInput[0] !== 2) return false;
     const section = Uint8Array.from(sectionInput);
     const sectionLength = ((section[1]! & 15) << 8) | section[2]!;
@@ -135,6 +141,7 @@ export class LiveAudioTsProcessor {
       const bodyEnd = 12 + body.length;
       newSection.set(section.subarray(end), bodyEnd);
       writeCrc(newSection, newSection.length - 4);
+      const output = writableOutput();
       for (let i = 0; i < newSection.length; i += 1) output[offsets[i]!] = newSection[i]!;
     }
     return true;

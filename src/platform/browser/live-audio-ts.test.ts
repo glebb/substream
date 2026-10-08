@@ -33,6 +33,24 @@ describe("LiveAudioTsProcessor", () => {
     expect(first.getSelectedId()).toBe("ts:257");
   });
 
+  it("reuses unchanged fragments and never mutates the captured subtitle payload", () => {
+    const processor = new LiveAudioTsProcessor();
+    const first = joinPackets(patPacket(), pmtPacket(["fin", "eng", "nor", "swe"]));
+    expect(processor.process(first)).toBe(first);
+    expect(processLiveAudioFragment(first.buffer as ArrayBuffer, processor)).toBe(first.buffer);
+    const before = first.slice();
+    processor.select("ts:258");
+    const changed = processor.process(first);
+    expect(changed).not.toBe(first);
+    expect(first).toEqual(before);
+    expect(audioPids(readPmt(changed))).toEqual([258, 257, 259, 260]);
+    expect(crc32(readPmt(changed))).toBe(0);
+    // Every repeated PMT in a fragment needs the same rewrite.
+    const repeated = processor.process(joinPackets(patPacket(), pmtPacket(), patPacket(), pmtPacket()));
+    expect(audioPids(readPmt(repeated))).toEqual([258, 257, 259, 260]);
+    expect(audioPids(readPmt(repeated.subarray(376)))).toEqual([258, 257, 259, 260]);
+  });
+
   it("discovers tracks in a multi-megabyte live fragment", () => {
     const source = new Uint8Array(188 * 20_000);
     source.set(joinPackets(patPacket(), pmtPacket()));

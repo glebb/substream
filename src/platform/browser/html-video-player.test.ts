@@ -483,9 +483,26 @@ describe("HtmlVideoPlayer", () => {
     player.seekLiveBuffer?.(20);
     expect(video.currentTime).toBe(90);
     player.goLive?.();
-    expect(video.currentTime).toBe(119.75);
+    expect(video.currentTime).toBe(110);
     dispatch("progress");
-    expect(windows).toContainEqual({ startSeconds: 90, endSeconds: 120, currentSeconds: 119.75 });
+    expect(windows).toContainEqual({ startSeconds: 90, endSeconds: 120, currentSeconds: 110 });
+    player.destroy();
+  });
+
+  it("returns to the HLS safety position and clamps stale sync points to the live window", () => {
+    const { video } = fakeVideo();
+    (video as unknown as { seekable: TimeRanges }).seekable = { length: 1, start: () => 90, end: () => 120 };
+    const player = new HtmlVideoPlayer(video);
+    const hls = { liveSyncPosition: 102, destroy: vi.fn() };
+    (player as unknown as { hls: unknown }).hls = hls;
+    player.goLive();
+    expect(video.currentTime).toBe(102);
+    hls.liveSyncPosition = 80;
+    player.goLive();
+    expect(video.currentTime).toBe(90);
+    hls.liveSyncPosition = NaN;
+    player.goLive();
+    expect(video.currentTime).toBe(110);
     player.destroy();
   });
 
