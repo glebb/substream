@@ -27,7 +27,8 @@ type Props = { onMainMenu(): void };
 const CACHE_PREFIX = "substream.live.v2.";
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 const BROWSER_PLAYBACK_START_TIMEOUT_MS = 8_000;
-const EPG_CACHE_PREFIX = "substream.epg.v1.";
+// Refresh titles cached before short Base64 programme names were decoded.
+const EPG_CACHE_PREFIX = "substream.epg.v2.";
 const EPG_CONCURRENCY = 4;
 const EPG_LIMIT = 10;
 const EPG_CACHE_READ_BATCH = 24;

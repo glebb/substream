@@ -42,6 +42,18 @@ describe("XtreamClient", () => {
     expect(requestUrl.searchParams.get("limit")).toBe("5");
   });
 
+  it("decodes short unpadded sports titles while preserving plain and binary-looking text", async () => {
+    const titles = ["TkhM", "UEdB", "RjE=", "NHL", "News", "Live", "Golf", "Test", "AAAA", "AAAAAAAAAAAA", "SW5mbw==", "TkhM!"];
+    const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ epg_listings:
+      titles.map((title, index) => ({ title, start_timestamp: 1790438400 + index * 1800, stop_timestamp: 1790440200 + index * 1800 })),
+    }) });
+    const client = XtreamClient.fromPlaylistUrl("https://iptv.example/get.php?username=user&password=pass", request)!;
+    const programmes = await client.shortEpg("42", 20);
+    expect(programmes.map(({ title }) => title)).toEqual([
+      "NHL", "PGA", "F1", "NHL", "News", "Live", "Golf", "Test", "AAAA", "AAAAAAAAAAAA", "Info", "TkhM!",
+    ]);
+  });
+
   it("accepts the epg_listings response wrapper", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ epg_listings: [
       { title: "Evening news", start_timestamp: 1790438400, stop_timestamp: 1790440200 },

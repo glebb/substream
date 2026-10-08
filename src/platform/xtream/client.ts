@@ -334,9 +334,11 @@ function providerText(value: unknown): string {
     const binary = atob(text);
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
     const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
-    // Avoid interpreting ordinary short words as base64 by requiring padding,
-    // non-ASCII decoded text, or a sufficiently long encoded value.
-    if (decoded && (text.includes("=") || /[^\x20-\x7e]/.test(decoded) || text.length >= 12)) return decoded;
+    // Short programme names such as NHL encode without padding (TkhM).
+    // Validate canonical Base64 and readable UTF-8 rather than imposing a
+    // length threshold. Ordinary words that decode to binary stay unchanged.
+    if (decoded && btoa(binary) === text
+      && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ufffd]/.test(decoded)) return decoded;
   } catch {
     // Keep provider text unchanged when it is not valid encoded UTF-8.
   }
