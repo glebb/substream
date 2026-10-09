@@ -13,6 +13,8 @@ const PLAYBACK_START_TIMEOUT_MS = 8_000;
 // especially on mobile networks. Keep the shorter deadline for live tuning.
 const VOD_PLAYBACK_START_TIMEOUT_MS = 45_000;
 const BUFFERING_GRACE_MS = 750;
+// Three automatic attempts per loaded title/channel; new loads reset the budget.
+const NETWORK_RECOVERY_DELAYS_MS = [1_000, 2_000, 4_000];
 const DVB_WORKER_WATCHDOG_MS = 8_000;
 const TS_PACKET_BYTES = 188;
 const DVB_MAX_CAPTURED_FRAGMENT_BYTES = 20 * 1024 * 1024;
@@ -137,6 +139,11 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private playbackFailed = false;
   private playFailure = "none";
   private playAttempt = 0;
+  private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  private recoveryAttempts = 0;
+  private recoveryActive = false;
+  private recoveryStartSeconds = 0;
+  private userPaused = false;
   private remuxSession: BrowserVodRemuxSession | undefined;
   private remuxStatus = "none";
   private bufferingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -154,7 +161,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
       ["waiting", () => this.armBufferingTimer()],
       ["pause", () => { this.clearBufferingTimer(); if (!this.video.ended) this.emit("paused"); }],
       ["ended", () => { this.clearBufferingTimer(); this.emit("ended"); }],
-      ["error", () => { this.clearPlaybackStartTimer(); this.clearBufferingTimer(); this.emit("error"); }],
+      ["error", () => this.handleMediaError()],
       ["loadedmetadata", () => this.applyPendingSeek()],
       ["loadedmetadata", () => this.refreshEmbeddedSubtitleTracks()],
       ["playing", () => this.refreshEmbeddedSubtitleTracks()],
@@ -165,6 +172,12 @@ export class HtmlVideoPlayer implements MediaPlayer {
         // when Chromium briefly reports an older readyState during an HLS
         // append. It wins over a preceding transient waiting event.
         this.clearBufferingTimer();
+        if (this.recoveryActive && !this.video.error && !this.video.paused
+          && this.pendingSeekSeconds === null
+          && (this.liveSubtitleMode ? this.video.currentTime !== this.recoveryStartSeconds : this.video.currentTime > this.recoveryStartSeconds)) {
+          this.recoveryActive = false;
+          this.clearPlaybackStartTimer();
+        }
         this.emit("playing");
         this.emitProgress(); this.emitLiveBufferWindow(); this.dvbWorker?.setTime(this.video.currentTime);
       }],
@@ -206,6 +219,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
   isVodSubtitleDiscoveryComplete(): boolean { return this.vodSubtitleDiscoveryComplete; }
 
   load(streamUrl: string): void {
+    this.cancelRecovery();
+    this.recoveryAttempts = 0;
+    this.userPaused = false;
     this.remuxSession?.dispose();
     this.remuxSession = undefined;
     this.remuxStatus = "none";
@@ -279,6 +295,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
             "buffer-failed": "browser media buffer failed",
           };
           this.remuxStatus = reasons[reason] + (audioCodec ? ` (${audioCodec})` : "");
+          if ((reason === "provider-timeout" || reason === "cors-range")
+            && this.scheduleRecovery(() => session.seek(this.recoveryStartSeconds))) return;
           this.clearPlaybackStartTimer();
           this.emit("error");
         },
@@ -339,7 +357,10 @@ export class HtmlVideoPlayer implements MediaPlayer {
         for (const event of [events.AUDIO_TRACKS_UPDATED, events.AUDIO_TRACK_SWITCHED]) {
           if (typeof event === "string") audioController.on?.(event, () => this.emitAudioTracksChanged());
         }
-        hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) this.emit("error"); });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (generation !== this.loadGeneration || this.hls !== hls) return;
+          if (data.fatal) this.handleHlsError(data.type);
+        });
         hls.loadSource(streamUrl);
         hls.attachMedia(this.video);
         void this.requestPlay();
@@ -469,7 +490,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     const readiness = ["no metadata", "metadata received", "current frame available", "future frames available", "enough data"][this.video.readyState] ?? "unknown";
     const network = ["empty", "idle", "loading", "no source"][this.video.networkState] ?? "unknown";
     const mediaError = ["none", "aborted", "network error", "decode error", "source unsupported"][this.video.error?.code ?? 0] ?? "unknown";
-    return `Source: ${container} · Media: ${readiness} · Network: ${network} · Error: ${mediaError} · Play: ${this.playFailure}${this.remuxStatus !== "none" ? ` · Remux: ${this.remuxStatus}` : ""}${this.remuxSession ? ` · ${this.remuxSession.getBufferDiagnostics()}` : ""}${this.startupTimedOut ? " · Startup timed out" : ""}`;
+    return `Source: ${container} · Media: ${readiness} · Network: ${network} · Error: ${mediaError} · Play: ${this.playFailure}${this.recoveryAttempts ? ` · Recovery: ${this.recoveryAttempts}/${NETWORK_RECOVERY_DELAYS_MS.length}${this.recoveryActive ? " retrying" : ""}` : ""}${this.remuxStatus !== "none" ? ` · Remux: ${this.remuxStatus}` : ""}${this.remuxSession ? ` · ${this.remuxSession.getBufferDiagnostics()}` : ""}${this.startupTimedOut ? " · Startup timed out" : ""}`;
   }
 
   getAudioTracks(): AudioTrack[] {
@@ -630,6 +651,14 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   play(): void {
+    this.userPaused = false;
+    if (this.recoveryActive) return;
+    if (this.playbackFailed && this.video.error?.code === 2 && !this.hls && !this.remuxSession) {
+      this.recoveryAttempts = 0;
+      this.playbackFailed = false;
+      this.handleMediaError();
+      return;
+    }
     if (this.remuxSession && this.playbackFailed) {
       this.seekTo(this.video.currentTime);
       return;
@@ -642,6 +671,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   pause(): void {
+    this.userPaused = true;
+    if (this.recoveryActive) this.clearPlaybackStartTimer();
+    this.cancelRecovery();
     this.video.pause();
   }
 
@@ -684,6 +716,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
   }
 
   destroy(): void {
+    this.cancelRecovery();
+    this.sourceUrl = undefined;
     this.loadGeneration += 1;
     this.remuxSession?.dispose();
     this.remuxSession = undefined;
@@ -753,10 +787,11 @@ export class HtmlVideoPlayer implements MediaPlayer {
       const hls = new Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 60, backBufferLength: 30 });
       this.hls = hls;
       hls.on(Hls.Events.ERROR, (_event: string, data: { fatal?: boolean; type?: string; details?: string; response?: { code?: number }; sourceBufferName?: string; error?: { name?: string }; networkDetails?: { status?: number; readyState?: number; name?: string }; frag?: { sn?: number | "initSegment"; type?: string; stats?: { loaded?: number } } }) => {
+        if (generation !== this.loadGeneration || this.hls !== hls) return;
         const debug = import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).has("mediaDebug");
         if (!data.fatal && !debug) return;
         if (import.meta.env.DEV) logCompatibilityHlsEvent(Hls.Events.ERROR, data);
-        if (data.fatal) this.emit("error");
+        if (data.fatal) this.handleHlsError(data.type);
       });
       if (import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).has("mediaDebug")) {
         for (const event of [Hls.Events.MANIFEST_PARSED, Hls.Events.BUFFER_CODECS, Hls.Events.BUFFER_CREATED, Hls.Events.BUFFER_APPENDED, Hls.Events.FRAG_LOADED]) {
@@ -794,16 +829,19 @@ export class HtmlVideoPlayer implements MediaPlayer {
     try {
       await this.video.play();
     } catch (error) {
-      if (attempt !== this.playAttempt || generation !== this.loadGeneration) return;
+      if (attempt !== this.playAttempt || generation !== this.loadGeneration || this.recoveryTimer !== undefined) return;
       const name = error && typeof error === "object" && "name" in error ? error.name : undefined;
       // Source replacement and native autoplay can interrupt an earlier play
       // request. Keep waiting for media rather than presenting a false pause.
       if (name === "AbortError") return;
       if (name === "NotAllowedError" && !this.video.error) {
+        this.cancelRecovery();
         this.playFailure = "permission required";
         this.clearPlaybackStartTimer();
         this.emit("paused");
       } else {
+        if ((this.video.error?.code === 2 || (this.video.error?.code === 3 && this.hls))
+          && this.scheduleNetworkRecovery()) return;
         this.playFailure = name === "NotSupportedError" ? "source unsupported" : "request failed";
         this.clearPlaybackStartTimer();
         this.emit("error");
@@ -811,11 +849,77 @@ export class HtmlVideoPlayer implements MediaPlayer {
     }
   }
 
+  private handleMediaError(): void {
+    this.clearBufferingTimer();
+    if ((this.video.error?.code === 2 || (this.video.error?.code === 3 && this.hls))
+      && this.scheduleNetworkRecovery()) return;
+    this.clearPlaybackStartTimer();
+    this.emit("error");
+  }
+
+  private handleHlsError(type: string | undefined): void {
+    const hls = this.hls;
+    const recover = type === "networkError" ? () => {
+      // startLoad resumes segment/level loading, but cannot retry a manifest
+      // that failed before any levels were discovered.
+      if (!hls?.levels?.length) hls?.loadSource?.(this.compatibilityPath ?? this.sourceUrl!);
+      else hls.startLoad?.(this.liveSubtitleMode ? -1 : this.video.currentTime);
+    } : type === "mediaError" ? () => { hls?.recoverMediaError?.(); void this.requestPlay(); } : undefined;
+    if (recover && this.scheduleRecovery(recover)) return;
+    this.clearPlaybackStartTimer();
+    this.emit("error");
+  }
+
+  private scheduleNetworkRecovery(): boolean {
+    if (this.hls) return this.scheduleRecovery(() => { this.hls?.recoverMediaError?.(); void this.requestPlay(); });
+    if (this.remuxSession) return this.scheduleRecovery(() => this.remuxSession?.seek(this.recoveryStartSeconds));
+    if (!this.sourceUrl) return false;
+    return this.scheduleRecovery(() => {
+      // Retry the same client-owned URL. Do not probe it through a helper or
+      // replace the existing local compatibility/remux transport.
+      if (!this.liveSubtitleMode) this.pendingSeekSeconds = this.recoveryStartSeconds;
+      this.video.src = this.sourceUrl!;
+      this.video.load();
+      void this.requestPlay();
+    });
+  }
+
+  private scheduleRecovery(recover: () => void): boolean {
+    if (this.playbackFailed || this.userPaused || !this.sourceUrl) return false;
+    if (this.recoveryTimer !== undefined) return true;
+    const delay = NETWORK_RECOVERY_DELAYS_MS[this.recoveryAttempts];
+    if (delay === undefined) return false;
+    this.recoveryAttempts += 1;
+    this.recoveryActive = true;
+    this.recoveryStartSeconds = Number.isFinite(this.video.currentTime) ? Math.max(0, this.video.currentTime) : 0;
+    this.clearPlaybackStartTimer();
+    this.clearBufferingTimer();
+    // Ignore a rejected play promise from the failed source during backoff.
+    this.playAttempt += 1;
+    const generation = this.loadGeneration;
+    this.emit("buffering");
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = undefined;
+      if (generation !== this.loadGeneration || this.userPaused || this.playbackFailed) return;
+      this.playFailure = "none";
+      this.armPlaybackStartTimer(generation);
+      try { recover(); } catch { this.clearPlaybackStartTimer(); this.emit("error"); }
+    }, delay);
+    return true;
+  }
+
+  private cancelRecovery(): void {
+    if (this.recoveryTimer !== undefined) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = undefined;
+    this.recoveryActive = false;
+  }
+
   private emit(state: PlaybackState): void {
     // pause() dispatches asynchronously. A timeout/failure must remain visible
     // when its cleanup pause event arrives after the error notification.
     if (this.playbackFailed && state !== "error") return;
-    if (state === "error") this.playbackFailed = true;
+    if (this.recoveryActive && (state === "playing" || state === "paused" || state === "ended")) return;
+    if (state === "error") { this.cancelRecovery(); this.playbackFailed = true; }
     this.eventHandlers?.onStateChange(state);
   }
 
@@ -827,7 +931,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     // unit-test environment does not need a browser HTMLMediaElement global.
     if (!this.video.paused && this.video.readyState >= 2) {
       this.clearBufferingTimer();
-      if (this.video.currentTime > 0) this.clearPlaybackStartTimer();
+      if (!this.recoveryActive && this.video.currentTime > 0) this.clearPlaybackStartTimer();
       this.emit("playing");
     }
   }
@@ -837,7 +941,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.playbackStartTimer = setTimeout(() => {
       this.playbackStartTimer = undefined;
       if (generation !== this.loadGeneration
-        || (!this.video.paused && this.video.readyState >= 2 && this.video.currentTime > 0)) return;
+        || (!this.recoveryActive && !this.video.paused && this.video.readyState >= 2 && this.video.currentTime > 0)) return;
       this.hls?.destroy();
       this.hls = undefined;
       this.startupTimedOut = true;
@@ -1208,6 +1312,9 @@ interface HlsSubtitleController {
   levels?: Array<{ videoCodec?: string | undefined; audioCodec?: string | undefined; frameRate?: number | undefined; bitrate?: number | undefined }>;
   currentLevel?: number;
   destroy(): void;
+  loadSource?(url: string): void;
+  startLoad?(position?: number): void;
+  recoverMediaError?(): void;
   on?(event: string, callback: (event: string, data: Record<string, unknown>) => void): void;
   off?(event: string, callback: (event: string, data: Record<string, unknown>) => void): void;
   subtitleTracks?: Array<{ lang?: string; name?: string }>;

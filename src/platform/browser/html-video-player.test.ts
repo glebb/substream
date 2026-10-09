@@ -20,9 +20,12 @@ vi.mock("./browser-vod-remux.ts", () => ({
 vi.mock("hls.js", () => ({ default: class MockHls {
   static Events = { ERROR: "error" };
   static isSupported = isHlsSupported;
+  levels: unknown[] = [{}];
   on = vi.fn();
   loadSource = vi.fn();
   attachMedia = vi.fn();
+  startLoad = vi.fn();
+  recoverMediaError = vi.fn();
   destroy = vi.fn();
   constructor() { hlsInstances.push(this); }
 } }));
@@ -52,6 +55,180 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); isHlsSupported.mockReset().mockReturnValue(false); hlsInstances.length = 0; canRemux.mockReset().mockReturnValue(false); remuxInstances.length = 0; });
 
 describe("HtmlVideoPlayer", () => {
+  it("retries a buffered native network failure at the saved position without exposing credentials", async () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    Object.assign(video, { readyState: 4, networkState: 1, duration: 500, paused: false, error: { code: 2 } });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    const url = "https://provider.example.invalid/movie/synthetic-user/synthetic-password/1.mkv";
+    player.load(url);
+    video.currentTime = 120;
+    dispatch("error");
+    dispatch("error"); // duplicate notifications share the pending attempt
+    expect(states.at(-1)).toBe("buffering");
+    expect(states).not.toContain("error");
+    vi.advanceTimersByTime(999);
+    expect(video.load).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(1);
+    expect(video.load).toHaveBeenCalledTimes(2);
+    expect(video.src).toBe(url);
+    Object.assign(video, { currentTime: 0, error: null });
+    dispatch("loadedmetadata");
+    expect(video.currentTime).toBe(120);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    Object.assign(video, { currentTime: 121, duration: 500 });
+    dispatch("timeupdate");
+    expect(states.at(-1)).toBe("playing");
+    expect(player.getPlaybackDiagnostics()).toContain("Recovery: 1/3");
+    expect(player.getPlaybackDiagnostics()).not.toContain("synthetic-password");
+    player.destroy();
+  });
+
+  it("bounds native retries with backoff and leaves a terminal error visible", () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    Object.assign(video, { error: { code: 2 } });
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/movie.mp4");
+    for (const delay of [1_000, 2_000, 4_000]) {
+      dispatch("error");
+      vi.advanceTimersByTime(delay - 1);
+      expect(states).not.toContain("error");
+      vi.advanceTimersByTime(1);
+    }
+    dispatch("error");
+    dispatch("playing");
+    expect(states.at(-1)).toBe("error");
+    expect(video.load).toHaveBeenCalledTimes(4);
+    player.destroy();
+  });
+
+  it("times out a retry even when Chrome retains stale enough-data state", () => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    Object.assign(video, { readyState: 4, paused: false, error: { code: 2 } });
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/movie.mp4");
+    video.currentTime = 30;
+    dispatch("error");
+    vi.advanceTimersByTime(1_000);
+    dispatch("canplay");
+    dispatch("playing");
+    dispatch("timeupdate"); // the clock has not advanced
+    vi.advanceTimersByTime(45_000);
+    expect(states.at(-1)).toBe("error");
+    expect(player.getPlaybackDiagnostics()).toContain("Startup timed out");
+    player.destroy();
+  });
+
+  it.each(["pause", "destroy", "replace"])("cancels a pending retry on %s", (action) => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    Object.assign(video, { error: { code: 2 } });
+    const player = new HtmlVideoPlayer(video);
+    player.load("https://media.example.invalid/first.mp4");
+    dispatch("error");
+    if (action === "replace") player.load("https://media.example.invalid/second.mp4");
+    else if (action === "pause") player.pause();
+    else player.destroy();
+    const loads = vi.mocked(video.load).mock.calls.length;
+    vi.advanceTimersByTime(1_000);
+    expect(video.load).toHaveBeenCalledTimes(loads);
+    if (action !== "destroy") player.destroy();
+  });
+
+  it.each([3, 4])("does not retry permanent native media error %s", (code) => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    Object.assign(video, { error: { code } });
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/movie.mp4");
+    dispatch("error");
+    vi.advanceTimersByTime(4_000);
+    expect(states.at(-1)).toBe("error");
+    expect(video.load).toHaveBeenCalledOnce();
+    player.destroy();
+  });
+
+  it.each(["networkError", "mediaError"])("recovers fatal HLS %s without replacing the source", async (type) => {
+    vi.useFakeTimers();
+    isHlsSupported.mockReturnValue(true);
+    const { video, dispatch } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/movie.m3u8");
+    await vi.waitFor(() => expect(hlsInstances).toHaveLength(1));
+    const hls = hlsInstances[0] as { on: ReturnType<typeof vi.fn>; startLoad: ReturnType<typeof vi.fn>; recoverMediaError: ReturnType<typeof vi.fn>; loadSource: ReturnType<typeof vi.fn> };
+    const error = hls.on.mock.calls.find(([event]) => event === "error")![1];
+    video.currentTime = 35;
+    if (type === "mediaError") {
+      Object.assign(video, { error: { code: 3 } });
+      dispatch("error"); // Chrome may report the media error before hls.js
+    }
+    error("error", { fatal: true, type });
+    expect(states.at(-1)).toBe("buffering");
+    vi.advanceTimersByTime(1_000);
+    if (type === "networkError") expect(hls.startLoad).toHaveBeenCalledWith(35);
+    else {
+      expect(hls.recoverMediaError).toHaveBeenCalledOnce();
+      expect(states).not.toContain("error");
+    }
+    expect(hls.loadSource).toHaveBeenCalledOnce();
+    player.load("https://media.example.invalid/second.mp4");
+    error("error", { fatal: true, type });
+    expect(states.at(-1)).toBe("loading");
+    player.destroy();
+  });
+
+  it("retries a failed initial HLS manifest using the same source", async () => {
+    vi.useFakeTimers();
+    isHlsSupported.mockReturnValue(true);
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    const url = "https://media.example.invalid/movie.m3u8";
+    player.load(url);
+    await vi.waitFor(() => expect(hlsInstances).toHaveLength(1));
+    const hls = hlsInstances[0] as { levels: unknown[]; on: ReturnType<typeof vi.fn>; loadSource: ReturnType<typeof vi.fn>; startLoad: ReturnType<typeof vi.fn> };
+    hls.levels = [];
+    hls.on.mock.calls.find(([event]) => event === "error")![1]("error", { fatal: true, type: "networkError" });
+    vi.advanceTimersByTime(1_000);
+    expect(hls.loadSource).toHaveBeenNthCalledWith(2, url);
+    expect(hls.startLoad).not.toHaveBeenCalled();
+    player.destroy();
+  });
+
+  it("retries transient remux requests locally but fails unsupported audio immediately", () => {
+    vi.useFakeTimers();
+    canRemux.mockReturnValue(true);
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/movie.mkv");
+    video.currentTime = 40;
+    const session = remuxInstances[0]!;
+    session.handlers.onError("cors-range");
+    expect(states.at(-1)).toBe("buffering");
+    vi.advanceTimersByTime(1_000);
+    expect(session.seek).toHaveBeenCalledWith(40);
+    session.handlers.onError("unsupported-audio");
+    expect(states.at(-1)).toBe("error");
+    player.destroy();
+  });
+
   it("reports the active HLS rendition and discovered track counts without copying URLs", () => {
     const { video } = fakeVideo();
     const player = new HtmlVideoPlayer(video);
