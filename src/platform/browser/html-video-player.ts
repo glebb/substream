@@ -158,6 +158,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private bufferingStartTime: number | undefined;
   private readonly eventListeners: Array<[string, EventListener]>;
 
+  /** Platform adapters can use a native Matroska pipeline instead of MP4 MSE. */
+  protected shouldRemuxMatroska(): boolean { return true; }
+
   constructor(private readonly video: HTMLVideoElement, private readonly workerFactory?: () => WorkerPort) {
     this.eventListeners = [
       ["loadstart", () => this.emit("loading")],
@@ -259,7 +262,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     const supportsEac3 = browserSupportsAudioCodec(this.video, 'audio/mp4; codecs="ec-3"');
     const supportsAc3 = browserSupportsAudioCodec(this.video, 'audio/mp4; codecs="ac-3"');
     const supportsH264 = browserSupportsAudioCodec(this.video, 'video/mp4; codecs="avc1.640028"');
-    if (import.meta.env.DEV && /\.mkv(?:[?#]|$)/i.test(streamUrl) && supportsH264 && (!supportsEac3 || !supportsAc3)) {
+    if (this.shouldRemuxMatroska() && import.meta.env.DEV && /\.mkv(?:[?#]|$)/i.test(streamUrl) && supportsH264 && (!supportsEac3 || !supportsAc3)) {
       this.compatibilitySourceUrl = streamUrl;
       this.video.pause();
       this.video.removeAttribute("src");
@@ -268,7 +271,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
       return;
     }
     this.armPlaybackStartTimer(generation);
-    if (this.vodSubtitleMode && /\.mkv(?:[?#]|$)/i.test(streamUrl)) {
+    if (this.shouldRemuxMatroska() && this.vodSubtitleMode && /\.mkv(?:[?#]|$)/i.test(streamUrl)) {
       if (!canRemuxBrowserVod()) {
         this.remuxStatus = "browser streaming unavailable";
         this.video.pause();

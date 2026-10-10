@@ -4,6 +4,11 @@ import type { MediaPlayerEventHandlers, PlaybackState } from "../media-player.ts
 
 /** HTML player with webOS app-background cleanup and guarded single-source restore. */
 export class WebOsHtmlVideoPlayer extends HtmlVideoPlayer {
+  // LG's native pipeline accepts MKV/Dolby combinations that MP4 MSE rejects.
+  // Do not gate this on canPlayType("video/x-matroska"): LG can return empty
+  // there while its native player successfully decodes the same file.
+  protected override shouldRemuxMatroska(): boolean { return false; }
+
   private lifecycleSnapshot: HtmlVideoBackgroundSnapshot | null = null;
   private removeLifecycleListeners: (() => void) | undefined;
   private lifecycleDocument: WebOsLifecycleDocument | undefined;

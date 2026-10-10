@@ -6,6 +6,13 @@ HTML video player. The LG build targets Chromium 120 (webOS TV 25), uses
 relative asset paths, and packages its app files locally. Browser and Samsung
 Tizen builds retain their own targets and packaging flows.
 
+LG VOD uses direct native MKV playback. Its native pipeline can decode
+Matroska/Dolby combinations that its MP4 MediaSource pipeline rejects, even
+when `canPlayType("video/x-matroska")` returns an empty string. The webOS
+adapter bypasses the browser MKV remuxer and development compatibility path;
+provider requests still go directly from the TV to the provider. Desktop
+browser remuxing and Samsung AVPlay retain their existing behavior.
+
 The physical target used for the initial port is an LG 55UT91006LA reporting
 webOS TV 25. LG lists this model in its 2024/webOS 24 range, so check the
 installed version on the TV before changing the engine target. LG's engine
@@ -190,6 +197,14 @@ command and played a second synthetic file without error; a second reset left a
 fresh code visible. The personal playlist also loaded 18 live categories
 directly, and a 1080p live stream produced picture and sound. The Samsung live
 subtitle relay remains disabled.
+
+Also confirmed on 2026-10-10: a provider MKV episode that failed in the
+browser MP4 remux path played through the LG native pipeline. After installing
+the adapter fix, opening the episode from recent titles and choosing Resume
+restored its saved position, reached `readyState` 4 at 1920×1080, and advanced
+past 118 seconds with no media error and no blob/remux source. This validates
+that episode's native playback and saved-position restoration, not all codecs
+or track-selection combinations.
 
 Still pending physical-TV checks include provider command resolution, local
 subtitle transfer and seek, VOD seek/resume, audio and subtitle track

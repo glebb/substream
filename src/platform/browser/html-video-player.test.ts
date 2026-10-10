@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HtmlVideoPlayer } from "./html-video-player.ts";
+import { WebOsHtmlVideoPlayer } from "../webos/html-video-player.ts";
 import { VodSubtitleController } from "../../application/vod-subtitle-controller.ts";
 
 const { isHlsSupported, hlsInstances } = vi.hoisted(() => ({ isHlsSupported: vi.fn(() => false), hlsInstances: [] as unknown[] }));
@@ -55,6 +56,30 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); isHlsSupported.mockReset().mockReturnValue(false); hlsInstances.length = 0; canRemux.mockReset().mockReturnValue(false); remuxInstances.length = 0; });
 
 describe("HtmlVideoPlayer", () => {
+  it("plays LG MKV VOD directly despite missing capability probes and supports seek/subtitle discovery", async () => {
+    const { video, dispatch } = fakeVideo();
+    // LG can decode native MKV even though its MIME probe is empty and its
+    // MP4 MSE path rejects Dolby. H.264 support also exercises the DEV guard.
+    vi.mocked(video.canPlayType).mockImplementation((mime) => mime.includes("avc1") ? "probably" : "");
+    canRemux.mockReturnValue(true);
+    const player = new WebOsHtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const url = "https://provider.example.invalid/series/fixture-user/fixture-password/42.mkv";
+    player.load(url);
+    await Promise.resolve();
+    expect(video.src).toBe(url);
+    expect(video.play).toHaveBeenCalledOnce();
+    expect(canRemux).not.toHaveBeenCalled();
+    expect(remuxInstances).toHaveLength(0);
+    expect(player.getPlaybackDiagnostics()).not.toContain("Remux:");
+    player.seekTo(42);
+    Object.assign(video, { readyState: 4 });
+    dispatch("loadedmetadata");
+    expect(video.currentTime).toBe(42);
+    expect(player.isVodSubtitleDiscoveryComplete()).toBe(true);
+    player.destroy();
+  });
+
   it("releases the active source while keeping only a safe resume snapshot", () => {
     class LifecycleTestPlayer extends HtmlVideoPlayer {
       suspend() { return this.suspendForBackground(); }
