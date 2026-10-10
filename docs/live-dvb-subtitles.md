@@ -1,5 +1,7 @@
 # Embedded live subtitles
 
+LG webOS reuses the HTML-video implementation and can reach its hls.js/worker subtitle paths when their runtime checks permit them. Live picture and sound acceptance does not validate LG DVB captions, language selection or timing. The Samsung standalone TS/AVPlay feed and subtitle-relay path are not enabled on LG. See [LG capability limits](../webos/README.md) and [verification](verification.md#lg-webos-physical-tv-check).
+
 Embedded subtitles are optional to live playback. The app supports browser-side DVB bitmap decoding from HLS fragments and uses native AVPlay text tracks on Tizen when the device exposes them. A separate live subtitle relay is available for configured channels, including stream-based routing for Finnish channels in configured Tizen builds. Setup and relay behavior are described in the [live subtitle relay guide](live-subtitle-relay.md); validation steps are in the [verification guide](verification.md).
 
 ## Current behavior

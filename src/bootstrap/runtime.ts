@@ -46,8 +46,8 @@ export function createAppRuntime(overrides: AppRuntimeOverrides = {}): AppRuntim
       nativeVideoSurface,
       tvInput: webos || (tizen && Boolean((globalThis as typeof globalThis & { tizen?: { tvinputdevice?: unknown } }).tizen?.tvinputdevice)),
       supportsLocalMediaPicker: !tizen && !webos,
-      directGuideRequests: tizen,
-      supportsCompanion: !webos,
+      directGuideRequests: tizen || webos,
+      supportsCompanion: true,
       supportsLiveRelay: !webos && nativeVideoSurface,
     },
     input: {

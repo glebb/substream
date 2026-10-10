@@ -54,6 +54,7 @@ export class CompanionController {
   private abort: AbortController | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private wake: (() => void) | undefined;
+  private resettingPairing = false;
   private listeners = new Set<() => void>();
   private commandListeners = new Set<(command: CompanionCommand) => void>();
 
@@ -78,10 +79,7 @@ export class CompanionController {
     this.connection = null;
     this.sequence = 0;
     this.update({ state: enabled ? "connecting" : "disabled", server: options.server, paired: false, pairingCode: "", status: "", error: "" });
-    if (enabled) {
-      this.abort = this.dependencies.createAbortController();
-      void this.run(this.generation);
-    }
+    if (enabled) this.startPolling();
   }
 
   /** Explicit reconnect also works when the saved integration was disabled. */
@@ -92,16 +90,31 @@ export class CompanionController {
   }
 
   async resetPairing(): Promise<void> {
-    const generation = this.generation;
+    if (this.resettingPairing) return;
     const connection = this.connection;
     if (!connection || !this.enabled) return;
+    const server = this.snapshot.server;
+    this.resettingPairing = true;
+    // The service resets its event sequence to zero. Stop the old poll before
+    // asking it to reset so no pre-reset response can be delivered or acked.
+    this.stop();
+    const generation = this.generation;
     try {
-      const result = await this.dependencies.reset(this.snapshot.server, connection.tvCredential);
-      if (!this.active(generation) || connection !== this.connection) return;
+      const result = await this.dependencies.reset(server, connection.tvCredential);
+      if (!this.active(generation) || connection !== this.connection || server !== this.snapshot.server) return;
       this.connection = { ...connection, ...result, paired: false };
-      this.update({ paired: false, pairingCode: result.pairingCode, status: "Pair this TV again in the web app using the new code.", error: "" });
+      this.sequence = 0;
+      this.update({ state: "available", paired: false, pairingCode: result.pairingCode, status: "Pair this TV again in the web app using the new code.", error: "" });
+      this.startPolling();
     } catch {
-      if (this.active(generation)) this.update({ error: "Could not reset TV pairing." });
+      if (this.active(generation) && connection === this.connection && server === this.snapshot.server) {
+        this.update({ error: "Could not reset TV pairing." });
+        // A failed reset leaves the service's sequence intact. Resume from the
+        // last acknowledged event without dropping the existing TV credential.
+        this.startPolling();
+      }
+    } finally {
+      this.resettingPairing = false;
     }
   }
 
@@ -122,6 +135,10 @@ export class CompanionController {
     this.wake = undefined;
   }
   private active(generation: number): boolean { return this.enabled && generation === this.generation; }
+  private startPolling(): void {
+    this.abort = this.dependencies.createAbortController();
+    void this.run(this.generation);
+  }
   private update(change: Partial<CompanionSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...change };
     this.listeners.forEach((listener) => listener());

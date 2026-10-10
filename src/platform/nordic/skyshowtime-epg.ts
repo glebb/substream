@@ -1,11 +1,12 @@
 import { AsyncGunzip, Gunzip } from "fflate";
+import { createAbortController } from "../abort-controller.ts";
 
 import type { LiveChannel } from "../../core/live/types.ts";
 import type { EpgProgramme } from "../../core/live/types.ts";
 import { parseSkyShowtimeXmltv, parseSkyShowtimeXmltvAsync } from "./skyshowtime-epg-parser.ts";
 
 type Response = { ok: boolean; status: number; arrayBuffer(): Promise<ArrayBuffer> };
-type Request = (url: string) => Promise<Response>;
+type Request = (url: string, init?: { signal?: AbortSignal; credentials: "omit"; referrerPolicy: "no-referrer" }) => Promise<Response>;
 
 /**
  * The Swedish EPGShare feed carries the Nordic linear SkyShowtime schedules.
@@ -15,14 +16,14 @@ type Request = (url: string) => Promise<Response>;
 export const NORDIC_SKYSHOWTIME_EPG_URL = "https://epgshare01.online/epgshare01/epg_ripper_SE1.xml.gz";
 
 /**
- * Tizen must fetch the public feed directly so guide availability does not
- * depend on the optional web-to-TV companion. Browsers can use that relay as a
- * CORS bridge when it is explicitly configured.
+ * Packaged TVs fetch the public feed directly. Hosted browsers use the fixed
+ * public-guide endpoint. Development may use a configured companion bridge.
+ * Only public guide data travels through either bridge.
  */
 export function nordicGuideSourceUrl(options: { canFetchDirectly?: boolean; isTizen?: boolean; relayUrl?: string; development: boolean }): string {
   if (options.canFetchDirectly ?? options.isTizen) return NORDIC_SKYSHOWTIME_EPG_URL;
-  if (options.relayUrl) return `${options.relayUrl}/api/nordic-epg`;
-  return options.development ? "/api/nordic-epg" : NORDIC_SKYSHOWTIME_EPG_URL;
+  if (options.development && options.relayUrl) return `${options.relayUrl}/api/nordic-epg`;
+  return options.development ? "/api/nordic-epg" : "/public/nordic-epg";
 }
 
 const SKYSHOWTIME_XMLTV_IDS: Record<string, string> = {
@@ -54,9 +55,10 @@ export function skyShowtimeNordicXmltvId(channel: Pick<LiveChannel, "country" | 
 /** Browser/Tizen adapter for the public compressed XMLTV feed. */
 export class NordicSkyShowtimeEpgClient {
   private programmesPromise: Promise<EpgProgramme[]> | null = null;
+  private expiresAt = 0;
 
   constructor(
-    private readonly request: Request = (url) => fetch(url),
+    private readonly request: Request = (url, init) => fetch(url, init),
     private readonly sourceUrl = NORDIC_SKYSHOWTIME_EPG_URL,
   ) {}
 
@@ -70,15 +72,40 @@ export class NordicSkyShowtimeEpgClient {
   }
 
   private load(): Promise<EpgProgramme[]> {
-    if (!this.programmesPromise) this.programmesPromise = this.fetchProgrammes();
+    if (!this.programmesPromise || Date.now() >= this.expiresAt) {
+      this.expiresAt = Infinity;
+      const pending = this.fetchProgrammes().then((programmes) => {
+        if (this.programmesPromise === pending) this.expiresAt = Date.now() + 12 * 60 * 1000;
+        return programmes;
+      }).catch((error: unknown) => {
+        if (this.programmesPromise === pending) this.programmesPromise = null;
+        throw error;
+      });
+      this.programmesPromise = pending;
+    }
     return this.programmesPromise;
   }
 
   private async fetchProgrammes(): Promise<EpgProgramme[]> {
     try {
-      const response = await this.request(this.sourceUrl);
-      if (!response.ok) throw new NordicEpgRequestError(response.status);
-      const compressed = new Uint8Array(await response.arrayBuffer());
+      const controller = createAbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let compressed: Uint8Array;
+      try {
+        compressed = await Promise.race([
+          (async () => {
+            const response = await this.request(this.sourceUrl, {
+              credentials: "omit", referrerPolicy: "no-referrer",
+              ...(controller ? { signal: controller.signal } : {}),
+            });
+            if (!response.ok) throw new NordicEpgRequestError(response.status);
+            return new Uint8Array(await response.arrayBuffer());
+          })(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => { controller?.abort(); reject(new NordicEpgRequestError()); }, 20_000);
+          }),
+        ]);
+      } finally { if (timer !== undefined) clearTimeout(timer); }
       if (compressed.byteLength > MAX_COMPRESSED_BYTES) throw new NordicEpgRequestError();
       const decoded = await gunzipAsync(compressed);
       if (decoded.byteLength > MAX_DECOMPRESSED_BYTES) throw new NordicEpgRequestError();

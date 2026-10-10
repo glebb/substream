@@ -12,7 +12,7 @@ const fixture = `<?xml version="1.0"?><tv>
 describe("NordicSkyShowtimeEpgClient", () => {
   it("never routes a Tizen guide request through the optional companion", () => {
     expect(nordicGuideSourceUrl({ isTizen: true, relayUrl: "http://192.0.2.44:8787", development: false })).toBe(NORDIC_SKYSHOWTIME_EPG_URL);
-    expect(nordicGuideSourceUrl({ isTizen: false, relayUrl: "http://192.0.2.44:8787", development: false })).toBe("http://192.0.2.44:8787/api/nordic-epg");
+    expect(nordicGuideSourceUrl({ isTizen: false, relayUrl: "http://192.0.2.44:8787", development: false })).toBe("/public/nordic-epg");
   });
 
   it("loads the packaged Tizen guide directly with no companion configured", async () => {
@@ -60,4 +60,53 @@ describe("NordicSkyShowtimeEpgClient", () => {
     const client = new NordicSkyShowtimeEpgClient(async () => { throw new Error("https://private.example/secret"); });
     await expect(client.schedule("[SKYS1SV].SkyShowtime.1.se", "provider-1")).rejects.toEqual(new NordicEpgRequestError());
   });
+});
+
+it("routes hosted browsers through a fixed public endpoint without a companion", () => {
+  expect(nordicGuideSourceUrl({ canFetchDirectly: false, development: false })).toBe("/public/nordic-epg");
+  expect(nordicGuideSourceUrl({ canFetchDirectly: true, development: false })).toBe(NORDIC_SKYSHOWTIME_EPG_URL);
+});
+
+it("retries after a failed request and omits cookies and referrers", async () => {
+  let calls = 0;
+  const bytes = gzipSync(new TextEncoder().encode(fixture));
+  const client = new NordicSkyShowtimeEpgClient(async (_url, init) => {
+    expect(init).toMatchObject({ credentials: "omit", referrerPolicy: "no-referrer" });
+    if (++calls === 1) throw new Error("synthetic failure");
+    return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+  });
+  await expect(client.schedule("[SKYS1SV].SkyShowtime.1.se", "synthetic-1")).rejects.toBeInstanceOf(NordicEpgRequestError);
+  expect(await client.schedule("[SKYS1SV].SkyShowtime.1.se", "synthetic-1")).toHaveLength(1);
+  expect(calls).toBe(2);
+});
+
+it("refreshes the shared feed after its cache lifetime", async () => {
+  const { vi } = await import("vitest");
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    let calls = 0;
+    const bytes = gzipSync(new TextEncoder().encode(fixture));
+    const client = new NordicSkyShowtimeEpgClient(async () => {
+      calls += 1;
+      return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    });
+    await client.schedule("[SKYS1SV].SkyShowtime.1.se", "synthetic-1");
+    await client.schedule("[SKYS2SV].SkyShowtime.2.se", "synthetic-2");
+    expect(calls).toBe(1);
+    vi.setSystemTime(Date.now() + 12 * 60 * 1000);
+    await client.schedule("[SKYS1SV].SkyShowtime.1.se", "synthetic-1");
+    expect(calls).toBe(2);
+  } finally { vi.useRealTimers(); }
+});
+
+it("times out an unresponsive public feed and permits a retry", async () => {
+  const { vi } = await import("vitest");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const client = new NordicSkyShowtimeEpgClient(async () => new Promise(() => {}));
+    const pending = client.schedule("[SKYS1SV].SkyShowtime.1.se", "synthetic-1");
+    const assertion = expect(pending).rejects.toBeInstanceOf(NordicEpgRequestError);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await assertion;
+  } finally { vi.useRealTimers(); }
 });

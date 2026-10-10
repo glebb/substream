@@ -1,3 +1,4 @@
+import { loadLiveGuideSource } from "../application/live-guide-source.ts";
 import { StreamInfoOverlay } from "./StreamInfoOverlay.tsx";
 import { requestPlayerFullscreen, exitBrowserFullscreen, releasePlayerOrientation } from "../platform/browser/fullscreen.ts";
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
@@ -117,7 +118,7 @@ export function LiveTv({ onMainMenu }: Props) {
       relayUrl: companion.enabled ? companion.controller.getSnapshot().server : "",
       development: import.meta.env.DEV,
     });
-    return new NordicSkyShowtimeEpgClient((url) => runtime.transport.fetch(url), sourceUrl);
+    return new NordicSkyShowtimeEpgClient((url, init) => runtime.transport.fetch(url, init), sourceUrl);
   }, [runtime, companion.enabled, companion.controller.getSnapshot().server]);
   const cacheKey = client ? CACHE_PREFIX + client.pairingFingerprint() : "";
   const cached = useMemo(() => cacheKey ? safeCache(cacheKey) : null, [cacheKey]);
@@ -425,7 +426,7 @@ export function LiveTv({ onMainMenu }: Props) {
         for (let index = start; index < end; index += 1) {
           const channel = channels[index]!;
           const cachedGuide = safeGuideCache(cachePrefix + channel.providerStreamId);
-          if (cachedGuide) { initial[channel.id] = cachedGuide; batch[channel.id] = cachedGuide; }
+          if (cachedGuide && (!skyShowtimeNordicXmltvId(channel) || cachedGuide.source === "nordic-skyshowtime")) { initial[channel.id] = cachedGuide; batch[channel.id] = cachedGuide; }
         }
         if (Object.keys(batch).length) setGuideByChannel((previous) => ({ ...previous, ...batch }));
         if (end < channels.length) await new Promise<void>((resolve) => {
@@ -470,15 +471,13 @@ export function LiveTv({ onMainMenu }: Props) {
             let programmes: EpgProgramme[] = [];
             let dnaAttemptAt: number | undefined;
             const nordicXmltvId = skyShowtimeNordicXmltvId(channel);
-            if (nordicXmltvId) {
-              try { programmes = await nordicEpgClient.schedule(nordicXmltvId, channel.providerStreamId); }
-              catch { try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT, controller?.signal); } catch { /* guide remains unavailable */ } }
-            } else {
-              try { programmes = await client.shortEpg(channel.providerStreamId, EPG_LIMIT, controller?.signal); } catch { /* continue to DNA fallback */ }
-            }
+            programmes = await loadLiveGuideSource(nordicXmltvId, {
+              replacement: (id) => nordicEpgClient.schedule(id, channel.providerStreamId),
+              provider: () => client.shortEpg(channel.providerStreamId, EPG_LIMIT, controller?.signal),
+            });
             if (workScope.cancelled || controller?.signal.aborted) return;
             const slotsAfterNordicFallback = selectCurrentAndNextProgramme(programmes, Date.now());
-            if (channel.dnaChannelId && (!slotsAfterNordicFallback.current || !slotsAfterNordicFallback.next)) {
+            if (!nordicXmltvId && channel.dnaChannelId && (!slotsAfterNordicFallback.current || !slotsAfterNordicFallback.next)) {
               dnaAttemptAt = Date.now();
               try {
                 const now = Date.now();
@@ -498,7 +497,7 @@ export function LiveTv({ onMainMenu }: Props) {
               } catch { /* provider guide remains usable when DNA is unavailable */ }
             }
             if (workScope.cancelled) return;
-            const guide: CachedGuide = { savedAt: Date.now(), programmes, ...(dnaAttemptAt ? { dnaAttemptAt } : {}) };
+            const guide: CachedGuide = { savedAt: Date.now(), programmes, ...(nordicXmltvId ? { source: "nordic-skyshowtime" as const } : {}), ...(dnaAttemptAt ? { dnaAttemptAt } : {}) };
             pendingUpdates[channel.id] = guide;
             pendingFailures[channel.id] = false;
             scheduleUpdateFlush();
@@ -525,6 +524,7 @@ export function LiveTv({ onMainMenu }: Props) {
 
   useEffect(() => {
     const timer = window.setInterval(() => setGuideNow(Date.now()), 30_000);
+    const refreshTimer = window.setInterval(() => setGuideRefresh((value) => value + 1), 60_000);
     const onResume = () => {
       if (document.visibilityState === "visible") {
         setGuideNow(Date.now());
@@ -532,7 +532,7 @@ export function LiveTv({ onMainMenu }: Props) {
       }
     };
     document.addEventListener("visibilitychange", onResume);
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onResume); };
+    return () => { window.clearInterval(timer); window.clearInterval(refreshTimer); document.removeEventListener("visibilitychange", onResume); };
   }, []);
 
   useEffect(() => {

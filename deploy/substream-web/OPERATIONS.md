@@ -27,6 +27,15 @@ retain their required Origin. Google redirects and HTTP player files use
 `no-referrer`. The HTTP player has documented transport integrity limits;
 do not enable HSTS or HTTPS-upgrade directives for that host.
 
+The fixed `/public/nordic-epg` endpoint is available on HTTP and HTTPS without
+a player grant. It fetches only the public Swedish XMLTV feed and strips
+caller headers and bodies; query strings and non-read methods are rejected.
+Keep this route separate from token-protected app files and do not turn it
+into a configurable provider proxy. A browser release using this endpoint
+also requires the updated vhost: static release archives do not install Nginx
+configuration. Validate the customized template with `nginx -t` and reload
+Nginx after installing a configuration change.
+
 ## Deployment and rollback
 
 Follow the [access service guide](../substream-access/README.md) and
@@ -47,6 +56,9 @@ Run `npm run check`, the isolated Linux Nginx harness, and the synthetic native
 form check in `scripts/substream-access-browser-check.py`. Verify native create,
 HTTP navigation without Referer, revoke and logout. Check denial for expired,
 revoked, unknown and wrong-IP grants, as well as authorizer unavailability.
+Check the public-guide route on HTTP and HTTPS, caller-header stripping,
+query/method rejection and suppression of upstream cookies. A guide outage
+must leave player authorization and ordinary provider playback independent.
 Keep real session cookies and access URLs out of output and committed notes.
 
 Service availability and synthetic checks do not establish real Google login,

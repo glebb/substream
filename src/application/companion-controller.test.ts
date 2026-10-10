@@ -130,6 +130,75 @@ describe("application companion lifecycle", () => {
     controller.dispose();
   });
 
+  it("resets the event cursor and rejects a stale poll response during pairing reset", async () => {
+    const stalePoll = deferred<CompanionEventsResult>();
+    const resetResponse = deferred<{ pairingCode: string; pairingExpiresAt: number }>();
+    const eventSignals: Array<AbortSignal | undefined> = [];
+    let pollCount = 0;
+    const { controller, commands, dependencies, start } = setup({
+      createAbortController: () => new AbortController(),
+      events: vi.fn((_server, _credential, _after, signal) => {
+        eventSignals.push(signal);
+        pollCount += 1;
+        return pollCount === 1 ? stalePoll.promise : Promise.resolve(playback);
+      }),
+      reset: vi.fn(() => resetResponse.promise),
+    });
+
+    start(); await flush();
+    expect(pollCount).toBe(1);
+    const resetting = controller.resetPairing();
+    await flush();
+    expect(eventSignals[0]?.aborted).toBe(true);
+
+    stalePoll.resolve(playback);
+    await flush();
+    expect(commands).not.toHaveBeenCalled();
+    expect(dependencies.acknowledge).not.toHaveBeenCalled();
+
+    resetResponse.resolve({ pairingCode: "87654321", pairingExpiresAt: 700_000 });
+    await resetting; await flush();
+    expect(dependencies.events).toHaveBeenNthCalledWith(2, "https://example.invalid", connection.tvCredential, 0, expect.any(AbortSignal));
+    expect(commands).toHaveBeenCalledWith({ kind: "play", title });
+    expect(dependencies.acknowledge).toHaveBeenCalledWith("https://example.invalid", connection.tvCredential, 1);
+    controller.dispose();
+  });
+
+  it("resumes from the acknowledged sequence after reset failure", async () => {
+    const resetResponse = deferred<{ pairingCode: string; pairingExpiresAt: number }>();
+    const afterSequences: number[] = [];
+    const { controller, commands, dependencies, start } = setup({
+      events: vi.fn(async (_server, _credential, after) => {
+        afterSequences.push(after);
+        return after === 0 ? playback : empty;
+      }),
+      reset: vi.fn(() => resetResponse.promise),
+    });
+
+    start(); await flush();
+    expect(commands).toHaveBeenCalledTimes(1);
+    expect(dependencies.acknowledge).toHaveBeenCalledWith("https://example.invalid", connection.tvCredential, 1);
+    const resetting = controller.resetPairing();
+    resetResponse.reject(new Error("synthetic reset failure"));
+    await resetting; await flush();
+    expect(afterSequences).toEqual([0, 1]);
+    expect(commands).toHaveBeenCalledTimes(1);
+    controller.dispose();
+  });
+
+  it("does not restart polling when disabled while pairing reset is pending", async () => {
+    const resetResponse = deferred<{ pairingCode: string; pairingExpiresAt: number }>();
+    const { controller, dependencies, start } = setup({ reset: vi.fn(() => resetResponse.promise) });
+    start(); await flush();
+    const resetting = controller.resetPairing();
+    controller.configure({ enabled: false, server: "https://example.invalid", sourceFingerprint: "vod_test" });
+    resetResponse.resolve({ pairingCode: "87654321", pairingExpiresAt: 700_000 });
+    await resetting; await flush();
+    expect(controller.getSnapshot().state).toBe("disabled");
+    expect(dependencies.events).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("rejects a different provider selection without interfering with later polling", async () => {
     const { controller, commands, dependencies, start, pendingEvents } = setup({ resolveSelection: () => null });
     start(); await flush(); pendingEvents.resolve(playback); await flush();

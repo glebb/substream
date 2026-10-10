@@ -23,14 +23,15 @@ redirect to HTTPS. HTTPS proxies only `GET /`, `GET /auth/google/login`,
 portal service. GET/HEAD requests to well-shaped HTTPS player landing links
 (`/<43-character-token>/`) redirect to the HTTP player gate, without query
 parameters, referrers or caching. This recovers browser HTTPS upgrades; the
-HTTP gate still validates the grant. Other HTTPS paths return 404. Strict
+HTTP gate still validates the grant. The fixed public-guide route described
+below is also available on HTTPS; other HTTPS paths return 404. Strict
 HTTPS-only browser settings or inherited HSTS may still require a browser
 exception or a separate HTTP player hostname. Nginx replaces `X-Real-IP` and
 `X-Forwarded-For` with its observed `$remote_addr`; the portal must set secure,
 host-only cookies itself. No HSTS or `upgrade-insecure-requests` is configured,
 so the same hostname's HTTP player remains available.
 
-On HTTP, Nginx accepts only `/<token>/` and descendants where `token` matches
+On HTTP, Nginx accepts player files only at `/<token>/` and descendants where `token` matches
 `[A-Za-z0-9_-]{43}`. It performs an uncached `auth_request` for the index and
 each asset. The internal subrequest is a GET to `http://127.0.0.1:8791/authorize`
 with `X-Substream-Original-URI` set to the original request URI and
@@ -39,19 +40,27 @@ cookies, Authorization and request body. The endpoint allows only a valid,
 unexpired, unrevoked grant for that exact IP whose owner remains eligible; it
 returns 204 to allow and 403 to deny. All other outcomes fail closed. The
 endpoint must bind only to loopback and must treat these Nginx-generated
-headers as trusted only on that private listener.
+headers as trusted only on that private listener. The separate
+`/public/nordic-epg` route serves public guide data without a player grant.
 
 Token URLs remain reusable during their grant lifetime so reloads and assets
 work. Each allowed Google account has one active eight-hour grant;
 regeneration replaces it and explicit revoke disables it. The URL grants access
 to anyone who has it and shares the authorized public IP. A network change
 requires a new grant. The static host makes no provider, media, relay or
-companion requests; those connections originate in the browser.
+companion requests; those connections originate in the browser. The fixed
+`/public/nordic-epg` GET/HEAD endpoint on HTTP and HTTPS serves only the public
+EPGShare Swedish XMLTV feed. It rejects query strings and non-read methods,
+strips caller headers and bodies, verifies upstream TLS, and suppresses upstream
+cookies. It never accepts provider URLs or credentials. Hosted browsers use
+this same-origin endpoint; packaged TVs fetch the publisher directly. Install
+the updated Nginx template as well as the static build when enabling this route.
 
 The Nginx template protects all app files, rejects API-like paths, encoded
 traversal forms and malformed/root asset paths, disables access logging for
-this host, and sends `Cache-Control: no-store` and
-`Referrer-Policy: no-referrer`. HTTPS portal responses use
+this host, and sends player files with `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`. Successful public-guide responses instead use
+`Cache-Control: public, max-age=300` with no referrer. HTTPS portal responses use
 `Referrer-Policy: same-origin` so native form posts include their `Origin`
 while cross-origin navigations to Google and the HTTP player receive no
 referrer. Do not add an unprotected `/assets/` alias or SPA fallback.
@@ -77,7 +86,10 @@ authorizer and portal services, and generated static files. It checks HTTP
 portal redirects, the separate ACME webroot, HTTPS route/method allowlists, overwritten client-IP headers,
 secure host-only cookies, absence of HSTS/HTTPS-upgrade directives, protected
 static delivery, denial paths, traversal and closed access when the authorizer
-is unavailable. It does not read `.env`, contact a provider, or modify the
+is unavailable. A synthetic public-guide upstream checks HTTP/HTTPS route
+availability, the fixed destination, caller-header stripping, query/method
+rejection and suppression of upstream cookies. It does not read `.env`,
+contact the public publisher or a provider, or modify the
 active Nginx service. The harness cleans up temporary files and processes on
 exit. `npm run test:web-deploy` runs it when Linux Nginx, Python and OpenSSL are
 available; it skips that integration test on other systems.

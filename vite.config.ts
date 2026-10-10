@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import legacy from "@vitejs/plugin-legacy";
 import { ensurePersonalRelayEnvironment } from "./scripts/live-relay-personal-config.ts";
+import { createWebosPackageDefaults } from "./scripts/webos-config.mjs";
 
 export default defineConfig(({ mode }) => {
   const isWebosBuild = process.env.WEBOS_BUILD === "1";
@@ -37,14 +38,11 @@ export default defineConfig(({ mode }) => {
   if (isPersonalBuild && (!env.IPTV_M3U_URL || !apiKey || (!tmdbApiReadAccessToken && !tmdbApiKey))) {
     throw new Error("Personal builds require IPTV_M3U_URL, OPENSUBTITLES_API_KEY, and TMDB_API_READ_ACCESS_TOKEN or TMDB_API_KEY in .env");
   }
-  const packageDefaults = isPublicBuild
-    ? {}
-    : {
-      ...(companionServerUrl ? { companionServerUrl } : {}),
-      ...(isPersonalBuild
-        ? { playlistUrl: env.IPTV_M3U_URL, openSubtitlesApiKey: apiKey, tmdbApiReadAccessToken, tmdbApiKey }
-        : {}),
-    };
+  const packageDefaults = createWebosPackageDefaults(env, {
+    personal: isPersonalBuild,
+    publicBuild: isPublicBuild,
+    webos: isWebosBuild,
+  });
   const relayUrl = relayEnv.LIVE_SUBTITLE_RELAY_URL ?? "";
   const relayToken = relayEnv.LIVE_SUBTITLE_RELAY_TOKEN ?? "";
   const relayEnabled = relayEnv.LIVE_SUBTITLE_RELAY_ENABLED === "1";

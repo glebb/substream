@@ -1,5 +1,7 @@
 # Search and optional TV companion
 
+Search also uses the shared catalogue/provider flow on LG webOS. LG supports companion pairing as a Play on TV target and can receive provider playback commands and computer-staged local-media sessions. The TV still has no local-file picker. See [LG capabilities](cross-platform-architecture.md#lg-webos-adapter).
+
 Search belongs to the app and works without a TV, relay, or companion service. It searches the imported M3U catalogue on this device and, for an Xtream-compatible playlist, can refresh and search the provider's movie and series catalogue. Choosing a result opens the same details and playback flow used by browsing.
 
 On TV layouts, Search is a browse tab and all essential controls have a D-pad route. Focus the Search title control and press Enter to edit; Back leaves the editor. From the editor, Down reaches refresh, then the first result. Up returns toward the Search tab. The red Samsung key is an optional shortcut elsewhere in the app and is not needed to use Search.
@@ -18,9 +20,9 @@ The VOD app uses runtime contracts for catalogue, preferences, transport, and pl
 
 Ordinary browsing, Search, and direct playback are independent of the companion. The service is an optional LAN helper for pairing a browser with a TV, sending identifier-based TV playback commands, staging a browser-selected local file for TV playback, and a development-only browser MKV audio fallback. It is not the app's catalogue or a required backend. Search always uses the app's own provider connection.
 
-The TV companion listener is app-scoped, so connection state and incoming commands survive navigation between screens. On a TV, enable or disable it under **Settings → TV connection**. Without the companion, direct provider playback remains available; browser-to-TV commands and computer-hosted local-file playback require the paired TV and service. Local files can still play in the browser without it.
+The TV companion listener is app-scoped, so connection state and incoming commands survive navigation between screens. On a TV, enable or disable it under **Settings → TV connection**. This includes LG webOS. Without the companion, direct provider playback remains available; browser-to-TV commands and computer-hosted local-file playback require the paired TV and service. Local files can still play in the browser without it. LG can receive a staged local-media session, but cannot browse or select a file from TV storage or USB.
 
-The browser, TV, and service must support companion protocol v4 for local-file sessions. Provider commands include identifiers and display metadata; the TV verifies the provider fingerprint and constructs its own stream URL from its saved playlist. Local playback uses an authenticated file session and short-lived media ticket instead. The service does not receive provider stream URLs for normal TV provider playback.
+The browser, TV, and service must support companion protocol v4 for local-file sessions. Provider commands include credential-safe identifiers and display metadata; the TV verifies the provider fingerprint and resolves the item against its own saved playlist, then constructs the stream URL on the TV. The service does not receive provider stream URLs, playlist credentials, or the TV's settings for normal provider playback. Local playback uses a separate authenticated file session and short-lived media ticket; it carries the staged media, not provider stream credentials.
 
 ## Set up pairing for Play on TV
 
@@ -37,6 +39,21 @@ To use HTTPS for a LAN test, create a local certificate with `npm run companion:
 On the TV, open **Settings → TV connection**, enable the companion, and connect to the computer's service address. The TV displays a one-time code. In the browser app, enter the same service address and code under **Settings → TV connection**, choose **Pair browser**, then select a named device under **Playback target**. Pair each TV separately. Browser credentials are held in page memory; TV identity and its scoped renewal credential are stored locally. A companion restart loses in-memory sessions, so reconnect or pair again if the session was not restored.
 
 For Vite development, an empty service address uses the `/api` proxy. `COMPANION_SERVER_URL` can target a different LAN service. Configure the TV build's companion address before packaging if the TV should connect automatically; rebuild and install the TV app after changing bundled defaults. The browser/TV companion described here is a trusted-LAN helper; this project does not document it as a public hosted service. Without TLS, another device on the LAN may observe credentials. Hosted HTTPS operation in the [live subtitle relay guide](live-subtitle-relay.md) applies to that separate relay service, not to companion pairing.
+
+Personal LG builds can override only the companion host with
+`LG_WEBOS_LOCAL_IP` in ignored `.env`, keeping the configured scheme/port or
+defaulting to HTTP port 8787. Saved TV settings override bundled defaults;
+clean LG and public browser builds embed neither value. See [LG setup](../webos/README.md).
+
+Reset pairing creates a fresh code, stops the old event poll and restarts
+polling from sequence zero. Pair the browser again with the new code. A failed
+reset resumes polling with the existing connection and sequence. The LG smoke
+check on 2026-10-10 confirmed pairing, staged MP4 playback/stop and reset/re-pair;
+provider command resolution, local subtitles and seek still need hardware checks.
+
+Public SkyShowtime guide delivery is separate from pairing: hosted browsers
+use `/public/nordic-epg`, and packaged Tizen/LG apps fetch the publisher directly.
+Only local development may use the companion's `/api/nordic-epg` bridge.
 
 ## Browser MKV audio
 

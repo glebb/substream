@@ -73,6 +73,23 @@ class SyntheticAuthorizer(BaseHTTPRequestHandler):
         pass
 
 
+class SyntheticGuide(BaseHTTPRequestHandler):
+    requests: list[dict[str, object]] = []
+
+    def do_GET(self) -> None:
+        type(self).requests.append({"path": self.path, "headers": dict(self.headers),
+                                    "body_length": self.headers.get("Content-Length", "")})
+        body = b"synthetic public guide"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/gzip")
+        self.send_header("Set-Cookie", "upstream=synthetic")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        pass
+
+
 class SyntheticPortal(BaseHTTPRequestHandler):
     requests: list[tuple[str, str, str, str]] = []
 
@@ -149,6 +166,7 @@ def run(args: argparse.Namespace) -> None:
     auth_port = args.auth_port or available_port(bind_ip)
     https_port = args.https_port or available_port(bind_ip)
     portal_port = args.portal_port or available_port(bind_ip)
+    guide_port = available_port(bind_ip)
     if len({http_port, https_port, auth_port, portal_port}) != 4:
         raise ValueError("HTTP, HTTPS, authorization and portal ports must differ")
 
@@ -160,6 +178,8 @@ def run(args: argparse.Namespace) -> None:
     auth_thread: threading.Thread | None = None
     portal_server: ThreadingHTTPServer | None = None
     portal_thread: threading.Thread | None = None
+    guide_server: ThreadingHTTPServer | None = None
+    guide_thread: threading.Thread | None = None
     nginx_started = False
     config_path = temporary_root / "nginx.conf"
     pid_path = temporary_root / "nginx.pid"
@@ -194,6 +214,7 @@ def run(args: argparse.Namespace) -> None:
 
         site = template_path.read_text(encoding="utf-8")
         replacements = (
+            ("https://epgshare01.online/epgshare01/epg_ripper_SE1.xml.gz", f"http://{bind_ip}:{guide_port}/epgshare01/epg_ripper_SE1.xml.gz"),
             ("listen 80;", f"listen {bind_ip}:{http_port};"),
             ("listen 443 ssl;", f"listen {bind_ip}:{https_port} ssl;"),
             ("server_name substream.example.invalid;", "server_name localhost;"),
@@ -251,6 +272,11 @@ def run(args: argparse.Namespace) -> None:
         portal_server.daemon_threads = True
         portal_thread = threading.Thread(target=portal_server.serve_forever, daemon=True)
         portal_thread.start()
+
+        guide_server = ThreadingHTTPServer((bind_ip, guide_port), SyntheticGuide)
+        guide_server.daemon_threads = True
+        guide_thread = threading.Thread(target=guide_server.serve_forever, daemon=True)
+        guide_thread.start()
 
         command = [nginx, "-p", f"{temporary_root}/", "-c", str(config_path)]
         checked = subprocess.run(
@@ -338,6 +364,22 @@ def run(args: argparse.Namespace) -> None:
                 f"HTTP ACME webroot failed with {acme_status} {acme_type} ({acme_size} bytes)"
             )
         print(f"HTTP ACME webroot: {acme_status} {acme_type} ({acme_size} bytes)")
+        for tls in (False, True):
+            status, _, size, headers = request("/public/nordic-epg", use_https=tls,
+                headers={"Cookie": "synthetic-cookie", "Authorization": "Bearer synthetic-token",
+                         "X-Provider-Key": "synthetic-key", "Referer": "https://private.example.invalid/"})
+            if status != 200 or size != len(b"synthetic public guide") or "set-cookie" in headers:
+                raise AssertionError("public guide response failed")
+            upstream = SyntheticGuide.requests[-1]
+            if upstream["path"] != "/epgshare01/epg_ripper_SE1.xml.gz":
+                raise AssertionError("public guide destination changed")
+            upstream_headers = {k.lower(): v for k, v in upstream["headers"].items()}
+            if any(k in upstream_headers for k in ("cookie", "authorization", "x-provider-key", "referer")):
+                raise AssertionError("public guide forwarded caller credentials")
+            check("public guide rejects query", 400, "/public/nordic-epg?url=synthetic", use_https=tls)
+            if request("/public/nordic-epg", use_https=tls, method="POST")[0] != 403:
+                raise AssertionError("public guide must reject request bodies")
+        print("Public guide HTTP/HTTPS routes and credential stripping passed.")
         check("protected index", 200, f"/{TOKEN}/")
         classes = (
             ("JavaScript", "assets/*.js"),
@@ -470,6 +512,11 @@ def run(args: argparse.Namespace) -> None:
             portal_server.server_close()
         if portal_thread is not None:
             portal_thread.join(timeout=3)
+        if guide_server is not None:
+            guide_server.shutdown()
+            guide_server.server_close()
+        if guide_thread is not None:
+            guide_thread.join(timeout=3)
         if nginx_started:
             subprocess.run(
                 [nginx, "-p", f"{temporary_root}/", "-c", str(config_path), "-s", "quit"],

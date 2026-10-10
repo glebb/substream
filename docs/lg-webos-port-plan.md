@@ -1,121 +1,124 @@
-# LG webOS port plan
+# LG webOS TV implementation and acceptance
 
-Status: initial port implemented. Clean and personal packages install and launch;
-the personal package supplies `.env` defaults automatically. Physical-TV
-acceptance confirmed direct category loading and 1080p live playback with
-picture and sound. VOD, track selection, broader codec support, remote behavior
-and standby recovery remain device acceptance checks.
-Target: LG 55UT91006LA running the user's stated webOS TV 25.
-Initial delivery: an installable packaged Substream web app for Developer Mode.
-LG Content Store submission is a separate release project.
+Status: the initial webOS port is implemented. Clean and personal webOS builds
+are isolated from browser and Samsung outputs. The personal package was
+installed and launched on the target TV; direct catalogue loading and one
+1080p live stream were confirmed with picture and sound. Companion pairing,
+staged MP4 playback/stop and reset/re-pair also passed a smoke check. Remaining work is
+physical-device acceptance for VOD, tracks, remote interactions, broader media
+support, persistence, and lifecycle recovery. An LG Content Store submission
+would be a separate release project.
 
-## Target and design
+## Target and build profile
 
-LG lists the 55UT91006LA as a 2024/webOS 24 model. Confirm the installed
-version in Settings > General > TV Information and via the device API before
-choosing the final build target. LG documents Chromium 120 for webOS 25 and
-Chromium 108 for webOS 24. A firmware upgrade must not be assumed to upgrade
-hardware codec capabilities.
+The physical target is an LG 55UT91006LA reporting webOS TV 25. LG lists this
+2024 model family under webOS 24, so the installed software version is what
+sets the web-engine target. LG documents Chromium 120 for webOS TV 25 and
+Chromium 108 for webOS TV 24. The current LG Vite target is `chrome120`; a
+firmware update does not prove support for additional codecs or containers.
 
-Reuse the shared React screens, pure TypeScript core, catalogue repositories,
-settings, focus navigation and playback release barrier. Add a `webos` runtime
-and adapters under `src/platform/webos`; keep LG globals out of core and screens.
-Retain the complete Chromium 47 CSS baseline for Samsung builds, including
-explicit margins rather than flex gap.
+The app is a packaged web app with ID `org.substream.app`, a local launcher
+icon, and relative asset URLs. Browser and Tizen builds keep their own outputs
+and compatibility targets. The webOS build omits the Tizen legacy entry and
+targets the installed Chromium engine.
 
-## 1. Establish feasibility on the TV
+## Implemented runtime
 
-- Confirm installed OS, actual runtime engine, TV networking and Developer Mode
-  access. Keep addresses, device registration and SSH material in ignored
-  `.local/deployment/`; use synthetic values in committed documentation.
-- Create a minimal packaged HTML-video probe and synthetic HTTPS test media.
-  Test direct playlist/API fetches, native HLS, MP4 and provider-style MPEG-TS
-  paths, then MSE/hls.js where needed. Include redirects, HTTP/HTTPS restrictions,
-  range requests and TLS failures. A raw TS endpoint is not assumed playable.
-- Check IndexedDB/localStorage persistence across app close, relaunch and TV
-  restart; check audio/text track enumeration, selection and external subtitles.
-- Test H.264/AAC first, then HEVC and relevant audio/container combinations
-  against this physical model's capabilities. Document unsupported combinations.
+- `RuntimePlatform` and bootstrap recognize webOS and select the TV interaction
+  profile. LG globals stay behind `src/platform/webos` adapters.
+- Direct playback uses the shared HTML video implementation with webOS app
+  visibility handling. On background/foreground transitions, the adapter
+  suspends playback and restores the single active source and safe playback
+  state.
+- The runtime routes the app's Back behavior through shared navigation and
+  calls the platform Back at the app root. The manifest sets
+  `disableBackHistoryAPI: true`. It reads the native virtual-keyboard visibility
+  state so Back does not close the app while text entry is active.
+- The runtime supports companion pairing and receiver commands. Pairing,
+  staged H.264/AAC MP4 playback/stop, and reset/re-pair passed a physical smoke
+  check on 2026-10-10; provider-command resolution, subtitles and seek remain
+  pending. LG has no TV-side local-file picker.
+  It does not use Samsung AVPlay, and the personal webOS build does not enable
+  the Samsung live subtitle relay. Provider, OpenSubtitles, and TMDb requests
+  use the direct client paths; credentials are not routed through helper
+  services.
+- Build, package, install, launch, personal deployment, and generic Tizen/LG
+  dispatch commands are documented in the [webOS TV guide](../webos/README.md).
+  The package process checks archive paths for `.env` / `.env.*` and `.local` / `.local.*` records.
 
-Gate: installed-app direct access and baseline playback work, or a specific
-unsupported provider/network/media case is identified. Never resolve access
-failures by forwarding client credentials through a helper server.
+## Personal and clean outputs
 
-## 2. Add runtime and TV input
+The clean build commands are `npm run build:webos` and
+`npm run package:webos`. They do not read `.env`, carry no personal defaults,
+and write to ignored `webos/dist/` and `webos/packages/` directories.
 
-- Extend `RuntimePlatform` and bootstrap selection with `webos`; explicitly
-  select the TV interaction profile even when the remote acts as a pointer.
-- Supply an LG player factory and capability values based on demonstrated
-  support. Do not infer LG relay support from Samsung AVPlay availability.
-- Normalize LG Back (461), arrows, OK and available media keys. Configure
-  `disableBackHistoryAPI` consistently with shared navigation: close overlays,
-  return through app screens, then invoke LG's platform Back at the root.
-- Support Magic Remote pointer click, wheel scrolling and transitions between
-  pointer and D-pad focus. Provide on-screen playback actions for remotes
-  without dedicated media keys. Integrate virtual keyboard visibility/editing.
-- Add adapter-owned app visibility/relaunch handling: save resume state, release
-  resources when leaving playback and restore a safe state without duplicates.
+The explicit personal commands are `npm run build:webos:personal` and
+`npm run package:webos:personal`. They use the existing `.env` defaults and
+write to separate ignored `webos/personal-dist/` and
+`webos/personal-packages/` directories. Required provider/API values and the
+private-artifact warning are listed in the [webOS TV guide](../webos/README.md).
+The IPK embeds the configured defaults without encryption. This is a local
+personal artifact and must not be published or shared. The deployment CLI
+receives only an allowlisted runtime environment; its device SSH key remains
+in the CLI's external key store. The ignored `LG_WEBOS_DEVICE` setting selects
+the default deployment target and is not compiled into the app.
+`LG_WEBOS_LOCAL_IP` can replace the companion host only in personal LG builds;
+its scheme/port come from `COMPANION_SERVER_URL`, or HTTP port 8787 by default.
+Saved TV settings take precedence. See [LG configuration](../webos/README.md#configure-a-personal-deployment).
 
-## 3. Implement playback behind the shared contract
+## Physical-TV results and remaining checks
 
-- Reuse the HTML-video implementation where verified, with LG-specific behavior
-  behind an adapter. Prefer native HLS when suitable; use hls.js/MSE only for
-  verified formats/features. Do not copy Samsung AVPlay code into LG playback.
-- Validate live startup, channel switching, buffering/retry, VOD pause/seek/resume,
-  end-of-media and next episode using the existing release barrier.
-- Implement and test available audio/subtitle selection and external subtitle
-  overlays. Advertise only supported controls; document unavailable embedded
-  tracks or live DVB subtitle paths instead of assuming Samsung parity.
-- Keep companion and subtitle relay integrations optional. Initially disable
-  unsupported LG paths; enable each only after transport, lifecycle and
-  credential-boundary checks pass. Ordinary direct playback stays standalone.
+| Area | Status |
+| --- | --- |
+| Developer Mode installation and app startup | Confirmed on the target TV |
+| Direct personal playlist load and live-category browsing | Confirmed; 18 live categories loaded |
+| Baseline live playback | Confirmed for one 1080p stream with picture and sound |
+| VOD pause, seek, and resume | Pending physical-TV check |
+| Audio tracks, subtitle tracks, and external subtitle behavior | Pending physical-TV check |
+| H.264/AAC beyond the confirmed stream, HEVC, containers, and provider MPEG-TS variants | Pending per-format checks; no broad codec matrix established |
+| Magic Remote pointer/D-pad transitions, virtual keyboard editing, Back, and Home | Pending physical-TV check |
+| App relaunch, standby, network loss, and persistence after TV restart | Pending physical-TV check |
+| Large catalogues and repeated live-channel switching | Pending performance/resource checks |
+| Companion pairing | Confirmed on 2026-10-10; LG paired with a temporary browser |
+| Browser-staged local media | Confirmed on 2026-10-10 with one synthetic 60-second H.264/AAC MP4; playback advanced on the TV and stop removed the player/title without error |
+| Pairing reset and re-pair | Confirmed on 2026-10-10; fresh code appeared, receiver stayed connected/unpaired, and a new sequence-1 local-play command succeeded after re-pair |
+| Provider playback commands, local subtitles/seek | Pending physical-TV check |
+| General network/standby recovery | Pending physical-TV check |
+| Samsung live subtitle relay and LG TV-side local-file picker | Unsupported |
 
-## 4. Build and package
+These results establish a working direct live-TV path, not full playback or
+remote parity with Samsung. Keep advertised capabilities limited to behavior
+verified by the webOS runtime and physical device.
 
-- Add `webos/appinfo.json`, launcher assets and isolated build output with
-  relative asset paths. Package application assets locally so startup does
-  not depend on Substream hosting.
-- Add proposed commands `build:webos`, `package:webos`, `install:webos` and
-  `launch:webos`, using LG's supported CLI and `.ipk` packaging. Verify the
-  toolchain's host prerequisites before selecting/installing its version.
-- Separate the LG engine target from existing Tizen compatibility settings.
-  Keep browser, Tizen 3 and Tizen 6 outputs functioning.
-- Ship a clean credential-free package by default: no personal defaults,
-  development proxies, private deployment records or local endpoint defaults.
-- Document Developer Mode setup, device key acquisition, install/launch/debug,
-  renewal and recovery. Developer Mode is time-limited: LG states that expiry
-  disables it and removes developer-installed apps.
+## Remaining acceptance work
 
-## 5. Verify and accept
+1. Exercise VOD seek/resume, episode changes, audio/subtitle enumeration and
+   external subtitle overlays with representative provider streams.
+2. Verify remote and keyboard interaction: pointer and D-pad focus changes,
+   text entry, app Back routing, platform Back at the root, and Home/relaunch.
+3. Check app close/relaunch, standby/resume, network loss, and persistence of
+   the catalogue and client settings across a TV restart.
+4. Extend media coverage with known test streams for supported codecs,
+   containers, HLS, range requests, redirects, and TLS errors. Record exact
+   working and failing combinations for this TV.
+5. Measure large-catalogue browsing and resources after repeated channel
+   switches. Test direct integrations before considering any optional service.
 
-- Run `npm run check`; add meaningful synthetic coverage for LG runtime/input,
-  lifecycle cleanup, playback selection and changed request routing.
-- Inspect destinations, headers and payloads with synthetic credentials:
-  provider, OpenSubtitles and TMDb credentials go directly only to their
-  intended services, including retries and optional-service paths.
-- Build browser, Samsung and LG artifacts. If shared CSS changes, run the
-  Chromium 47 preview and inspect TV spacing, wrapping and focus.
-- On the actual LG TV: import a catalogue; browse/search Live, Movies and
-  Series; test channel changes, VOD seek/resume, audio/subtitles, text entry,
-  pointer/D-pad navigation, Back, Home, relaunch, standby and network loss.
-- Record large-catalogue responsiveness and repeated channel-switch resource
-  behavior. Test with optional helpers disabled before testing enabled paths.
-
-Acceptance: a clean `.ipk` installs and launches on the stated TV, persists
-client settings/catalogue, supports direct baseline live/VOD playback and remote
-navigation, cleans up playback correctly, and preserves existing Samsung/browser
-behavior. Publish a tested support matrix and any device-specific limitations.
-Physical-TV acceptance remains required even if desktop tests pass.
+Do not address provider access problems by sending client credentials through
+a proxy. Local browser storage is not a secret vault; personal package defaults
+are extractable from the IPK and should be handled as private data.
 
 ## References
 
-- [Architecture](cross-platform-architecture.md)
-- [Mandatory credential policy](client-credential-policy.md)
-- [LG model listing](https://www.lg.com/cz/tv-a-soundbars/uhd-tv/55ut91006la/)
-- [LG web engines](https://webostv.developer.lge.com/develop/specifications/web-api-and-web-engine)
-- [LG streaming specifications](https://webostv.developer.lge.com/develop/specifications/streaming-protocol-drm)
-- [LG webOS 25 media formats](https://webostv.developer.lge.com/develop/specifications/video-audio-250)
-- [LG remote input](https://webostv.developer.lge.com/develop/guides/magic-remote)
-- [LG Back behavior](https://webostv.developer.lge.com/develop/guides/back-button)
-- [LG CLI](https://webostv.developer.lge.com/develop/tools/cli-introduction)
-- [LG Developer Mode](https://webostv.developer.lge.com/develop/getting-started/developer-mode-app)
+- [Cross-platform architecture](cross-platform-architecture.md)
+- [Client credential policy](client-credential-policy.md)
+- [LG webOS setup, packaging, and deployment guide](../webos/README.md)
+- [LG 55UT91006LA listing](https://www.lg.com/cz/tv-a-soundbars/uhd-tv/55ut91006la/)
+- [webOS web-engine versions](https://webostv.developer.lge.com/develop/specifications/web-api-and-web-engine)
+- [webOS 25 audio and video formats](https://webostv.developer.lge.com/develop/specifications/video-audio-250)
+- [Streaming protocols and DRM](https://webostv.developer.lge.com/develop/specifications/streaming-protocol-drm)
+- [Magic Remote](https://webostv.developer.lge.com/develop/guides/magic-remote)
+- [Back button behavior](https://webostv.developer.lge.com/develop/guides/back-button)
+- [CLI installation](https://webostv.developer.lge.com/develop/tools/cli-installation)
+- [CLI developer guide](https://webostv.developer.lge.com/develop/tools/cli-dev-guide)
+- [Developer Mode app and session extension](https://webostv.developer.lge.com/develop/getting-started/developer-mode-app)

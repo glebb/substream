@@ -24,12 +24,12 @@ flowchart TB
 
 | Layer | Responsibility |
 | --- | --- |
-| `src/core` | Playlist classification/evidence, catalogue normalization/import, provider identities, live selection, subtitle rules and relay protocol/timing; no browser, React, Node or Tizen globals |
+| `src/core` | Playlist classification/evidence, catalogue normalization/import, provider identities, live selection, subtitle rules and relay protocol/timing; no browser, React, Node, Tizen or webOS globals |
 | `src/contracts` | Runtime capabilities, logical input, catalogue/preferences/transport ports and companion messages |
 | `src/application` | Live playback routing/recovery, release coordination, companion lifecycle, live caches and provider search |
 | `src/bootstrap` | Default runtime selection and settings facade preserving existing validation/storage keys |
 | `src/app` | Shared screens, presentation, focus, editing, localization and remaining VOD orchestration |
-| `src/platform` | HTML video, AVPlay, web storage, provider/service clients, Samsung APIs and rendering |
+| `src/platform` | HTML video, AVPlay, web storage, provider/service clients, Samsung/LG APIs and rendering |
 | `services/live-subtitle-relay` | Separate Node service for single-source media packaging and DVB caption decoding |
 
 `main.tsx` mounts `RuntimeProvider → CompanionProvider → App`. `createAppRuntime` supplies playback construction, a release barrier, independent catalogue sessions, preferences, transport and key registration. Overrides let tests or future hosts replace these services.
@@ -54,7 +54,7 @@ Compatibility re-exports retain older import paths where needed. IndexedDB schem
 
 ## Playback ownership
 
-`PlaybackPlayerFactory` selects HTML video or AVPlay and optionally constructs relay playback. Its current surface request uses DOM elements because both shipped hosts are web runtimes. A native Android surface contract is still future work.
+`PlaybackPlayerFactory` selects HTML video or AVPlay and optionally constructs relay playback. Its current surface request uses DOM elements because the shipped browser, Samsung and LG hosts are web runtimes. A native Android surface contract is still future work.
 
 `LivePlaybackController` owns one live session, relay startup, up to two reconnect attempts after established playback and direct fallback. It releases the old session before replacement. Initial relay failure falls back after cleanup; unconfirmed cleanup blocks replacement. Changing channel or choosing Retry resets the recovery budget.
 
@@ -88,9 +88,9 @@ Search uses the device's imported M3U catalogue or account-scoped Xtream cache. 
 | Computer-to-TV local media | Companion computer, staged media and supported preparation tools |
 | Relayed Multi-Sub captions | Enabled configured subtitle relay |
 
-The companion controller has disabled, connecting, available and unavailable states. Disabling its Settings switch stops background connection/polling and clears queued commands. It starts only in a supported TV profile with an enabled, configured endpoint; existing configured installations retain automatic connection unless disabled. Commands enter the shared VOD flow, and provider selections remain fingerprint-checked. See [companion setup](companion-search.md).
+The companion controller has disabled, connecting, available and unavailable states. Disabling its Settings switch stops background connection/polling and clears queued commands. It starts only in a supported TV profile with an enabled, configured endpoint; existing configured installations retain automatic connection unless disabled. Pairing reset aborts the active event poll before resetting the service, then resumes with sequence cursor zero so old in-flight events cannot conflict with the reset service sequence. Commands enter the shared VOD flow, and provider selections remain fingerprint-checked. See [companion setup](companion-search.md).
 
-Relay enablement is independent. Disabled relay routing creates no relay session; ordinary provider browsing/playback remains usable without either helper. Guide enrichment is best effort: Tizen requests the public Nordic guide directly, and an enabled browser companion may bridge that public feed. Guide failure falls back to provider data.
+Relay enablement is independent. Disabled relay routing creates no relay session; ordinary provider browsing/playback remains usable without either helper. Finnish SkyShowtime 1/2 use the public Nordic replacement exclusively: Tizen and LG request it directly, hosted browsers use the fixed same-origin `/public/nordic-epg` endpoint, and development can use `/api/nordic-epg` or a configured companion bridge. Failure or an empty replacement leaves those channels without guide data; it does not request provider EPG or DNA. Other channels retain provider EPG and verified DNA enrichment. Guide requests omit credentials/referrers, have a 20-second download deadline, retry after failure and share a twelve-minute feed cache. Channel caches record replacement provenance, and the screen checks freshness every minute and on visibility resume.
 
 Standalone operation requires no Substream server for ordinary provider use. Streaming still needs a network, and browser CORS/codec restrictions remain. Local files sent to a TV depend on the companion for that session. See [local-file playback](local-file-playback.md).
 
@@ -104,14 +104,76 @@ Further extraction of VOD orchestration, dynamic playback capabilities, native s
 
 ## LG webOS adapter
 
-Bootstrap selects the webOS TV interaction profile using the injected LG host
-or its documented app user agent. LG playback uses the shared HTML-video
-implementation with an adapter that releases the source while hidden and
-restores active playback when visible. Previously paused playback requires
-an explicit Play action. LG Back (461) uses shared navigation and invokes
-the platform Back action at the root. Provider and API requests stay direct
-from the TV. Companion and Samsung relay capabilities are disabled on LG
-pending device validation. The dedicated build packages local assets without
-personal defaults or development proxies. The explicit personal package instead
-embeds operator `.env` defaults and stays in separate ignored output directories;
-see [LG packaging](../webos/README.md).
+The LG port adds a `webos` platform identity while preserving the shared `tv`
+interaction profile. Bootstrap gives Tizen detection precedence, then accepts
+an injected `PalmSystem`, `webOS.platform.tv === true`, or the LG
+`Web0S`/`WebOS` SmartTV `WebAppManager` user-agent signature. Merely loading
+an SDK object in a desktop browser does not turn it into a TV. No vendor
+webOSTV.js bundle is required for the implemented host boundary.
+
+| Ownership | Source |
+| --- | --- |
+| Platform/profile and capability composition | [bootstrap/runtime.ts](../src/bootstrap/runtime.ts), [runtime contracts](../src/contracts/runtime.ts) |
+| Host detection, platform Back, native keyboard visibility | [webOS runtime adapter](../src/platform/webos/runtime.ts) |
+| Direct player selection; no relay factory | [webOS player factory](../src/platform/webos/player-factory.ts) |
+| Hidden/visible player state and source restoration | [webOS HTML player](../src/platform/webos/html-video-player.ts), [lifecycle binding](../src/platform/webos/playback-lifecycle.ts) |
+| Source teardown/resume hooks, HLS and remux behavior | [shared HTML player](../src/platform/browser/html-video-player.ts) |
+| Manifest, isolated outputs and archive audit | [appinfo.json](../webos/appinfo.json), [webos.mjs](../scripts/webos.mjs), [Vite configuration](../vite.config.ts) |
+| Unified LG/Tizen deployment dispatch | [deploy.mjs](../scripts/deploy.mjs) |
+
+The default LG capabilities are explicit:
+
+| Capability | LG value | Meaning |
+| --- | --- | --- |
+| `nativeVideoSurface` | `false` | Uses the shared HTML `<video>` surface, not AVPlay; this does not rule out native HLS decoding |
+| `tvInput` | `true` | Standard TV keyboard events, including Back 461, need no Samsung key registration |
+| `supportsLocalMediaPicker` | `false` | No browser-style file picker on the TV |
+| `directGuideRequests` | `true` | Permits direct public-guide requests from the TV; provider/network availability remains best effort |
+| `supportsCompanion` | `true` | Enables pairing, the app-scoped receiver and TV connection controls; TV storage/USB picking remains unavailable |
+| `supportsLiveRelay` | `false` | No Samsung relay player or relay Settings controls |
+
+### Playback and lifecycle
+
+`WebOsPlaybackPlayerFactory` selects `WebOsHtmlVideoPlayer` only when the UI
+supplies a video element. It reuses the shared native HTML/HLS, hls.js/MSE,
+audio/text-track and client remux paths; actual formats, tracks, CORS and
+byte-range behavior remain device/provider constraints. Native HLS is used
+where the media element supports it and the shared subtitle mode permits it.
+A declared MIME type or MSE availability is not a codec guarantee.
+
+Each LG player binds `visibilitychange` and `pagehide`. Hiding saves the latest
+local progress, invalidates pending callbacks, cancels retries/timers, releases
+HLS/remux/DVB resources, pauses and detaches the source. Repeated background
+events are coalesced. Loads and playback/seek commands issued while hidden
+update a local snapshot instead of starting another source. Returning visible
+restores requested playback; an explicitly paused source waits for Play.
+Finite VOD or an explicit seek restores its logical position, including a
+remux offset; live playback does not blindly restore a stale absolute playhead.
+Destroy removes listeners and prevents the disposed instance from restarting.
+The shared release barrier continues to protect route-to-route acquisition.
+These paths have synthetic coverage; standby/firmware event behavior still
+requires the physical checks in [verification](verification.md#lg-webos-physical-tv-check).
+
+### Input, storage and build boundary
+
+Shared input normalization maps LG Back 461 to `Back`. Screens use their
+existing navigation/editing behavior. At Home, an open native keyboard gets
+first opportunity to consume Back; otherwise the runtime invokes SDK platform
+Back, injected `PalmSystem.platformBack`, or the documented app-close fallback.
+The manifest disables LG history-based Back handling to avoid competing with
+shared navigation. See [navigation](navigation.md).
+
+Preferences use the existing localStorage facade, and catalogue sessions use
+IndexedDB. Network requests use device-side fetch directly to the provider or
+API. No LG backend, credential proxy, account synchronization or new storage
+schema is introduced. Persistence across restart/reinstallation is a device
+acceptance question, not a guarantee implied by the API.
+
+The clean build targets Chromium 120, disables the legacy bundle for that
+artifact, ignores `.env` defaults and strips `VITE_*` variables. Personal
+commands use the existing client-default embedding path in separate ignored
+output directories. LG deployment settings are not compiled into app assets;
+LG CLI subprocesses receive only the runtime environment allowlist. Shared
+CSS retains the complete Chromium 47 baseline. Setup, artifact handling and
+troubleshooting belong in [the LG guide](../webos/README.md); the
+[port status](lg-webos-port-plan.md) records confirmed and pending acceptance.

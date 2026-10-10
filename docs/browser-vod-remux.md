@@ -1,5 +1,7 @@
 # Browser VOD remux
 
+The LG webOS HTML player also reuses this client-side VOD implementation where runtime codec/MSE/worker checks permit it. Desktop or WebKit results below do not validate LG MKV, Dolby audio, range handling or seeking. No server conversion fallback is added for LG; those cases remain in the [LG physical checklist](verification.md#lg-webos-physical-tv-check).
+
 On supported browsers, the VOD player can play selected Matroska (`.mkv`) files by remuxing their existing encoded packets into fragmented MP4 on the device. The app uses Mediabunny in a dedicated worker, then appends the output to a browser media source. Compatible tracks are copied without decoding. When native MP4 streaming rejects AC3/EAC3 audio and accepts AAC, the worker lazily loads Mediabunny WASM codecs and converts only that audio to AAC-LC; video remains packet copied. The codec assets are shipped with the public app and conversion runs on the client.
 
 ## Supported media

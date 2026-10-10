@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { auditIpkArchive, createWebosBuildEnvironment, createWebosCliEnvironment, listIpkDataEntries, readWebosManifest, webosModeConflict } from "./webos.mjs";
+import { createWebosPackageDefaults } from "./webos-config.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const temporaryDirs = [];
@@ -53,6 +54,46 @@ afterEach(() => {
 });
 
 describe("LG webOS package boundary", () => {
+  it("includes the configured companion endpoint only in personal app defaults", () => {
+    const env = {
+      COMPANION_SERVER_URL: "http://192.0.2.20:8787",
+      IPTV_M3U_URL: "https://provider.example.test/playlist?username=synthetic&password=synthetic",
+      OPENSUBTITLES_API_KEY: "synthetic-opensubtitles-key",
+      TMDB_API_READ_ACCESS_TOKEN: "synthetic-tmdb-token",
+    };
+    expect(createWebosPackageDefaults(env, { publicBuild: true })).toEqual({});
+    expect(createWebosPackageDefaults(env, { personal: true, webos: true })).toMatchObject({
+      companionServerUrl: "http://192.0.2.20:8787",
+      playlistUrl: env.IPTV_M3U_URL,
+      openSubtitlesApiKey: "synthetic-opensubtitles-key",
+      tmdbApiReadAccessToken: "synthetic-tmdb-token",
+    });
+    expect(createWebosPackageDefaults(env, { personal: true, webos: true })).not.toHaveProperty("lgWebosLocalIp");
+  });
+
+  it("uses the Mac IP for personal LG companion defaults and keeps only scheme and port", () => {
+    const defaults = createWebosPackageDefaults({
+      LG_WEBOS_LOCAL_IP: "192.0.2.21",
+      COMPANION_SERVER_URL: "https://stale-host.example.test:9443/private/path?token=synthetic#section",
+    }, { personal: true, webos: true });
+    expect(defaults.companionServerUrl).toBe("https://192.0.2.21:9443");
+    expect(JSON.stringify(defaults)).not.toMatch(/stale-host|private|token|synthetic|section/);
+    expect(createWebosPackageDefaults({ LG_WEBOS_LOCAL_IP: "192.0.2.21" }, { personal: true, webos: true }).companionServerUrl)
+      .toBe("http://192.0.2.21:8787");
+    expect(createWebosPackageDefaults({ LG_WEBOS_LOCAL_IP: "192.0.2.21" }, { publicBuild: true })).toEqual({});
+    expect(createWebosPackageDefaults({
+      LG_WEBOS_LOCAL_IP: "not a host/path",
+      COMPANION_SERVER_URL: "https://tizen-relay.example.test:7443/relay",
+    }, { personal: true }).companionServerUrl).toBe("https://tizen-relay.example.test:7443/relay");
+  });
+
+  it("rejects LG companion host overrides that contain URL components or invalid hosts", () => {
+    for (const host of ["http://192.0.2.21", "user@192.0.2.21", "192.0.2.21/path", "192.0.2.21?token=x", "host:8787", "bad host"]) {
+      expect(() => createWebosPackageDefaults({ LG_WEBOS_LOCAL_IP: host }, { personal: true, webos: true }))
+        .toThrow(/LG_WEBOS_LOCAL_IP must be an IP address or hostname/);
+    }
+  });
+
   it("gives LG CLI tools only runtime paths and excludes app and deployment secrets", () => {
     expect(createWebosCliEnvironment({
       PATH: "/synthetic/bin", HOME: "/synthetic/home", TMPDIR: "/synthetic/tmp",

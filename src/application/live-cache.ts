@@ -5,7 +5,7 @@ const DNA_EPG_CACHE_PREFIX = "substream.dna-epg.v1.";
 export const EPG_CACHE_TTL_MS = 12 * 60 * 1000;
 
 export type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCategory: Record<string, LiveChannel[]> };
-export type CachedGuide = { savedAt: number; programmes: EpgProgramme[]; dnaAttemptAt?: number };
+export type CachedGuide = { savedAt: number; programmes: EpgProgramme[]; dnaAttemptAt?: number; source?: "nordic-skyshowtime" };
 export type CachedDnaGuide = { savedAt: number; programmes: EpgProgramme[] };
 
 export function safeGuideCache(storage: PreferencesRepository, key: string): CachedGuide | null {

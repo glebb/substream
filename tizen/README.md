@@ -1,5 +1,10 @@
 # Tizen setup and deployment
 
+The shared `npm run deploy tizen3` and `npm run deploy tizen6` commands route to
+the existing personal VS Code signing workflow described here. A registered
+LG device name instead selects the separate webOS `.ipk` workflow; see
+[LG setup and deployment](../webos/README.md).
+
 Run npm commands from the repository root. Open the `tizen/` folder in VS Code for the Tizen extension's signing and device actions. The application ID is `Substream0.Substream` (separate from the old My M3U app).
 
 ## Choose a target
@@ -65,13 +70,13 @@ These build and package both compatibility variants into `tizen/Debug/`. They re
 
 ### Finnish live subtitle relay
 
-Personal Tizen preparation/build/packaging embeds settings from the gitignored `.env.live-relay`. Finnish channels select the relay automatically for dynamic DVB discovery on the same upstream as video, regardless of `Multi-Sub` naming; no manual TV address, credential or channel mapping is needed. The Mac relay was stopped after hosted playback was accepted. For explicit local development, `npm run relay:personal` creates local defaults, allowlists Finnish channels plus legacy marked channels and starts the Mac subtitle service; avoid invoking it just to rebuild a hosted package. `dev:personal` starts the separate VOD/local-file companion.
+Personal Tizen preparation/build/packaging embeds settings from the gitignored `.env.live-relay`. Finnish channels select the relay automatically for dynamic DVB discovery on the same upstream as video, regardless of `Multi-Sub` naming; no manual TV address, credential or channel mapping is needed. Hosted playback does not need the Mac relay; keep actual process/deployment state in ignored local notes. For explicit local development, `npm run relay:personal` creates local defaults, allowlists Finnish channels plus legacy marked channels and starts the Mac subtitle service; avoid invoking it just to rebuild a hosted package. `dev:personal` starts the separate VOD/local-file companion.
 
-Saved relay settings on the TV override bundled defaults, including an explicit opt-out. Standard/public packages do not enable or embed the personal relay credential. Personal packages remain private. See [local setup and configuration](../docs/live-subtitle-relay.md#automatic-personal-setup) and the [recorded hosted deployment and operations](../deploy/live-subtitle-relay/OPERATIONS.md).
+Saved relay settings on the TV override bundled defaults, including an explicit opt-out. Standard/public packages do not enable or embed the personal relay credential. Personal packages remain private. See [local setup and configuration](../docs/live-subtitle-relay.md#automatic-personal-setup) and the [generic hosted operations](../deploy/live-subtitle-relay/OPERATIONS.md).
 
 `Subtitle relay · Timing test` identifies relay playback. `progress=local`, `ack=confirmed`, and a changing `playheadMs` confirm the native playback clock and startup acknowledgement; `clock=unverified` remains until quantitative timing checks. `bufferEvents` counts native buffering starts. Runtime failures try two new relay sessions with `Subtitle relay · Reconnecting…` before `Relay unavailable · Direct playback`; initial setup failures go directly to fallback after teardown. Reconnection pauses are expected. The fallback does not open the extra provider TS audio-language probe.
 
-The user reported a fresh personal TV installation after the architecture refactor on 2026-10-04. A separate hosted relay diagnostic passed; post-refactor physical-TV playback acceptance remains pending. Client changes require a newly prepared, signed and installed TV package. A server-only change may require restarting the relay, depending on the change. For hosted deployments, consult the [deployment record and operations guide](../docs/live-subtitle-relay-deployment.md). Sustained stability and measured subtitle timing remain unverified (`clock=unverified`).
+The user reported a fresh personal TV installation after the architecture refactor on 2026-10-04. A separate hosted relay diagnostic passed; post-refactor physical-TV playback acceptance remains pending. Client changes require a newly prepared, signed and installed TV package. A server-only change may require restarting the relay, depending on the change. For hosted deployments, consult the [deployment guide](../docs/live-subtitle-relay-deployment.md). Sustained stability and measured subtitle timing remain unverified (`clock=unverified`).
 
 ### General troubleshooting
 

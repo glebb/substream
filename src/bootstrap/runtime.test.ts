@@ -32,8 +32,8 @@ describe("application runtime composition", () => {
       nativeVideoSurface: false,
       tvInput: true,
       supportsLocalMediaPicker: false,
-      directGuideRequests: false,
-      supportsCompanion: false,
+      directGuideRequests: true,
+      supportsCompanion: true,
       supportsLiveRelay: false,
     });
     expect(runtime.playbackFactory.constructor.name).toBe("WebOsPlaybackPlayerFactory");

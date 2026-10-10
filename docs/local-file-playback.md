@@ -1,5 +1,7 @@
 # Local file playback
 
+LG webOS has no local-file picker, but its companion receiver supports local media staged from the paired browser/computer. The computer-to-TV flow below therefore works with a paired LG receiver when the app and companion service support protocol v4. Selecting files from LG storage or USB remains unavailable. Direct provider playback on LG is separate. See [LG setup](../webos/README.md).
+
 The browser app can open one video file from the home screen, even when no IPTV playlist is configured. Selecting a file opens the existing VOD details screen first. From there, **Play on this computer** uses the browser player; **Play on TV** stages the file through the optional companion service and sends it to a paired TV. The app reuses its existing details and playback UI; there are no separate local-file details or player screens.
 
 ## Computer playback

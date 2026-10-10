@@ -6,7 +6,7 @@ Status: deferred. Android support and APK build commands are not implemented. Th
 
 Target the original Xiaomi Mi Box S 4K HDR shipping baseline: Android TV 8.1 (API 27). Do not require an operating-system or WebView update. Verify the factory WebView version before choosing the Android JavaScript build target. Xiaomi's [original specifications](https://www.mi.com/ae-en/product/mi-box-s/specs/) identify Android 8.1 as the shipping OS.
 
-Build an Android TV APK with a Kotlin shell, the existing React UI bundled in a WebView, and native AndroidX Media3/ExoPlayer playback. Reuse the TypeScript catalogue, classification, subtitle rules, and service integrations. Keep Android integrations behind adapters; `src/core` remains independent of Android, browser, React, Node, and Tizen globals.
+Build an Android TV APK with a Kotlin shell, the existing React UI bundled in a WebView, and native AndroidX Media3/ExoPlayer playback. Reuse the TypeScript catalogue, classification, subtitle rules, and service integrations. Keep Android integrations behind adapters; `src/core` remains independent of Android, browser, React, Node, Tizen, and webOS globals.
 
 Use `minSdkVersion 27` and select dependency versions that support it. Compile/target SDK versions are separate from the minimum supported OS. Preserve the shared Chromium 47 CSS baseline and verify Tizen after shared UI changes.
 
@@ -78,7 +78,7 @@ Completion criterion: live TV and VOD with usable subtitles, saved settings/favo
 
 ## USB installation
 
-USB sideloading is the primary deployment method. It requires neither ADB nor developer mode. These steps apply once the Android APK exists; the existing Tizen `.wgt` package cannot be installed on Android.
+USB sideloading is the primary deployment method. It requires neither ADB nor developer mode. These steps apply once the Android APK exists; the existing Tizen `.wgt` and webOS `.ipk` packages cannot be installed on Android.
 
 1. Build the Android APK. For regular use, use the signed release APK; record its actual output path in this guide when build tooling is implemented.
 2. Copy the APK to a USB flash drive as `substream.apk`. Use a drive/filesystem the box can read; FAT32 is a practical starting point. Do not reformat a drive containing needed files.

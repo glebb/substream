@@ -50,6 +50,34 @@ defaults. Neither is the hosted public app. Keep those modes isolated and
 disabled in public artifacts; they do not authorize adding credential
 collection to shipped client workflows.
 
+## LG packaged builds and deployment tooling
+
+The LG app follows the same mandatory client boundary. Its settings and
+catalogue belong to the TV, and provider, TMDb and OpenSubtitles requests go
+directly from that TV to the intended service. LG companion pairing and receiver
+commands use separate service authentication and credential-safe provider
+identifiers; the TV resolves those identifiers against its own saved playlist.
+LG live subtitle relay remains disabled. Network or codec failures do not
+authorize forwarding credentials through a server.
+
+The clean LG package ignores `.env` defaults. Explicit personal LG commands
+may embed operator-provided playlist/OpenSubtitles/TMDb defaults under the
+existing private-personal-build allowance above. Those `.ipk` files contain
+recoverable credentials: keep their output directories ignored and do not
+publish them. This allowance does not extend to collecting user-entered
+credentials or changing shipped request routing.
+
+`LG_WEBOS_DEVICE` and `LG_WEBOS_LOCAL_IP` belong in ignored `.env`.
+`LG_WEBOS_LOCAL_IP` is the Mac's LAN address used as the companion host in a
+personal LG package; it is not the registered TV target. Actual connection
+diagnostics and operations records stay in ignored `.local/deployment/`.
+Registered SSH keys remain in the CLI's external key store. The personal Vite
+build receives the app defaults it needs;
+`ares-package`, `ares-install`, `ares-launch` and best-effort app closure receive
+only an allowlist of runtime/path/key-store environment variables. Their raw
+output is suppressed. Deployment settings are not compiled into the app, and
+package auditing rejects `.env` and `.local` records. See [LG setup](../webos/README.md).
+
 ## Current implementation and limits
 
 The browser settings adapters store playlist, OpenSubtitles and TMDb settings
@@ -57,6 +85,12 @@ in localStorage through device-owned preferences. API clients issue direct
 requests to the provider, OpenSubtitles or TMDb. The hosted access service
 handles login/grants and does not accept the player's credential settings.
 The static host publishes no provider/API proxy.
+
+Its fixed `/public/nordic-epg` route fetches only the public Swedish XMLTV
+feed. It accepts no configurable destination, rejects query strings and
+non-read methods, strips caller headers and bodies, and suppresses upstream
+cookies. Client guide requests omit credentials and referrers. This public
+data bridge does not authorize any provider/API credential forwarding.
 
 Browser local storage is not an encrypted secret vault. It is accessible to
 code executing with the player's origin, persists across sessions, and is not

@@ -7,7 +7,7 @@ Hosted access uses an independent service in `services/substream-access`, with d
 
 1. Open https://substream.example.invalid and sign in with Google.
 2. The service verifies the Google identity and checks its separate private
-   email allowlist. the existing bot service authentication and data are independent.
+   email allowlist. The existing bot service authentication and data are independent.
 3. Create an eight-hour access link bound to the public IP observed by Nginx.
 4. Open `http://substream.example.invalid/<random-token>/`. Each static
    file request checks the token, exact IP, expiry, revocation and allowlist.
@@ -24,6 +24,10 @@ already downloaded code or stop playback connecting directly to the provider.
 
 - HTTPS portal: exact public routes proxied to loopback `127.0.0.1:8792`.
 - HTTP player: public static build, protected by Nginx auth_request.
+- Public guide: fixed `/public/nordic-epg` GET/HEAD route on HTTP and HTTPS,
+  independent of player grants, requesting only the public Swedish XMLTV feed.
+  Caller headers and bodies are stripped; query strings and non-read methods
+  are rejected. This route accepts no provider URL or credentials.
 - Private authorizer: loopback `127.0.0.1:8791/authorize`, no public proxy route.
 - State: private SQLite database under `/var/lib/substream-access`.
 - Config: private `/etc/substream-access/config.json`; OAuth credentials are
@@ -41,6 +45,12 @@ The public build embeds no personal defaults and publishes no provider proxy.
 Hosting on HTTP resolves HTTPS mixed-content restrictions, but provider CORS
 still has to allow the actual browser origin. Localhost success alone does not
 prove hosted-origin compatibility.
+
+Hosted SkyShowtime guide requests use the same-origin public endpoint without
+a companion. Packaged TVs fetch the feed directly. Empty or failed replacement
+data leaves the SkyShowtime guide unavailable rather than requesting provider
+EPG or DNA. The web release and the corresponding Nginx route must both be
+installed; switching static releases alone does not update host configuration.
 
 ## Operations and verification
 

@@ -1,5 +1,7 @@
 # Live subtitle relay
 
+The initial LG webOS runtime disables the live subtitle relay and has no relay player factory. Personal LG builds do not load Samsung relay defaults, and relay controls are hidden. This guide applies to supported Samsung paths; LG direct playback remains independent of the relay. See [LG setup](../webos/README.md).
+
 The live subtitle relay is an optional service for live channels whose video and DVB subtitles need to share one upstream connection. Tizen AVPlay receives the relayed MPEG-TS media while the service decodes timed DVB subtitle images. Direct browser playback and native AVPlay subtitle tracks remain available independently. The relay is separate from the LAN companion used for browser-to-TV commands and local-file streaming. A relay can run locally for personal testing or as a separately operated hosted HTTPS service; the relay implementation itself does not provision or monitor a hosted service.
 
 The service is implemented under `services/live-subtitle-relay/`; the TV client, settings, and player adapter live under `src/platform/live-relay/` and `src/platform/tizen/`. A platform-independent controller owns bounded retries and fallback. Its tests exercise retry limits, cleanup, and failed teardown; physical AVPlay timing and provider uptime still require device observation.
@@ -10,7 +12,7 @@ On 2026-10-03, the user accepted a real-TV playback check as good enough for now
 
 The implementation includes a three-segment startup reserve, an eight-second AVPlay buffer, acknowledgement of initial playback progress, and up to two automatic relay reconnect attempts before direct fallback. Reconnection opens a new media/subtitle session and causes a visible preparation pause. Initial relay setup failure falls back after cleanup. Failed teardown prevents overlapping replacement playback and requires the viewer to retry after the lease window.
 
-Treat the dated acceptance above as historical evidence only. No current server checks are recorded here. Check the separately maintained [deployment guide](live-subtitle-relay-deployment.md) and confirm its target state before hosted operation; a successful code test or build is not a server health check. A hosted installation should use authenticated HTTPS and the documented host controls. The local LAN instructions below are not a production hosting recipe.
+Treat the dated acceptance above as historical evidence only. No current server checks are recorded here. Use the generic [deployment guide](live-subtitle-relay-deployment.md) and confirm actual target state from ignored local deployment records before hosted operation; a successful code test or build is not a server health check. A hosted installation should use authenticated HTTPS and the documented host controls. The local LAN instructions below are not a production hosting recipe.
 
 ## Local synthetic verification
 
