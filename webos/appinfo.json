@@ -1,0 +1,10 @@
+{
+  "id": "org.substream.app",
+  "version": "0.1.0",
+  "vendor": "Substream",
+  "type": "web",
+  "main": "index.html",
+  "title": "Substream",
+  "icon": "icon.png",
+  "disableBackHistoryAPI": true
+}

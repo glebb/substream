@@ -4,7 +4,8 @@ export function normalizedRemoteKey(event: Pick<KeyboardEvent, "key" | "code" | 
   const code = event.code ?? "";
   const backNames = new Set(["escape", "esc", "browserback", "back", "xf86back", "goback"]);
   if (backNames.has(key.toLowerCase()) || backNames.has(code.toLowerCase())
-    || event.keyCode === 27 || event.which === 27 || event.keyCode === 10009 || event.which === 10009) return "Back";
+    || event.keyCode === 27 || event.which === 27 || event.keyCode === 461 || event.which === 461
+    || event.keyCode === 10009 || event.which === 10009) return "Back";
 
   const legacyKeys: Record<number, string> = {
     13: "Enter", 37: "ArrowLeft", 38: "ArrowUp", 39: "ArrowRight", 40: "ArrowDown",

@@ -20,6 +20,26 @@ describe("application runtime composition", () => {
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
     expect(createAppRuntime().interactionProfile).toBe("desktop");
   });
+
+  it("selects the conservative webOS TV runtime and routes platform Back", () => {
+    const platformBack = vi.fn();
+    vi.stubGlobal("webOS", { platform: { tv: true }, platformBack });
+
+    const runtime = createAppRuntime();
+    expect(runtime.platform).toBe("webos");
+    expect(runtime.interactionProfile).toBe("tv");
+    expect(runtime.capabilities).toEqual({
+      nativeVideoSurface: false,
+      tvInput: true,
+      supportsLocalMediaPicker: false,
+      directGuideRequests: false,
+      supportsCompanion: false,
+      supportsLiveRelay: false,
+    });
+    expect(runtime.playbackFactory.constructor.name).toBe("WebOsPlaybackPlayerFactory");
+    runtime.input.platformBack?.();
+    expect(platformBack).toHaveBeenCalledOnce();
+  });
   it("keeps TV interaction profile independent from platform capabilities", () => {
     const runtime = createAppRuntime({
       platform: "browser",

@@ -21,6 +21,13 @@ const DVB_MAX_CAPTURED_FRAGMENT_BYTES = 20 * 1024 * 1024;
 const DVB_MAX_PENDING_FRAGMENTS = 2;
 const DVB_CAPTURE_WINDOW_BYTES = Math.floor(LIVE_DVB_MAX_FRAGMENT_BYTES / TS_PACKET_BYTES) * TS_PACKET_BYTES;
 
+export interface HtmlVideoBackgroundSnapshot {
+  streamUrl: string;
+  currentTimeSeconds: number;
+  restorePosition: boolean;
+  wasPlaying: boolean;
+}
+
 function logCompatibilityHlsEvent(event: string, value: unknown): void {
   const data = value && typeof value === "object" ? value as {
     type?: unknown; details?: unknown; fatal?: unknown; response?: { code?: unknown };
@@ -105,6 +112,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private liveAudioTs = new LiveAudioTsProcessor();
   private preferredAudioTrackId: string | undefined;
   private sourceUrl: string | undefined;
+  private backgroundSuspended = false;
   private lastAudioTracksSignature: string | undefined;
   private liveSubtitleMode = false;
   private vodSubtitleMode = false;
@@ -219,6 +227,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
   isVodSubtitleDiscoveryComplete(): boolean { return this.vodSubtitleDiscoveryComplete; }
 
   load(streamUrl: string): void {
+    this.backgroundSuspended = false;
+    this.pendingSeekSeconds = null;
     this.cancelRecovery();
     this.recoveryAttempts = 0;
     this.userPaused = false;
@@ -717,6 +727,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   destroy(): void {
     this.cancelRecovery();
+    this.backgroundSuspended = false;
     this.sourceUrl = undefined;
     this.loadGeneration += 1;
     this.remuxSession?.dispose();
@@ -741,6 +752,50 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.video.load();
     for (const [type, listener] of this.eventListeners) this.video.removeEventListener(type, listener);
     this.removeSubtitleTrack();
+  }
+
+  /** Releases active engine/source resources while preserving only local resume data. */
+  protected suspendForBackground(): HtmlVideoBackgroundSnapshot | null {
+    if (!this.sourceUrl || this.backgroundSuspended) return null;
+    this.backgroundSuspended = true;
+    this.emitProgress();
+    const snapshot: HtmlVideoBackgroundSnapshot = {
+      streamUrl: this.sourceUrl,
+      // Remuxed MKV playback has a source offset while the native media
+      // element runs on a local timeline. Persist the same logical position
+      // reported through onProgress.
+      currentTimeSeconds: this.pendingSeekSeconds !== null
+        ? this.pendingSeekSeconds
+        : Number.isFinite(this.video.currentTime)
+          ? Math.max(0, this.video.currentTime + (this.compatibilityPath ? this.compatibilityOffsetSeconds : 0))
+          : 0,
+      // Infinity/unknown duration is common for live streams; replaying their
+      // old absolute playhead after backgrounding can seek outside the window.
+      restorePosition: this.pendingSeekSeconds !== null || (Number.isFinite(this.video.duration) && this.video.duration > 0),
+      wasPlaying: !this.video.paused && !this.video.ended,
+    };
+    this.cancelRecovery();
+    this.playAttempt += 1;
+    this.loadGeneration += 1;
+    this.clearPlaybackStartTimer();
+    this.clearBufferingTimer();
+    this.remuxSession?.dispose();
+    this.remuxSession = undefined;
+    this.stopCompatibilityPlayback();
+    this.compatibilitySourceUrl = undefined;
+    this.disposeDvbSubtitlePath();
+    this.hls?.destroy();
+    this.hls = undefined;
+    this.video.pause();
+    this.video.removeAttribute("src");
+    this.video.load();
+    return snapshot;
+  }
+
+  /** Restores one background-suspended source. The caller decides whether to invoke it. */
+  protected resumeFromBackground(snapshot: HtmlVideoBackgroundSnapshot): void {
+    this.load(snapshot.streamUrl);
+    if (snapshot.restorePosition) this.seekTo(snapshot.currentTimeSeconds);
   }
 
   private async loadCompatibilityStream(streamUrl: string, generation: number): Promise<void> {

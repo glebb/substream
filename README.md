@@ -1,12 +1,12 @@
 # Substream
 
-Substream is an IPTV live TV and video-on-demand player for Samsung Tizen TVs and browsers. It supports M3U libraries, on-demand Xtream catalogues, TMDb details, OpenSubtitles downloads, local video files, local favourites, and playback resume.
+Substream is an IPTV live TV and video-on-demand player for Samsung Tizen TVs, LG webOS TVs and browsers. It supports M3U libraries, on-demand Xtream catalogues, TMDb details, OpenSubtitles downloads, local video files, local favourites, and playback resume.
 
 Live TV currently requires an Xtream-compatible `get.php` source. It browses Finnish provider categories, shows available programme information, and plays embedded subtitles when the stream and device support them. The optional trusted-LAN companion service sends VOD selections and streams a selected browser file from the computer to a paired TV. The computer and companion service must stay available during computer-file playback on the TV. When enabled, browsers can also use it as a CORS bridge for the public Nordic guide; TV browsing and playback do not depend on it. See [Current behavior and architecture](docs/status.md#live-tv).
 
 ![Substream home screen](docs/images/substream-home.png)
 
-The UI and navigation are shared across platforms. Runtime ports select browser/Tizen adapters; companion control and subtitle relay routing have independent enablement. Mi Box support is deferred. See [shared architecture](docs/cross-platform-architecture.md).
+The UI and navigation are shared across platforms. Runtime ports select browser, Tizen and webOS adapters; companion control and subtitle relay routing have independent enablement. Mi Box support is deferred. See [shared architecture](docs/cross-platform-architecture.md).
 
 ## Features
 
@@ -19,6 +19,20 @@ The UI and navigation are shared across platforms. Runtime ports select browser/
 - **Play on TV:** pair a browser with named TVs using one-time codes, choose a playback target, and send VOD selections or local media over the optional trusted-LAN companion service.
 - **Finnish and English UI:** switch the app language in Settings.
 - **Samsung Tizen and browsers:** use Tizen AVPlay on supported TVs and browser video playback on compatible devices.
+
+## LG webOS TV
+
+Deploy in one command with `npm run deploy <registered-LG-device>`. The command
+builds the personal package from `.env`, installs it and launches the app.
+Set `LG_WEBOS_DEVICE` in `.env` to use `npm run deploy` without an argument.
+
+The LG port targets webOS 25 with a locally packaged `.ipk`, shared TV navigation,
+HTML video playback, and device-owned settings/catalogue. Build with
+`npm run package:webos`, or use `npm run package:webos:personal` to include
+operator-provided `.env` defaults as with Tizen. Personal artifacts stay in the
+ignored `webos/personal-packages/` directory. See [LG setup and installation](webos/README.md).
+Audio, embedded subtitles and codecs depend on what the TV exposes. The Samsung
+live relay and companion features are disabled on LG pending validation.
 
 ## Start in a browser
 

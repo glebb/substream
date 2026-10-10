@@ -165,7 +165,12 @@ export function App() {
     if (route !== "home") return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (playlistSetupOpen) {
-        if (isBackKey(event)) event.preventDefault();
+        if (isBackKey(event)) {
+          if (runtime.input.isKeyboardVisible?.()) return;
+          event.preventDefault();
+          runtime.input.platformBack?.();
+          return;
+        }
         const key = normalizedRemoteKey(event);
         if (key === "ArrowDown" && document.activeElement === localHomeActionRef.current) {
           event.preventDefault();
@@ -184,7 +189,7 @@ export function App() {
           playlistInputRef.current?.focus();
         } else if (key === "ArrowUp" && document.activeElement === playlistInputRef.current) {
           event.preventDefault();
-          localHomeActionRef.current?.focus();
+          (localHomeActionRef.current ?? playlistInputRef.current)?.focus();
         } else if (key === "Enter" && document.activeElement === localHomeActionRef.current) {
           event.preventDefault();
           openLocalPicker();
@@ -201,12 +206,16 @@ export function App() {
             : key === "ArrowUp" ? 0 : lastIndex;
         setHomeFocus(nextIndex); cardRefs.current[nextIndex]?.focus();
       }
-      if (isBackKey(event)) event.preventDefault();
+      if (isBackKey(event)) {
+        if (runtime.input.isKeyboardVisible?.()) return;
+        event.preventDefault();
+        runtime.input.platformBack?.();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     if (!isTouchProfile) window.requestAnimationFrame(() => (playlistSetupOpen ? (localHomeActionRef.current ?? playlistInputRef.current) : cardRefs.current[homeFocus])?.focus());
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [homeFocus, playlistSetupOpen, route, supportsLocalMediaPicker]);
+  }, [homeFocus, playlistSetupOpen, route, supportsLocalMediaPicker, runtime]);
   const backToHome = (focus: number) => { setHomeFocus(focus); setRoute("home"); };
   const loading = <RouteLoading onBack={leaveWhileLoading} />;
   const lazyScreen = (children: ReactNode) => <RouteErrorBoundary onBack={leaveWhileLoading}><Suspense fallback={loading}>{children}</Suspense></RouteErrorBoundary>;
@@ -224,7 +233,7 @@ export function App() {
         <input id="home-playlist-url" type="password" value={playlistDraft} onChange={(event) => setPlaylistDraft(event.target.value)} autoComplete="off" ref={playlistInputRef} />
         {supportsLocalMediaPicker && <button type="button" onClick={openLocalPicker} ref={localHomeActionRef}>Open local video file</button>}
         <button type="submit" ref={playlistSaveRef}>Save playlist</button>
-        <button type="button" ref={setupSettingsRef} onClick={() => { openRoute("settings", settingsHomeIndex); setHomeFocus(settingsHomeIndex); }}>Settings and TV pairing</button>
+        <button type="button" ref={setupSettingsRef} onClick={() => { openRoute("settings", settingsHomeIndex); setHomeFocus(settingsHomeIndex); }}>{runtime.capabilities.supportsCompanion ? "Settings and TV pairing" : "Settings"}</button>
         {playlistError && <p className="error" role="alert">{playlistError}</p>}
       </form> : <div className="home-cards">
         <button className={`home-card ${homeFocus === 0 ? remoteFocusClass : ""}`} type="button" ref={(element) => { cardRefs.current[0] = element; }} onFocus={() => setHomeFocus(0)} onClick={() => openRoute("live", 0)}><strong>Live TV</strong></button>

@@ -1,6 +1,6 @@
 # Shared application architecture
 
-The browser and Samsung Tizen apps share React screens, styles, navigation and TypeScript domain rules. Runtime wiring selects adapters and describes device capabilities. Android/Mi Box support is deferred; no Android shell, bridge, adapter or APK target exists.
+The browser, Samsung Tizen and LG webOS apps share React screens, styles, navigation and TypeScript domain rules. Runtime wiring selects adapters and describes device capabilities. Android/Mi Box support is deferred; no Android shell, bridge, adapter or APK target exists.
 
 ## Structure
 
@@ -10,7 +10,7 @@ flowchart TB
   APP[Application services]
   CORE[Pure TypeScript domain]
   RUNTIME[Runtime contracts and bootstrap]
-  ADAPTERS[Browser and Tizen adapters]
+  ADAPTERS[Browser, Tizen and webOS adapters]
   COMPANION[Optional companion service]
   RELAY[Optional subtitle relay]
   UI --> APP
@@ -34,7 +34,7 @@ flowchart TB
 
 `main.tsx` mounts `RuntimeProvider → CompanionProvider → App`. `createAppRuntime` supplies playback construction, a release barrier, independent catalogue sessions, preferences, transport and key registration. Overrides let tests or future hosts replace these services.
 
-Platform identity (`browser` or `tizen`) is separate from interaction profile (`desktop`, `touch` or `tv`). Bootstrap selects touch interaction for a coarse primary pointer without hover; TV navigation and deliberate text editing use the profile. Touch playback starts with controls hidden; tapping reveals navigation and playback actions, and Hide controls restores the unobstructed player. Touch navigation suppresses automatic row highlighting and simulated hover; keyboard input restores ordinary focus styling. Features use capabilities such as native video surfaces, local-file picking, direct guide requests, companion and relay support. Generic input normalization lives in `src/contracts/input.ts`; Samsung registration remains in its adapter.
+Platform identity (`browser`, `tizen` or `webos`) is separate from interaction profile (`desktop`, `touch` or `tv`). Bootstrap selects touch interaction for a coarse primary pointer without hover; TV navigation and deliberate text editing use the profile. Touch playback starts with controls hidden; tapping reveals navigation and playback actions, and Hide controls restores the unobstructed player. Touch navigation suppresses automatic row highlighting and simulated hover; keyboard input restores ordinary focus styling. Features use capabilities such as native video surfaces, local-file picking, direct guide requests, companion and relay support. Generic input normalization lives in `src/contracts/input.ts`; Samsung registration remains in its adapter.
 
 Shared CSS retains Chromium 47 as the complete baseline: flexbox, static colours, physical positioning and explicit margins. See [navigation](navigation.md) and [verification](verification.md).
 
@@ -101,3 +101,17 @@ Architecture boundary tests protect the pure core and prevent screens from selec
 The 2026-10-04 refactor passed typechecking, the full test suite, browser/Tizen 3/Tizen 6 builds and a synthetic Chromium 47 Search navigation check with no runtime exceptions. The user subsequently reported installing a fresh personal TV package and encountering a relay startup fallback. A separate hosted diagnostic passed; post-refactor physical-TV playback acceptance remains pending. Previous hosted relay acceptance does not validate this refactor's AVPlay, remote timing or sleep/wake behavior. Follow [verification](verification.md) before release.
 
 Further extraction of VOD orchestration, dynamic playback capabilities, native surface/network integration and measured device performance remain open. The [Mi Box plan](mi-box-port-plan.md) describes a possible future port using these boundaries; implementation has not started.
+
+## LG webOS adapter
+
+Bootstrap selects the webOS TV interaction profile using the injected LG host
+or its documented app user agent. LG playback uses the shared HTML-video
+implementation with an adapter that releases the source while hidden and
+restores active playback when visible. Previously paused playback requires
+an explicit Play action. LG Back (461) uses shared navigation and invokes
+the platform Back action at the root. Provider and API requests stay direct
+from the TV. Companion and Samsung relay capabilities are disabled on LG
+pending device validation. The dedicated build packages local assets without
+personal defaults or development proxies. The explicit personal package instead
+embeds operator `.env` defaults and stays in separate ignored output directories;
+see [LG packaging](../webos/README.md).

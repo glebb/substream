@@ -7,6 +7,7 @@ const RuntimeContext = createContext<AppRuntime | null>(null);
 
 export function RuntimeProvider({ runtime, children }: { runtime?: AppRuntime; children: ReactNode }) {
   const [resolvedRuntime] = useState(() => runtime ?? createAppRuntime());
+  useEffect(() => { resolvedRuntime.input.registerKeys(); }, [resolvedRuntime]);
   useEffect(() => {
     if (resolvedRuntime.interactionProfile === "touch") return installTouchNavigationStyles(document);
   }, [resolvedRuntime]);

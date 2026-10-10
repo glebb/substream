@@ -9,6 +9,7 @@ describe("shared input normalization", () => {
     [{ key: "", keyCode: 10252 }, "MediaPlayPause"],
     [{ key: "ColorF0Red", keyCode: 0 }, "Red"],
     [{ key: "", keyCode: 10009 }, "Back"],
+    [{ key: "", keyCode: 461 }, "Back"],
   ])("normalizes legacy or platform key %j", (event, expected) => {
     expect(normalizedRemoteKey(event as KeyboardEvent)).toBe(expected);
   });

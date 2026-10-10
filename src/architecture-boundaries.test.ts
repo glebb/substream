@@ -86,8 +86,9 @@ describe("shared architecture boundaries", () => {
     const violations: string[] = [];
     const forbiddenIdentifiers = new Set([
       "isTizenRuntime", "isTizenAvPlayAvailable", "TizenAvPlayPlayer", "TizenLiveRelayPlayer", "HtmlVideoPlayer",
+      "isWebOsRuntime", "WebOsHtmlVideoPlayer", "WebOsPlaybackPlayerFactory", "PalmSystem",
     ]);
-    const concretePlayerPath = /\/platform\/(?:tizen\/(?:avplay-player|live-relay-player)|browser\/html-video-player)(?:\.ts)?$/;
+    const concretePlayerPath = /\/platform\/(?:tizen\/(?:avplay-player|live-relay-player)|browser\/html-video-player|webos\/(?:runtime|html-video-player|player-factory))(?:\.ts)?$/;
     for (const path of productionFiles(resolve(sourceRoot, "app"))) {
       const file = parse(path);
       for (const item of moduleSpecifiers(file)) {

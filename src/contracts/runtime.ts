@@ -2,7 +2,7 @@ import type { PlaybackPlayerFactory } from "../platform/media-player.ts";
 import type { PlaybackReleaseBarrier } from "../application/playback-release-barrier.ts";
 import type { CatalogueRepositoryFactory, PreferencesRepository, TransportRepository } from "./repository.ts";
 
-export type RuntimePlatform = "browser" | "tizen";
+export type RuntimePlatform = "browser" | "tizen" | "webos";
 export type InteractionProfile = "desktop" | "touch" | "tv";
 
 export interface RuntimeCapabilities {
@@ -18,7 +18,7 @@ export interface AppRuntime {
   platform: RuntimePlatform;
   interactionProfile: InteractionProfile;
   capabilities: RuntimeCapabilities;
-  input: { registerKeys(): void };
+  input: { registerKeys(): void; platformBack?(): void; isKeyboardVisible?(): boolean };
   playbackFactory: PlaybackPlayerFactory;
   playbackRelease: PlaybackReleaseBarrier;
   transport: TransportRepository;

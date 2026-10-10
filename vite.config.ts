@@ -4,7 +4,9 @@ import legacy from "@vitejs/plugin-legacy";
 import { ensurePersonalRelayEnvironment } from "./scripts/live-relay-personal-config.ts";
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
+  const isWebosBuild = process.env.WEBOS_BUILD === "1";
+  const isWebosPersonalBuild = isWebosBuild && process.env.PERSONAL_BUILD === "1";
+  const env = isWebosPersonalBuild ? loadEnv(mode, process.cwd(), "") : isWebosBuild ? {} : loadEnv(mode, process.cwd(), "");
   const apiKey = env.OPENSUBTITLES_API_KEY;
   const tmdbApiReadAccessToken = env.TMDB_API_READ_ACCESS_TOKEN;
   const tmdbApiKey = env.TMDB_API_KEY;
@@ -21,6 +23,11 @@ export default defineConfig(({ mode }) => {
   const isPublicBuild = process.env.PUBLIC_BUILD === "1";
   const useLocalProviderProxy = process.env.CHROMIUM47_PREVIEW === "1";
   const tizenCompatibilityTarget = process.env.TIZEN_COMPAT_TARGET;
+  if (isWebosBuild && (useLocalProviderProxy || tizenCompatibilityTarget
+    || (isWebosPersonalBuild && process.env.PUBLIC_BUILD === "1")
+    || (!isWebosPersonalBuild && (isPersonalBuild || process.env.PUBLIC_BUILD !== "1")))) {
+    throw new Error("LG webOS builds require either clean public mode or explicit personal mode, without preview-proxy or Tizen settings");
+  }
   if (tizenCompatibilityTarget !== undefined && tizenCompatibilityTarget !== "tizen6") {
     throw new Error("TIZEN_COMPAT_TARGET must be tizen6 when it is set");
   }
@@ -47,6 +54,7 @@ export default defineConfig(({ mode }) => {
     : null;
   return {
     base: "./",
+    ...(isWebosBuild ? { envDir: false } : {}),
     // The optional DVB decoder uses a module worker so its WASM decoder and
     // worker-only dependencies never enter the browser UI bundle.
     worker: { format: "es" },
@@ -56,7 +64,9 @@ export default defineConfig(({ mode }) => {
     optimizeDeps: { exclude: ["libbitsub"] },
     // Keep the default build unchanged for the existing Tizen 3 package. The
     // Tizen 6 package uses a CSS target appropriate for its Chromium M76 engine.
-    ...(tizenCompatibilityTarget === "tizen6" ? {
+    ...(isWebosBuild ? {
+      build: { target: "chrome120" },
+    } : tizenCompatibilityTarget === "tizen6" ? {
       build: {
         cssTarget: "chrome76",
       },
@@ -74,7 +84,7 @@ export default defineConfig(({ mode }) => {
     // automatically include only the polyfills referenced by application code.
     plugins: [
       react(),
-      legacy({
+      ...(!isWebosBuild ? [legacy({
         targets: ["Chrome >= 47"],
         // Tizen 6 advertises support for module scripts, but when its modern
         // entry fails Vite's feature probe still prevents the legacy fallback
@@ -82,7 +92,7 @@ export default defineConfig(({ mode }) => {
         // this package, avoiding that false-positive path altogether.
         ...(tizenCompatibilityTarget === "tizen6" ? { renderModernChunks: false } : {}),
         polyfills: true,
-      }),
+      })] : []),
     ],
     server: {
       proxy: {

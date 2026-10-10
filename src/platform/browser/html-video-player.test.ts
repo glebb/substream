@@ -55,6 +55,55 @@ function fakeVideo(load: () => void = () => undefined): { video: HTMLVideoElemen
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); isHlsSupported.mockReset().mockReturnValue(false); hlsInstances.length = 0; canRemux.mockReset().mockReturnValue(false); remuxInstances.length = 0; });
 
 describe("HtmlVideoPlayer", () => {
+  it("releases the active source while keeping only a safe resume snapshot", () => {
+    class LifecycleTestPlayer extends HtmlVideoPlayer {
+      suspend() { return this.suspendForBackground(); }
+      resume(snapshot: NonNullable<ReturnType<HtmlVideoPlayer["suspendForBackground"]>>) { this.resumeFromBackground(snapshot); }
+    }
+    const { video } = fakeVideo();
+    Object.assign(video, { duration: 100, currentTime: 42, paused: false, ended: false });
+    const player = new LifecycleTestPlayer(video);
+    const progress = vi.fn();
+    player.setEventHandlers({ onStateChange: vi.fn(), onProgress: progress });
+    player.load("https://media.example.invalid/synthetic.mp4");
+
+    const snapshot = player.suspend();
+    expect(snapshot).toEqual({ streamUrl: "https://media.example.invalid/synthetic.mp4", currentTimeSeconds: 42, restorePosition: true, wasPlaying: true });
+    expect(video.pause).toHaveBeenCalled();
+    expect(video.removeAttribute).toHaveBeenCalledWith("src");
+    expect(progress).toHaveBeenLastCalledWith({ currentTimeSeconds: 42, durationSeconds: 100 });
+
+    player.resume(snapshot!);
+    expect(video.src).toBe("https://media.example.invalid/synthetic.mp4");
+    expect(video.currentTime).toBe(42);
+    player.destroy();
+  });
+
+  it("preserves a pending VOD seek but does not restore an absolute live playhead", () => {
+    class LifecycleTestPlayer extends HtmlVideoPlayer {
+      suspend() { return this.suspendForBackground(); }
+    }
+    const vod = fakeVideo();
+    Object.assign(vod.video, { readyState: 0, duration: 100, currentTime: 0, paused: true });
+    const vodPlayer = new LifecycleTestPlayer(vod.video);
+    vodPlayer.load("https://media.example.invalid/synthetic.mp4");
+    vodPlayer.seekTo(66);
+    const vodSnapshot = vodPlayer.suspend();
+    expect(vodSnapshot?.currentTimeSeconds).toBe(66);
+    expect(vodSnapshot?.restorePosition).toBe(true);
+    vodPlayer.destroy();
+
+    const live = fakeVideo();
+    Object.assign(live.video, { readyState: 2, duration: Number.POSITIVE_INFINITY, currentTime: 340, paused: false });
+    const livePlayer = new LifecycleTestPlayer(live.video);
+    // Use a synthetic direct media URL: the live-duration behavior under test
+    // does not need to start a background hls.js dynamic import.
+    livePlayer.load("https://media.example.invalid/synthetic.ts");
+    const liveSnapshot = livePlayer.suspend();
+    expect(liveSnapshot?.restorePosition).toBe(false);
+    livePlayer.destroy();
+  });
+
   it("retries a buffered native network failure at the saved position without exposing credentials", async () => {
     vi.useFakeTimers();
     const { video, dispatch } = fakeVideo();
@@ -169,7 +218,8 @@ describe("HtmlVideoPlayer", () => {
     const states: string[] = [];
     player.setEventHandlers({ onStateChange: (state) => states.push(state) });
     player.load("https://media.example.invalid/movie.m3u8");
-    await vi.waitFor(() => expect(hlsInstances).toHaveLength(1));
+    await vi.waitFor(() => expect(hlsInstances).toHaveLength(1), { timeout: 5_000 });
+    expect(hlsInstances).toHaveLength(1);
     const hls = hlsInstances[0] as { on: ReturnType<typeof vi.fn>; startLoad: ReturnType<typeof vi.fn>; recoverMediaError: ReturnType<typeof vi.fn>; loadSource: ReturnType<typeof vi.fn> };
     const error = hls.on.mock.calls.find(([event]) => event === "error")![1];
     video.currentTime = 35;
@@ -199,7 +249,8 @@ describe("HtmlVideoPlayer", () => {
     const player = new HtmlVideoPlayer(video);
     const url = "https://media.example.invalid/movie.m3u8";
     player.load(url);
-    await vi.waitFor(() => expect(hlsInstances).toHaveLength(1));
+    await vi.dynamicImportSettled();
+    expect(hlsInstances).toHaveLength(1);
     const hls = hlsInstances[0] as { levels: unknown[]; on: ReturnType<typeof vi.fn>; loadSource: ReturnType<typeof vi.fn>; startLoad: ReturnType<typeof vi.fn> };
     hls.levels = [];
     hls.on.mock.calls.find(([event]) => event === "error")![1]("error", { fatal: true, type: "networkError" });
@@ -380,7 +431,8 @@ describe("HtmlVideoPlayer", () => {
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     const prepRequest = vi.mocked(fetch).mock.calls[0]?.[1];
     expect(JSON.parse(String(prepRequest?.body))).toMatchObject({ startSeconds: 87 });
-    await vi.waitFor(() => expect(hlsInstances).toHaveLength(1));
+    await vi.dynamicImportSettled();
+    expect(hlsInstances).toHaveLength(1);
 
     media.readyState = 1;
     media.duration = 7.8;

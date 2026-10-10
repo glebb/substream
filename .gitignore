@@ -13,6 +13,12 @@ tizen/Debug/
 tizen/.package-variant
 tizen/.tizen-rds/
 tizen/**/*.wgt
+/webos/dist/
+/webos/packages/
+/webos/personal-dist/
+/webos/personal-packages/
+.webos-cli.local
+.webos-devices.local
 coverage/
 .DS_Store
 *.log
