@@ -613,6 +613,50 @@ describe("HtmlVideoPlayer", () => {
     player.destroy();
   });
 
+  it.each(["startup", "resume"])("keeps intentionally paused LG VOD paused beyond the %s deadline and rearms on play", async (phase) => {
+    vi.useFakeTimers();
+    const { video, dispatch } = fakeVideo();
+    Object.assign(video, { paused: false, readyState: 1 });
+    const player = new WebOsHtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    player.load("https://media.example.invalid/episode.mkv");
+    await Promise.resolve();
+    if (phase === "resume") {
+      Object.assign(video, { readyState: 4, currentTime: 42 });
+      dispatch("playing");
+      dispatch("timeupdate");
+      player.pause();
+      Object.assign(video, { paused: true });
+      dispatch("pause");
+      player.play();
+      Object.assign(video, { paused: false });
+      await Promise.resolve();
+      dispatch("playing");
+    }
+    dispatch("waiting");
+    player.pause();
+    Object.assign(video, { paused: true });
+    dispatch("pause");
+    const stateCount = states.length;
+    vi.advanceTimersByTime(90_000);
+    expect(states.at(-1)).toBe("paused");
+    expect(states).toHaveLength(stateCount);
+    expect(player.getPlaybackDiagnostics()).not.toContain("Startup timed out");
+    // Resume still detects a genuine startup stall with a fresh VOD deadline.
+    Object.assign(video, { readyState: 1 });
+    player.play();
+    Object.assign(video, { paused: false });
+    await Promise.resolve();
+    vi.advanceTimersByTime(44_999);
+    expect(states).not.toContain("error");
+    vi.advanceTimersByTime(1);
+    expect(states.at(-1)).toBe("error");
+    expect(player.getPlaybackDiagnostics()).toContain("Startup timed out");
+    player.destroy();
+  });
+
   it("still times out stalled VOD and gives an explicit retry the VOD deadline", async () => {
     vi.useFakeTimers();
     const { video } = fakeVideo();

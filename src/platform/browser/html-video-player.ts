@@ -685,7 +685,10 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   pause(): void {
     this.userPaused = true;
-    if (this.recoveryActive) this.clearPlaybackStartTimer();
+    // An intentional pause can outlast the startup/resume deadline even when
+    // no network recovery is active. Resume arms a fresh deadline in play().
+    this.clearPlaybackStartTimer();
+    this.clearBufferingTimer();
     this.cancelRecovery();
     this.video.pause();
   }
@@ -998,7 +1001,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.clearPlaybackStartTimer();
     this.playbackStartTimer = setTimeout(() => {
       this.playbackStartTimer = undefined;
-      if (generation !== this.loadGeneration
+      if (generation !== this.loadGeneration || this.userPaused
         || (!this.recoveryActive && !this.video.paused && this.video.readyState >= 2 && this.video.currentTime > 0)) return;
       this.hls?.destroy();
       this.hls = undefined;

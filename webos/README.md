@@ -206,6 +206,13 @@ past 118 seconds with no media error and no blob/remux source. This validates
 that episode's native playback and saved-position restoration, not all codecs
 or track-selection combinations.
 
+The same episode was also paused immediately after a resume and held for
+96 seconds on 2026-10-10. The playhead stayed fixed, the paused title remained
+visible, and no startup timeout or error overlay appeared. The media Play
+control then resumed 1080p playback and advanced by five seconds without an
+error. Intentional pause cancels the startup and buffering deadlines; resuming
+arms a fresh deadline for a genuine playback stall.
+
 Still pending physical-TV checks include provider command resolution, local
 subtitle transfer and seek, VOD seek/resume, audio and subtitle track
 selection, broader container/codec coverage, Magic Remote pointer and D-pad
