@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deployPersonalWebos } from "./webos.mjs";
+import { deployPersonalAndroidEmulator } from "./android.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -12,8 +13,12 @@ export function resolveDeployment(args, environment = process.env) {
     if (rest.length > 1) throw new Error("Tizen deployment accepts at most one explicit TV address.");
     return { platform: "tizen", args: [target, ...rest] };
   }
+  if (target === "android") {
+    if (rest.length > 1) throw new Error("Android deployment accepts at most one emulator serial.");
+    return { platform: "android", serial: rest[0] };
+  }
   if (rest.length || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(target ?? "")) {
-    throw new Error("Usage: npm run deploy <tizen3|tizen6|registered-LG-device>. Set LG_WEBOS_DEVICE in .env for a default LG target.");
+    throw new Error("Usage: npm run deploy <android|tizen3|tizen6|registered-LG-device>. Set LG_WEBOS_DEVICE in .env for a default LG target.");
   }
   return { platform: "webos", device: target };
 }
@@ -28,6 +33,10 @@ export function main(args = process.argv.slice(2)) {
   }
   if (deployment.platform === "webos") {
     deployPersonalWebos(deployment.device);
+    return;
+  }
+  if (deployment.platform === "android") {
+    deployPersonalAndroidEmulator(deployment.serial);
     return;
   }
   // Preserve the existing interactive VS Code build/sign flow for Samsung.

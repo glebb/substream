@@ -1,18 +1,20 @@
 # Keyboard and remote navigation
 
-The yellow focus highlight identifies the control Enter activates. Selection, DOM focus, and the rendered item must stay synchronized; movement must not infer layout from computed CSS. LG webOS uses the shared TV navigation profile and normal browser pointer handling; it does not add a separate cursor-mode navigation system.
+The yellow focus highlight identifies the control Enter activates. Selection, DOM focus, and the rendered item must stay synchronized; movement must not infer layout from computed CSS. LG webOS and Android TV use the shared TV navigation profile. LG retains normal browser pointer handling; Android uses WebView D-pad/OK events and a native Back-to-Escape bridge.
 
 ## Home and Live TV
 
 | View | Arrows | Enter | Back / Escape / Samsung Return / LG Back |
 | --- | --- | --- | --- |
-| Home | Move between Live TV, Video-On-Demand, the local-file action when supported, and Settings | Open selected action | LG invokes platform Back after keyboard dismissal; browser/Tizen stay home |
+| Home | Move between Live TV, Video-On-Demand, the local-file action when supported, and Settings | Open selected action | LG invokes platform Back after keyboard dismissal; browser/Tizen stay home; Android routes Back to Escape |
 | Live categories/channels | Up/Down one row; Up from first row reaches header; in channels, Left reaches Categories and Right reaches Main menu; in categories, either reaches Main menu | Open category or tune channel | Channels → categories → home |
 | Live player | Up/Down previous/next channel; windowed Left/Right moves between controls | Activate focused control | Stop playback and return to channels |
 
 Live playback starts fullscreen with controls hidden. Channel changes stop at list boundaries. Windowed controls include fullscreen, previous/next, retry on error, and Back to channels. Browser live-buffer controls appear only when a buffer is available. Browser-native fullscreen exit also returns to channels unless the app requested that exit. Live playback does not use the VOD seek/pause key behavior.
 
 On LG, the remote Back key (key code 461) follows the same screen-by-screen routes. At Home, the adapter invokes the platform Back action (`PalmSystem.platformBack` on the packaged runtime); while the system virtual keyboard is visible, the app leaves Back unhandled so the keyboard can close first. Check pointer clicks and wheel scrolling as well as D-pad focus on the physical Magic Remote. Standard play/pause/seek controls remain on screen where a dedicated media key is unavailable.
+
+On Android, the native shell maps Back, Escape and gamepad B to a WebView Escape key event. D-pad and OK use WebView key handling. Remote behavior, on-screen keyboard dismissal and focus restoration still need physical Mi Box verification; see the [Android checklist](verification.md#android-tv--mi-box-s-check).
 
 ## VOD browsing
 

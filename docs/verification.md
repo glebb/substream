@@ -11,9 +11,13 @@ npm run build:tizen
 npm run build:tizen:6
 npm run build:webos
 npm run package:webos
+npm run test:android-packaging
+npm run package:android
 ```
 
 `check` typechecks the app/configuration and runs unit tests. Fixtures must be synthetic; never put private playlists, credentials, signed media URLs, or provider payloads in tests or logs. Successful builds do not establish physical-TV compatibility. Test totals are intentionally not recorded here because they change with the suite.
+
+Android packaging requires JDK 17 and Android SDK Platform 35/Build Tools 34.0.0. Its clean debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. `test:android-packaging` checks the build environment and payload audit with synthetic values; it does not compile Kotlin or test a device. The clean package must contain no `.env` defaults. `package:android:personal` and `deploy android` produce a private APK with recoverable `.env` defaults; `deploy android` targets a running emulator only. See the [Mi Box guide](mi-box-port-plan.md).
 
 For documentation-only changes, check links, script names, and claims against source; no personal playlist or TV session is needed.
 
@@ -125,6 +129,20 @@ Prepare, sign, collect and install the correct target using [the Tizen guide](..
 6. Confirm Tizen 3's dark colors, flex layouts, bounded list, spacing and yellow focus at native resolution.
 
 Hardware playback, long-running stability and measured remote responsiveness remain release checks until recorded on the target device.
+
+## Android TV / Mi Box S check
+
+No physical Mi Box result is recorded yet. A locally produced debug APK and passing synthetic checks establish buildability, not device behavior. Record the box model, Android version, WebView version, display size/density, firmware and APK version code in ignored local deployment notes. Check Android 8.1 (API 27) separately if the available box has been updated.
+
+1. Install the clean debug APK from USB using the [Mi Box installation steps](mi-box-port-plan.md#usb-installation). Confirm its launcher entry and first launch. Enter only test settings on the box; keep any personal APK off shared media.
+2. Using only the remote, navigate Home, Search, Settings, categories, details, episodes and playback. Check D-pad, OK, Back, text entry, focus recovery, repeated keys and visible action controls for favourites. Test the actual box's CSS viewport, native video bounds and overlays in preview and fullscreen.
+3. With companion and relay disabled, import a synthetic or otherwise authorized test catalogue; reopen the app and verify settings, favourites, unknown-entry classification evidence and VOD resume persist. Try a playlist larger than 16 MiB separately; the current Android request bridge cannot import it as one response.
+4. Play known H.264/AAC HLS, MPEG-TS and MP4 samples, then test live channel changes, VOD seek/resume, audio tracks and external/embedded subtitles. Record 4K, HEVC, HDR and surround-audio outcomes separately. Do not infer codec or DVB subtitle support from the APK or emulator.
+5. Test network loss/recovery, app Home/background/foreground, sleep/wake, repeated channel changes, playback exit and an extended session. Check native player release and audio-focus behavior. Confirm Android's unavailable subtitle timing/styling and live relay controls are not presented as working features.
+6. If companion pairing or local-media receiving is enabled, test pairing, provider selection resolution, one staged synthetic file, stop/reconnect and helper outage separately. Inspect synthetic destinations and payloads to confirm provider/API credentials remain on the device and go only to their intended hosts.
+7. For an update check, increment `versionCode`, sign with the same key, install over the existing app from USB and verify retained data. A debug APK and a differently signed release APK cannot update each other in place.
+
+Record sanitized pass/fail outcomes and the device/software versions. Do not put provider URLs, credentials, signed media URLs or private device addresses in screenshots, logs or committed docs.
 
 ## LG webOS physical-TV check
 

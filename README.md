@@ -1,12 +1,12 @@
 # Substream
 
-Substream is an IPTV live TV and video-on-demand player for Samsung Tizen TVs, LG webOS TVs and browsers. It supports M3U libraries, on-demand Xtream catalogues, TMDb details, OpenSubtitles downloads, local video files, local favourites, and playback resume.
+Substream is an IPTV live TV and video-on-demand player for Samsung Tizen TVs, LG webOS TVs, Android TV and browsers. It supports M3U libraries, on-demand Xtream catalogues, TMDb details, OpenSubtitles downloads, local video files, local favourites, and playback resume.
 
 Live TV currently requires an Xtream-compatible `get.php` source. It browses Finnish provider categories, shows available programme information, and plays embedded subtitles when the stream and device support them. The optional trusted-LAN companion service sends VOD selections and streams a selected browser file from the computer to a paired TV. The computer and companion service must stay available during computer-file playback on the TV. Hosted browsers use the fixed `/public/nordic-epg` endpoint for the public SkyShowtime guide; packaged TVs fetch the feed directly. Local development can use a companion guide bridge. See [Current behavior and architecture](docs/status.md#live-tv).
 
 ![Substream home screen](docs/images/substream-home.png)
 
-The UI and navigation are shared across platforms. Runtime ports select browser, Tizen and webOS adapters; companion control and subtitle relay routing have independent enablement. Mi Box support is deferred. See [shared architecture](docs/cross-platform-architecture.md).
+The UI and navigation are shared across platforms. Runtime ports select browser, Tizen, webOS and Android adapters; companion control and subtitle relay routing have independent enablement. Android debug APKs have been built locally; physical Mi Box compatibility and playback remain unverified. See [shared architecture](docs/cross-platform-architecture.md) and the [Mi Box build guide](docs/mi-box-port-plan.md).
 
 ## Features
 
@@ -18,7 +18,7 @@ The UI and navigation are shared across platforms. Runtime ports select browser,
 - **Personal library:** save favourites and continue watching progress locally on the device.
 - **Play on TV:** pair a browser with named TVs using one-time codes, choose a playback target, and send VOD selections or local media over the optional trusted-LAN companion service.
 - **Finnish and English UI:** switch the app language in Settings.
-- **Samsung Tizen, LG webOS and browsers:** Samsung uses AVPlay; LG uses the shared HTML-video player with a webOS lifecycle adapter. Feature and codec support depend on the platform. See [current support](docs/status.md).
+- **Samsung Tizen, LG webOS, Android TV and browsers:** Samsung uses AVPlay; LG uses the shared HTML-video player; Android uses a bundled WebView UI and native Media3 playback. Feature and codec support depend on the platform. See [current support](docs/status.md).
 
 ## LG webOS TV
 
@@ -36,6 +36,10 @@ companion pairing, staged H.264/AAC MP4 playback/stop, and pairing reset/re-pair
 passed a physical smoke check on 2026-10-10. Provider commands, subtitles, seek
 and broader device acceptance remain pending; the Samsung live subtitle relay
 remains disabled on LG.
+
+## Android TV and Xiaomi Mi Box S
+
+Build a clean debug APK with `npm run package:android`. It can be copied to a USB drive and installed on the Mi Box using a TV file manager. `npm run deploy android` builds a private APK from `.env` defaults and installs it on a running **emulator only**. Keep that private APK local: its defaults can be recovered from the file. Android needs JDK 17 and the Android SDK as well as Node.js. The APK build has succeeded locally, but installation, remote navigation, playback, subtitles and persistence on a physical Mi Box still need acceptance. See the [Android build, USB installation and verification guide](docs/mi-box-port-plan.md).
 
 ## Start in a browser
 
@@ -60,7 +64,7 @@ npm run dev:personal
 
 This starts Vite with personal defaults and the trusted-LAN VOD/local-file companion; Ctrl+C stops both. The live subtitle relay is a separate process started with `npm run relay:personal`; `dev:personal` does not start it. Personal builds embed credentials in the client bundle. Anyone with the bundle can recover them: never share or commit personal builds, `.env`, playlist URLs, tokens, or signed media URLs. UI-entered configuration is stored locally on the device; it is not a secret vault.
 
-Standard builds do not embed provider/API credentials. Standard browser/Tizen builds may embed `COMPANION_SERVER_URL`; clean LG and public browser builds ignore all `.env` defaults. Development proxies stay isolated to local tooling. Distributed apps must preserve the [client credential boundary](docs/client-credential-policy.md).
+Standard builds do not embed provider/API credentials. Standard browser/Tizen builds may embed `COMPANION_SERVER_URL`; clean LG/Android and public browser builds ignore `.env` defaults. Development proxies stay isolated to local tooling. Distributed apps must preserve the [client credential boundary](docs/client-credential-policy.md).
 
 ## Public static deployment
 
@@ -94,10 +98,16 @@ The hosted web app uses temporary IP-bound access links created from the indepen
 | `npm run build:tizen` | Tizen 3 web payload in `tizen/dist/` |
 | `npm run build:tizen:6` | Tizen 6+ payload in the same directory |
 | `npm run build:webos` / `npm run package:webos` | Clean LG payload / installable `.ipk` |
+| `npm run build:android:web` | Build and audit clean Android WebView assets |
+| `npm run package:android` | Build assets and create Android debug APK |
+| `npm run package:android:personal` | Private Android debug APK with `.env` defaults |
+| `npm run package:android:release` | Build assets and create unsigned Android release APK |
+| `npm run test:android-packaging` | Synthetic Android asset and credential boundary checks |
 | `npm run package:webos:personal` | Private LG `.ipk` with `.env` defaults |
 | `npm run deploy <registered-LG-device>` | Build personal LG package, install and launch |
 | `npm run deploy` | Same LG deployment using `LG_WEBOS_DEVICE` from `.env` |
 | `npm run deploy tizen3` / `npm run deploy tizen6` | Existing Samsung personal build/sign/deploy workflow |
+| `npm run deploy android` | Build private Android APK from `.env`, install and launch on the running emulator; append an emulator serial when several are running |
 | `npm run test:webos-packaging` | Synthetic LG build flags, package audit and CLI credential isolation |
 | `npm run preview:chromium47` | Docker-based legacy UI preview; append `-- stop` to clean up |
 | `npm run preview:chromium47:personal` | Preview with private `.env` defaults |
@@ -122,6 +132,6 @@ Build commands also have `:personal` variants. See [package.json](package.json) 
 - [Local-file playback](docs/local-file-playback.md): file ownership, subtitles, computer-to-TV streaming and limitations.
 - [Live subtitle relay](docs/live-subtitle-relay.md): automatic Multi-Sub routing, local setup and recovery.
 - [Subtitle relay deployment](docs/live-subtitle-relay-deployment.md): generic hosted setup, update workflow and validation; actual deployment records stay local.
-- [Mi Box port plan](docs/mi-box-port-plan.md): deferred Android work; no APK exists.
+- [Mi Box Android build and port status](docs/mi-box-port-plan.md): prerequisites, APK commands, USB installation, and remaining device acceptance.
 
 TMDb supplies metadata and artwork; Substream is not endorsed or certified by TMDb. Keep the required TMDb attribution visible when distributing the app. OpenSubtitles is an external service; Substream is not affiliated with or endorsed by it.

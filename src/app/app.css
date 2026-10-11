@@ -8,6 +8,8 @@
  * The grid-enhanced rules at the end are opt-in for modern browsers.
  */
 html, body { background: #080a10; color: #f4f7ff; font-family: Arial, Helvetica, sans-serif; }
+html.android-native-playback, body.android-native-playback { background: transparent; }
+html.android-native-playback #root, body.android-native-playback #root { background: transparent; }
 body { margin: 0; overflow-x: hidden; }
 .header-actions { display: flex; }
 .header-actions > * + * { margin-left: .65rem; }
@@ -213,6 +215,9 @@ button:disabled { cursor: default; opacity: .45; }
 .video-info-overlay > * + * { margin-top: .3rem; }
 .video-info-overlay span { color: #dbe9ff; font-variant-numeric: tabular-nums; }
 .player { background: #000; display: block; margin: 0; width: 100%; }
+.android-native-playback .player-screen .player,
+.android-native-playback .player-screen.is-fullscreen .player { background: transparent; }
+.android-native-playback .player-screen.is-fullscreen { background: transparent; }
 .playback-progress { align-items: center; color: #dbe9ff; display: flex; font-variant-numeric: tabular-nums; margin-top: .5rem; }
 .playback-progress progress, .history-progress { accent-color: var(--blue); flex: 1; height: .65rem; }
 /* Chromium 47 does not support aspect-ratio; give AVPlay a real display rect. */
@@ -541,6 +546,20 @@ button:disabled { cursor: default; opacity: .45; }
   margin: 14px;
   width: calc(25% - 28px);
 }
+/* Keep enough room beside the fixed poster for readable title copy on
+ * Android-sized TV-profile viewports. */
+@media (max-width: 1100px) {
+  .tv-ui .tv-title-list-viewport .groups.title-grid.tv-title-list > .tile {
+    flex-basis: calc(50% - 28px);
+    width: calc(50% - 28px);
+  }
+}
+@media (max-width: 700px) {
+  .tv-ui .tv-title-list-viewport .groups.title-grid.tv-title-list > .tile {
+    flex-basis: calc(100% - 28px);
+    width: calc(100% - 28px);
+  }
+}
 .tv-ui .title-details { width: 100%; }
 .tv-ui .details-copy { max-width: none; }
 .tv-ui .details-actions button { min-height: 52px; }
@@ -713,6 +732,32 @@ button:disabled { cursor: default; opacity: .45; }
 @media (max-width: 1400px) {
   .tv-ui .group-grid > .favourite-tile { flex-basis: calc(33.333% - 16px); width: calc(33.333% - 16px); }
   .tv-ui .group-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* Grid already sizes each wrapper. A percentage width here is applied
+   * inside that grid cell and squeezes Android cards to about 80px. */
+  @supports (display: grid) {
+    .tv-ui .group-grid > .favourite-tile { width: auto; }
+  }
+}
+@media (max-width: 800px) {
+  .tv-ui .group-grid > .favourite-tile { flex-basis: calc(50% - 16px); width: calc(50% - 16px); }
+  .tv-ui .group-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @supports (display: grid) {
+    .tv-ui .group-grid > .favourite-tile { width: auto; }
+  }
+}
+@media (max-width: 519px) {
+  .tv-ui .group-grid > .favourite-tile { flex-basis: calc(100% - 16px); width: calc(100% - 16px); }
+  .tv-ui .group-grid { grid-template-columns: 1fr; }
+  @supports (display: grid) {
+    .tv-ui .group-grid > .favourite-tile { width: auto; }
+  }
+}
+@media (max-height: 600px) {
+  .screen.tv-ui { padding-top: 12px; padding-bottom: 12px; }
+  .tv-ui .app-header { margin-bottom: 7px; padding-bottom: 7px; }
+  .tv-ui .browse-tabs { margin-bottom: 6px; padding-bottom: 3px; }
+  .tv-ui .collection-heading { margin: 6px 0; }
+  .tv-fixed-list-screen .fixed-list-viewport { padding-top: 8px; padding-bottom: 8px; }
 }
 @media (max-width: 900px) {
   .tv-ui .settings-screen > .settings-section { flex-basis: calc(100% - 16px); width: calc(100% - 16px); }

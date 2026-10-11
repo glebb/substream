@@ -78,6 +78,12 @@ only an allowlist of runtime/path/key-store environment variables. Their raw
 output is suppressed. Deployment settings are not compiled into the app, and
 package auditing rejects `.env` and `.local` records. See [LG setup](../webos/README.md).
 
+## Android packaged builds and deployment tooling
+
+Android settings and catalogue remain device-owned. Runtime provider/API requests use a native HTTP(S) bridge that connects from the device directly to the requested host; Media3 requests provider media from the device. Android companion authentication remains separate from provider/API credentials, and live subtitle relay is disabled. This routing must be checked with synthetic credentials whenever it changes.
+
+Explicit personal Android packaging and emulator deployment use the same private-build allowance. The `.env` defaults are compiled into a private, ignored APK for local testing, and are recoverable from that APK. Vite receives the personal build inputs; Gradle and ADB receive only an allowlist of tool environment variables, with raw output suppressed. Clean Android assets and APKs use public build mode and are kept separate from the private build workspace. Do not publish or distribute the personal APK. Local Android WebView storage is not a secret vault.
+
 ## Current implementation and limits
 
 The browser settings adapters store playlist, OpenSubtitles and TMDb settings

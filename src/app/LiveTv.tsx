@@ -162,6 +162,7 @@ export function LiveTv({ onMainMenu }: Props) {
   const [retryCount, setRetryCount] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const objectRef = useRef<HTMLObjectElement | null>(null);
+  const androidContainerRef = useRef<HTMLDivElement | null>(null);
   const playerStageRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<MediaPlayer | null>(null);
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -592,8 +593,9 @@ export function LiveTv({ onMainMenu }: Props) {
     const controller = new LivePlaybackController({
       directStreamUrl: streamUrl,
       createDirect: () => runtime.playbackFactory.createDirect({
+        playbackKind: "live",
         videoElement: videoRef.current,
-        container: objectRef.current,
+        container: runtime.platform === "android" ? androidContainerRef.current : objectRef.current,
         streamUrl,
         ...(!directFallback && liveSource === "hls" ? { transportStreamMetadataUrl: client.liveStreamUrl(selected.providerStreamId, "ts") } : {}),
       }),
@@ -909,7 +911,7 @@ export function LiveTv({ onMainMenu }: Props) {
     return <Localized language={language}><main className={`screen player-screen live-player-screen ${playerFullscreen ? "is-fullscreen" : ""} ${!isTvProfile && showTouchControls ? "has-visible-controls" : ""}`}>
     <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span>{!isTvProfile && <button type="button" onClick={leavePlayer}>Back to channels</button>}</header>
     <div className="player-stage" ref={playerStageRef} tabIndex={-1} onClick={() => { if (!isTvProfile && playerFullscreen) setShowTouchControls((visible) => !visible); else if (playerFullscreen) showControls(); }}>
-      {runtime.capabilities.nativeVideoSurface ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
+      {runtime.platform === "android" ? <div ref={androidContainerRef} className="player tizen-player" aria-label="Video player" /> : runtime.capabilities.nativeVideoSurface ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
       {showStreamInfo && <StreamInfoOverlay playerRef={playerRef} />}
       {playbackState === "loading" || (playbackState === "buffering" && !hasStartedPlayback) ? <div className="buffering-overlay">Connecting…</div> : null}
       {playbackState === "paused" && !isTvProfile && <div className="playback-error-overlay"><button type="button" onClick={(event) => { event.stopPropagation(); playerRef.current?.play(); }}>Play</button></div>}

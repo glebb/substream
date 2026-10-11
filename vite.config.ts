@@ -6,6 +6,7 @@ import { createWebosPackageDefaults } from "./scripts/webos-config.mjs";
 
 export default defineConfig(({ mode }) => {
   const isWebosBuild = process.env.WEBOS_BUILD === "1";
+  const isAndroidBuild = process.env.ANDROID_BUILD === "1";
   const isWebosPersonalBuild = isWebosBuild && process.env.PERSONAL_BUILD === "1";
   const env = isWebosPersonalBuild ? loadEnv(mode, process.cwd(), "") : isWebosBuild ? {} : loadEnv(mode, process.cwd(), "");
   const apiKey = env.OPENSUBTITLES_API_KEY;
@@ -52,7 +53,7 @@ export default defineConfig(({ mode }) => {
     : null;
   return {
     base: "./",
-    ...(isWebosBuild ? { envDir: false } : {}),
+    ...((isWebosBuild || isAndroidBuild) ? { envDir: false } : {}),
     // The optional DVB decoder uses a module worker so its WASM decoder and
     // worker-only dependencies never enter the browser UI bundle.
     worker: { format: "es" },

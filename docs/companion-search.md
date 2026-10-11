@@ -2,6 +2,8 @@
 
 Search also uses the shared catalogue/provider flow on LG webOS. LG supports companion pairing as a Play on TV target and can receive provider playback commands and computer-staged local-media sessions. The TV still has no local-file picker. See [LG capabilities](cross-platform-architecture.md#lg-webos-adapter).
 
+Android TV also uses the shared search and companion flows, with device-side provider resolution and no local-file picker. Its native playback and companion receiver paths still need Mi Box acceptance; see [Android verification](verification.md#android-tv--mi-box-s-check).
+
 Search belongs to the app and works without a TV, relay, or companion service. It searches the imported M3U catalogue on this device and, for an Xtream-compatible playlist, can refresh and search the provider's movie and series catalogue. Choosing a result opens the same details and playback flow used by browsing.
 
 On TV layouts, Search is a browse tab and all essential controls have a D-pad route. Focus the Search title control and press Enter to edit; Back leaves the editor. From the editor, Down reaches refresh, then the first result. Up returns toward the Search tab. The red Samsung key is an optional shortcut elsewhere in the app and is not needed to use Search.
@@ -14,7 +16,7 @@ On TV layouts, Search is a browse tab and all essential controls have a D-pad ro
 - Search begins after two characters. Series results require choosing an episode before playback.
 - **Play here** resolves the provider stream using this app's own playlist and player. The provider must be reachable from this device.
 
-The VOD app uses runtime contracts for catalogue, preferences, transport, and playback. Platform code supplies the actual storage and network implementations, and the current playback factory still has browser DOM surface requirements. These boundaries let another platform reuse application behavior while keeping device-specific APIs in adapters.
+The VOD app uses runtime contracts for catalogue, preferences, transport, and playback. Platform code supplies storage and network implementations. Browser, Tizen and LG players use DOM media elements; Android uses a DOM bounds container to place its native Media3 surface. These boundaries keep device-specific APIs in adapters.
 
 ## Optional companion service
 
@@ -52,7 +54,7 @@ check on 2026-10-10 confirmed pairing, staged MP4 playback/stop and reset/re-pai
 provider command resolution, local subtitles and seek still need hardware checks.
 
 Public SkyShowtime guide delivery is separate from pairing: hosted browsers
-use `/public/nordic-epg`, and packaged Tizen/LG apps fetch the publisher directly.
+use `/public/nordic-epg`, and packaged Tizen/LG/Android apps fetch the publisher directly.
 Only local development may use the companion's `/api/nordic-epg` bridge.
 
 ## Browser MKV audio

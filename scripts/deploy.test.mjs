@@ -13,6 +13,12 @@ describe("deployment dispatch", () => {
     expect(resolveDeployment(["lg-explicit"], { LG_WEBOS_DEVICE: "lg-default" }).device).toBe("lg-explicit");
   });
 
+  it("selects the Android emulator, with an optional explicit serial", () => {
+    expect(resolveDeployment(["android"], { LG_WEBOS_DEVICE: "lg-default" })).toEqual({ platform: "android", serial: undefined });
+    expect(resolveDeployment(["android", "emulator-5554"], {})).toEqual({ platform: "android", serial: "emulator-5554" });
+    expect(() => resolveDeployment(["android", "emulator-5554", "extra"], {})).toThrow(/at most one emulator serial/);
+  });
+
   it("rejects missing targets, options and extra arguments without echoing private inputs", () => {
     for (const args of [[], ["--device"], ["lg-example", "private-secret"], ["lg-example;touch-file"]]) {
       expect(() => resolveDeployment(args, {})).toThrow(/Usage/);

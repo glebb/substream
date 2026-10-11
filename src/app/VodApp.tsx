@@ -413,6 +413,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const skipFeedbackTimerRef = useRef<number | null>(null);
   const subtitleOffsetTimerRef = useRef<number | null>(null);
   const avPlayContainerRef = useRef<HTMLObjectElement | null>(null);
+  const androidContainerRef = useRef<HTMLDivElement | null>(null);
   const playerStageRef = useRef<HTMLDivElement | null>(null);
   const openSubtitlesApiKeyRef = useRef<HTMLInputElement | null>(null);
   const startupImportStartedRef = useRef(false);
@@ -2676,9 +2677,10 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       };
       try {
         const player = runtime.playbackFactory.createDirect({
+          playbackKind: "vod",
           streamUrl: selectedTitle.streamUrl,
           videoElement: runtime.capabilities.nativeVideoSurface ? null : videoRef.current,
-          container: runtime.capabilities.nativeVideoSurface ? avPlayContainerRef.current : null,
+          container: runtime.platform === "android" ? androidContainerRef.current : runtime.capabilities.nativeVideoSurface ? avPlayContainerRef.current : null,
           onSubtitleCue: setVisibleSubtitle,
         }) ?? null;
         ownedPlayer = player;
@@ -3808,7 +3810,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             if (!isTvProfile && playerFullscreen) setShowFullscreenControls((visible) => !visible);
           }}
         >
-          {runtime.capabilities.nativeVideoSurface
+          {runtime.platform === "android"
+            ? <div className="player tizen-player" ref={androidContainerRef} aria-label="Video player" />
+            : runtime.capabilities.nativeVideoSurface
             ? <object className="player tizen-player" ref={avPlayContainerRef} type="application/avplayer" aria-label="Video player" />
             : <video className="player" autoPlay playsInline ref={videoRef} />}
           {playerFullscreen && isPlaybackBuffering && <div className="buffering-overlay" role="status" aria-live="polite">Buffering…</div>}
@@ -3981,7 +3985,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         {browseCollection !== "recent" && browseCollection !== "search" && <>
           <div className="collection-heading"><h2>{browseCollection === "favourites" ? "Favourite groups" : browseCollection === "movies" ? "Movies" : "Series"}</h2><p className="hint">{browseCollection === "favourites" ? "Your saved movie genres and series categories." : "Choose a group to browse its titles. Provider groups load when selected."}</p><p className="remote-key-hint">Press the red remote key to toggle the focused group as a favourite.</p>{favouriteStatus && <p className="hint" role="status" aria-live="polite">{favouriteStatus}</p>}</div>
           <div className={isTvProfile ? "groups group-grid fixed-list-viewport" : "groups group-grid"} ref={isTvProfile ? titleListViewportRef : undefined}>
-          {visibleGroups.map((group, index) => <div className={"favourite-tile" + (isTvProfile ? " fixed-list-item" : "")} key={group.id}><button className={"tile " + (index === focusIndex ? titleFocusClass : "")} style={isTvProfile ? categoryRowStyle : undefined} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
+          {visibleGroups.map((group, index) => <div className={"favourite-tile" + (isTvProfile ? " fixed-list-item" : "")} key={group.id}><button className={"tile " + (index === focusIndex ? titleFocusClass : "")} style={isTvProfile && runtime.platform !== "android" ? categoryRowStyle : undefined} onClick={() => { browseReturnFocusIndexRef.current = index; setFocusIndex(index); void openGroup(group, 0); }} ref={(element) => { tileRefs.current[index] = element; }} type="button">
             <strong translate="no" title={(isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language))}>{(isLatestVirtualGroup(group) ? translate("Latest", language) : formatGroupDisplayName(group.name, language))}</strong><span>{isLatestVirtualGroup(group) ? (group.contentType === "series" ? "Recently updated shows" : "Recently added movies") : group.providerCategoryId ? "Select to load titles" : `${group.count.toLocaleString()} titles`}</span>{!isLatestVirtualGroup(group) && favouriteGroupIds.includes(group.id) && <span className="favourite-indicator">★ Favourite</span>}
           </button>{!isLatestVirtualGroup(group) && <button className="quiet-button favourite-toggle" type="button" tabIndex={isTvProfile ? -1 : undefined} aria-label={`${favouriteGroupIds.includes(group.id) ? "Remove" : "Add"} ${group.name} ${favouriteGroupIds.includes(group.id) ? "from" : "to"} favourites`} onFocus={() => { if (isTvProfile) { setFocusIndex(index); window.requestAnimationFrame(() => tileRefs.current[index]?.focus()); } }} onClick={() => toggleFavouriteForGroup(group)}>{favouriteGroupIds.includes(group.id) ? "★ Favourite" : "☆ Add favourite"}</button>}</div>)}
           {!visibleGroups.length && <div className="empty-state"><h2>{browseCollection === "favourites" ? "No favourite groups yet" : `No ${browseCollection === "movies" ? "movie" : "series"} groups found`}</h2><p>{browseCollection === "favourites" ? "Use the red remote key on a group, or the button on a card, to save it on this device." : `Import a library with ${browseCollection === "movies" ? "movies" : "series"} to browse titles here.`}</p><button className="empty-state-action" type="button" ref={browseEmptyRecoveryRef} onClick={() => { browseTabTransitionRef.current = "content"; setBrowseCollection("recent"); setFocusIndex(0); }}>Browse recent</button></div>}

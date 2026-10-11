@@ -179,6 +179,9 @@ export interface MediaPlayer {
 
 /** Shared web UI request; the factory binds the available platform video surface. */
 export interface DirectPlayerRequest {
+  /** Playback intent for native engines that need it when opening a media item. */
+  playbackKind?: "live" | "vod";
+  resumeSeconds?: number;
   /** Browser video node, when the runtime uses HTML media playback. */
   videoElement?: HTMLVideoElement | null;
   /** Platform-owned video container, such as a Tizen AVPlay object element. */

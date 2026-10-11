@@ -1,6 +1,6 @@
 # Shared application architecture
 
-The browser, Samsung Tizen and LG webOS apps share React screens, styles, navigation and TypeScript domain rules. Runtime wiring selects adapters and describes device capabilities. Android/Mi Box support is deferred; no Android shell, bridge, adapter or APK target exists.
+The browser, Samsung Tizen, LG webOS and Android TV apps share React screens, styles, navigation and TypeScript domain rules. Runtime wiring selects adapters and describes device capabilities. Android debug APKs have been built locally; physical Mi Box playback has not been verified.
 
 ## Structure
 
@@ -10,7 +10,7 @@ flowchart TB
   APP[Application services]
   CORE[Pure TypeScript domain]
   RUNTIME[Runtime contracts and bootstrap]
-  ADAPTERS[Browser, Tizen and webOS adapters]
+  ADAPTERS[Browser, Tizen, webOS and Android adapters]
   COMPANION[Optional companion service]
   RELAY[Optional subtitle relay]
   UI --> APP
@@ -24,17 +24,17 @@ flowchart TB
 
 | Layer | Responsibility |
 | --- | --- |
-| `src/core` | Playlist classification/evidence, catalogue normalization/import, provider identities, live selection, subtitle rules and relay protocol/timing; no browser, React, Node, Tizen or webOS globals |
+| `src/core` | Playlist classification/evidence, catalogue normalization/import, provider identities, live selection, subtitle rules and relay protocol/timing; no browser, React, Node, Tizen, webOS or Android globals |
 | `src/contracts` | Runtime capabilities, logical input, catalogue/preferences/transport ports and companion messages |
 | `src/application` | Live playback routing/recovery, release coordination, companion lifecycle, live caches and provider search |
 | `src/bootstrap` | Default runtime selection and settings facade preserving existing validation/storage keys |
 | `src/app` | Shared screens, presentation, focus, editing, localization and remaining VOD orchestration |
-| `src/platform` | HTML video, AVPlay, web storage, provider/service clients, Samsung/LG APIs and rendering |
+| `src/platform` | HTML video, AVPlay, Media3 bridge, web storage, provider/service clients, TV host APIs and rendering |
 | `services/live-subtitle-relay` | Separate Node service for single-source media packaging and DVB caption decoding |
 
 `main.tsx` mounts `RuntimeProvider → CompanionProvider → App`. `createAppRuntime` supplies playback construction, a release barrier, independent catalogue sessions, preferences, transport and key registration. Overrides let tests or future hosts replace these services.
 
-Platform identity (`browser`, `tizen` or `webos`) is separate from interaction profile (`desktop`, `touch` or `tv`). Bootstrap selects touch interaction for a coarse primary pointer without hover; TV navigation and deliberate text editing use the profile. Touch playback starts with controls hidden; tapping reveals navigation and playback actions, and Hide controls restores the unobstructed player. Touch navigation suppresses automatic row highlighting and simulated hover; keyboard input restores ordinary focus styling. Features use capabilities such as native video surfaces, local-file picking, direct guide requests, companion and relay support. Generic input normalization lives in `src/contracts/input.ts`; Samsung registration remains in its adapter.
+Platform identity (`browser`, `tizen`, `webos` or `android`) is separate from interaction profile (`desktop`, `touch` or `tv`). Bootstrap selects touch interaction for a coarse primary pointer without hover; TV navigation and deliberate text editing use the profile. Touch playback starts with controls hidden; tapping reveals navigation and playback actions, and Hide controls restores the unobstructed player. Touch navigation suppresses automatic row highlighting and simulated hover; keyboard input restores ordinary focus styling. Features use capabilities such as native video surfaces, local-file picking, direct guide requests, companion and relay support. Generic input normalization lives in `src/contracts/input.ts`; Samsung registration remains in its adapter.
 
 Shared CSS retains Chromium 47 as the complete baseline: flexbox, static colours, physical positioning and explicit margins. See [navigation](navigation.md) and [verification](verification.md).
 
@@ -54,7 +54,7 @@ Compatibility re-exports retain older import paths where needed. IndexedDB schem
 
 ## Playback ownership
 
-`PlaybackPlayerFactory` selects HTML video or AVPlay and optionally constructs relay playback. Its current surface request uses DOM elements because the shipped browser, Samsung and LG hosts are web runtimes. A native Android surface contract is still future work.
+`PlaybackPlayerFactory` selects HTML video, AVPlay, webOS playback or the Android Media3 bridge. Android uses an inert DOM container for video bounds while the Kotlin shell owns the native video surface. Android bootstrap also selects a device-side direct HTTP(S) request bridge for runtime transport. The bridge has bounded responses and no native cancellation yet. Relay playback is not enabled on Android.
 
 `LivePlaybackController` owns one live session, relay startup, up to two reconnect attempts after established playback and direct fallback. It releases the old session before replacement. Initial relay failure falls back after cleanup; unconfirmed cleanup blocks replacement. Changing channel or choosing Retry resets the recovery budget.
 
@@ -90,7 +90,7 @@ Search uses the device's imported M3U catalogue or account-scoped Xtream cache. 
 
 The companion controller has disabled, connecting, available and unavailable states. Disabling its Settings switch stops background connection/polling and clears queued commands. It starts only in a supported TV profile with an enabled, configured endpoint; existing configured installations retain automatic connection unless disabled. Pairing reset aborts the active event poll before resetting the service, then resumes with sequence cursor zero so old in-flight events cannot conflict with the reset service sequence. Commands enter the shared VOD flow, and provider selections remain fingerprint-checked. See [companion setup](companion-search.md).
 
-Relay enablement is independent. Disabled relay routing creates no relay session; ordinary provider browsing/playback remains usable without either helper. Finnish SkyShowtime 1/2 use the public Nordic replacement exclusively: Tizen and LG request it directly, hosted browsers use the fixed same-origin `/public/nordic-epg` endpoint, and development can use `/api/nordic-epg` or a configured companion bridge. Failure or an empty replacement leaves those channels without guide data; it does not request provider EPG or DNA. Other channels retain provider EPG and verified DNA enrichment. Guide requests omit credentials/referrers, have a 20-second download deadline, retry after failure and share a twelve-minute feed cache. Channel caches record replacement provenance, and the screen checks freshness every minute and on visibility resume.
+Relay enablement is independent. Disabled relay routing creates no relay session; ordinary provider browsing/playback remains usable without either helper. Finnish SkyShowtime 1/2 use the public Nordic replacement exclusively: packaged Tizen, LG and Android clients request it directly, hosted browsers use the fixed same-origin `/public/nordic-epg` endpoint, and development can use `/api/nordic-epg` or a configured companion bridge. Failure or an empty replacement leaves those channels without guide data; it does not request provider EPG or DNA. Other channels retain provider EPG and verified DNA enrichment. Guide requests omit credentials/referrers, have a 20-second download deadline, retry after failure and share a twelve-minute feed cache. Channel caches record replacement provenance, and the screen checks freshness every minute and on visibility resume.
 
 Standalone operation requires no Substream server for ordinary provider use. Streaming still needs a network, and browser CORS/codec restrictions remain. Local files sent to a TV depend on the companion for that session. See [local-file playback](local-file-playback.md).
 
@@ -100,7 +100,7 @@ Architecture boundary tests protect the pure core and prevent screens from selec
 
 The 2026-10-04 refactor passed typechecking, the full test suite, browser/Tizen 3/Tizen 6 builds and a synthetic Chromium 47 Search navigation check with no runtime exceptions. The user subsequently reported installing a fresh personal TV package and encountering a relay startup fallback. A separate hosted diagnostic passed; post-refactor physical-TV playback acceptance remains pending. Previous hosted relay acceptance does not validate this refactor's AVPlay, remote timing or sleep/wake behavior. Follow [verification](verification.md) before release.
 
-Further extraction of VOD orchestration, dynamic playback capabilities, native surface/network integration and measured device performance remain open. The [Mi Box plan](mi-box-port-plan.md) describes a possible future port using these boundaries; implementation has not started.
+Further extraction of VOD orchestration, dynamic playback capabilities and measured device performance remain open. The [Mi Box guide](mi-box-port-plan.md) tracks Android device acceptance and remaining native integration work.
 
 ## LG webOS adapter
 

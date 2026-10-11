@@ -56,7 +56,12 @@
     "check": "npm run typecheck && npm test",
     "package:access": "node deploy/substream-access/package.mjs package",
     "deploy:access": "node deploy/substream-access/package.mjs deploy",
-    "rollback:access": "node deploy/substream-access/package.mjs rollback"
+    "rollback:access": "node deploy/substream-access/package.mjs rollback",
+    "build:android:web": "node scripts/android.mjs assets",
+    "package:android": "node scripts/android.mjs package",
+    "package:android:personal": "node --env-file=.env scripts/android.mjs package-personal",
+    "package:android:release": "node scripts/android.mjs package release",
+    "test:android-packaging": "vitest run scripts/android.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.3.1",

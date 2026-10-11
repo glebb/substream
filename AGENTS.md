@@ -1,6 +1,6 @@
 # Project
 
-Samsung Tizen, LG webOS and browser IPTV live TV and VOD player. The shared core is platform-independent TypeScript; browser, Tizen and webOS integrations must sit behind adapters.
+Samsung Tizen, LG webOS, Android TV and browser IPTV live TV and VOD player. The shared core is platform-independent TypeScript; browser, Tizen, webOS and Android integrations must sit behind adapters.
 
 # Commands
 
@@ -28,7 +28,7 @@ Samsung Tizen, LG webOS and browser IPTV live TV and VOD player. The shared core
 
 # Architecture
 
-- Code in `src/core` must not depend on browser, React, Node, Tizen or webOS globals.
+- Code in `src/core` must not depend on browser, React, Node, Tizen, webOS or Android globals.
 - Shared screens use runtime ports and interaction profiles; platform detection and concrete player selection belong in bootstrap/adapters. See `docs/cross-platform-architecture.md`.
 - Preserve entries that cannot be confidently classified; label them `unknown` rather than discarding them.
 - Classification decisions must include evidence so provider-specific rules can be debugged later.
@@ -47,3 +47,9 @@ Samsung Tizen, LG webOS and browser IPTV live TV and VOD player. The shared core
 - Keep `PalmSystem`, webOS detection, platform Back and playback lifecycle code in `src/platform/webos` and bootstrap. Screens use runtime ports.
 - Companion pairing and receiver commands are supported in the LG runtime. LG still has no local-file picker and no Samsung subtitle relay; do not infer those capabilities from the TV interaction profile.
 - Separate clean and private personal artifacts. Follow [LG setup](webos/README.md), [architecture](docs/cross-platform-architecture.md) and [device verification](docs/verification.md) when changing the port.
+
+# Android TV / Mi Box
+
+- Build the clean Android debug APK with `npm run package:android`; `npm run deploy android` targets a running emulator and creates a private APK from `.env` defaults. Keep private APKs local and ignored.
+- Android uses a bundled WebView UI, native Media3 playback and a device-side direct request bridge. Keep those integrations under `android/` and `src/platform/android/`.
+- Physical Mi Box installation, remote controls, playback, subtitles and persistence remain unverified. Follow [Mi Box setup](docs/mi-box-port-plan.md) and [device verification](docs/verification.md); do not infer hardware support from a successful build.

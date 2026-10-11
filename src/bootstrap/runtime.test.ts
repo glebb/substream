@@ -40,6 +40,14 @@ describe("application runtime composition", () => {
     runtime.input.platformBack?.();
     expect(platformBack).toHaveBeenCalledOnce();
   });
+  it("selects Android TV playback only when the native shell bridge exists", () => {
+    vi.stubGlobal("window", { SubstreamNative: { postMessage: vi.fn() } });
+    const runtime = createAppRuntime();
+    expect(runtime.platform).toBe("android");
+    expect(runtime.interactionProfile).toBe("tv");
+    expect(runtime.capabilities).toMatchObject({ nativeVideoSurface: true, tvInput: true, supportsLocalMediaPicker: false, supportsLiveRelay: false });
+    expect(runtime.playbackFactory.constructor.name).toBe("AndroidPlaybackPlayerFactory");
+  });
   it("keeps TV interaction profile independent from platform capabilities", () => {
     const runtime = createAppRuntime({
       platform: "browser",

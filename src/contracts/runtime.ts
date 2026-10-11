@@ -2,7 +2,7 @@ import type { PlaybackPlayerFactory } from "../platform/media-player.ts";
 import type { PlaybackReleaseBarrier } from "../application/playback-release-barrier.ts";
 import type { CatalogueRepositoryFactory, PreferencesRepository, TransportRepository } from "./repository.ts";
 
-export type RuntimePlatform = "browser" | "tizen" | "webos";
+export type RuntimePlatform = "browser" | "tizen" | "webos" | "android";
 export type InteractionProfile = "desktop" | "touch" | "tv";
 
 export interface RuntimeCapabilities {

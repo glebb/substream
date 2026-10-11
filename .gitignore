@@ -28,3 +28,13 @@ coverage/
 
 # Private deployment notes and host-specific configuration
 /.local/
+
+# Generated Android web assets and APK outputs
+/android/.gradle/
+/android/.web-dist/
+/android/.personal-web-dist/
+/android/.personal-workspace/
+/android/personal-packages/
+/android/app/src/main/assets/
+/android/app/build/
+/android/local.properties
