@@ -3725,8 +3725,14 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         {tvPlaybackStatus && <p className="hint" role="status" aria-live="polite">{tvPlaybackStatus}</p>}
         {episodeStatus && <p className="hint" role="status" aria-live="polite">{episodeStatus}</p>}
         <div className="details-layout">
-          <div className="details-poster" aria-label={detailsPosterUrl || details.posterUrl ? `Poster for ${detailsTitle.title}` : "Poster unavailable"}>
-            {detailsPosterUrl || details.posterUrl ? <img src={detailsPosterUrl || details.posterUrl} alt="" loading="lazy" /> : <span>{detailsMetadataStatus === "Loading title details…" ? "Loading artwork…" : "Artwork unavailable"}</span>}
+          <div className="details-poster-column">
+            <div className="details-poster" aria-label={detailsPosterUrl || details.posterUrl ? `Poster for ${detailsTitle.title}` : "Poster unavailable"}>
+              {detailsPosterUrl || details.posterUrl ? <img src={detailsPosterUrl || details.posterUrl} alt="" loading="lazy" /> : <span>{detailsMetadataStatus === "Loading title details…" ? "Loading artwork…" : "Artwork unavailable"}</span>}
+            </div>
+            <a className="tmdb-attribution" href="https://www.themoviedb.org/" target="_blank" rel="noreferrer" aria-label="Visit TMDB">
+              <img src="/branding/tmdb-logo.svg" alt="TMDB" />
+              <span>This product uses the TMDB API but is not endorsed or certified by TMDB.</span>
+            </a>
           </div>
           <div className="details-copy">
             <p className="eyebrow">{detailsTitle.contentType === "series" ? "SERIES" : detailsTitle.contentType === "other" ? "VIDEO · TYPE UNKNOWN" : "MOVIE"}</p>
