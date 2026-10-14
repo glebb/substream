@@ -342,6 +342,58 @@ describe("HtmlVideoPlayer", () => {
     expect(session.dispose).toHaveBeenCalledOnce();
   });
 
+  it("remuxes a local Matroska file in place and keeps other local containers native", () => {
+    canRemux.mockReturnValue(true);
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const file = new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3])]);
+    player.loadLocalFile({ file, url: "blob:synthetic-local-1", container: "matroska" });
+    expect(remuxInstances).toHaveLength(1);
+    expect(remuxInstances[0]!.start).toHaveBeenCalledWith({ kind: "file", file });
+    expect(video.src).toBe("");
+    player.loadLocalFile({ file, url: "blob:synthetic-local-2", container: "other" });
+    expect(remuxInstances).toHaveLength(1);
+    expect(video.src).toBe("blob:synthetic-local-2");
+    player.loadLocalFile({ file, url: "blob:synthetic-local-3", container: "webm" });
+    expect(remuxInstances).toHaveLength(1);
+    expect(video.src).toBe("blob:synthetic-local-3");
+    player.destroy();
+  });
+
+  it("falls back to native local playback when the remux cannot represent the video, but not for unsupported audio", () => {
+    canRemux.mockReturnValue(true);
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    const states: string[] = [];
+    player.setEventHandlers({ onStateChange: (state) => states.push(state) });
+    const file = new Blob([new Uint8Array([1])]);
+    player.loadLocalFile({ file, url: "blob:synthetic-vp9", container: "matroska" });
+    remuxInstances[0]!.handlers.onError("unsupported-video" as "unsupported-audio");
+    expect(video.src).toBe("blob:synthetic-vp9");
+    expect(remuxInstances[0]!.dispose).toHaveBeenCalled();
+    expect(player.getPlaybackDiagnostics()).toContain("Remux: video requires conversion; playing file directly");
+    expect(states).not.toContain("error");
+    player.loadLocalFile({ file, url: "blob:synthetic-dts", container: "matroska" });
+    remuxInstances[1]!.handlers.onError("unsupported-audio");
+    expect(states.at(-1)).toBe("error");
+    expect(video.src).not.toBe("blob:synthetic-dts");
+    player.destroy();
+  });
+
+  it("plays a local Matroska file natively when the browser cannot remux", () => {
+    canRemux.mockReturnValue(false);
+    const { video } = fakeVideo();
+    const player = new HtmlVideoPlayer(video);
+    player.setVodSubtitleMode(true);
+    player.loadLocalFile({ file: new Blob([new Uint8Array([1])]), url: "blob:synthetic-native", container: "matroska" });
+    expect(remuxInstances).toHaveLength(0);
+    expect(video.src).toBe("blob:synthetic-native");
+    expect(player.getPlaybackDiagnostics()).toContain("playing file directly");
+    player.destroy();
+  });
+
   it("reports remux failures safely and ignores a replaced session", () => {
     canRemux.mockReturnValue(true);
     const { video } = fakeVideo();

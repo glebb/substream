@@ -73,6 +73,8 @@ export function isLanCompanionAddress(value: string): boolean {
 
 let volatileDeviceIdentity: CompanionDeviceIdentity | null = null;
 const volatileDeviceIdentities = new WeakMap<KeyValueStorage, CompanionDeviceIdentity>();
+const discardedDeviceIdentities = new WeakMap<KeyValueStorage, string>();
+let discardedVolatileDeviceIdentity = "";
 
 /** Stable opaque identity for this TV installation; it contains no account data. */
 export function companionDeviceIdentity(storage: KeyValueStorage | null = browserStorage()): CompanionDeviceIdentity {
@@ -80,7 +82,8 @@ export function companionDeviceIdentity(storage: KeyValueStorage | null = browse
     const stored = storage?.getItem("substream.companion-device-identity");
     if (stored) {
       const value = JSON.parse(stored) as Partial<CompanionDeviceIdentity>;
-      if (/^[a-f0-9]{32}$/.test(value.deviceId || "") && typeof value.deviceName === "string" && value.deviceName.trim().length > 0 && value.deviceName.length <= 40) {
+      const discarded = storage ? discardedDeviceIdentities.get(storage) : discardedVolatileDeviceIdentity;
+      if (value.deviceId !== discarded && /^[a-f0-9]{32}$/.test(value.deviceId || "") && typeof value.deviceName === "string" && value.deviceName.trim().length > 0 && value.deviceName.length <= 40) {
         return { deviceId: value.deviceId!, deviceName: value.deviceName };
       }
     }
@@ -95,6 +98,22 @@ export function companionDeviceIdentity(storage: KeyValueStorage | null = browse
   if (storage) volatileDeviceIdentities.set(storage, identity); else volatileDeviceIdentity = identity;
   try { storage?.setItem("substream.companion-device-identity", JSON.stringify(identity)); } catch { /* Identity remains usable for this run. */ }
   return identity;
+}
+
+/**
+ * Starts a fresh, unpaired TV registration after this installation has lost
+ * its scoped relay credential. This never reclaims the previous session.
+ */
+export function resetCompanionDeviceIdentity(storage: KeyValueStorage | null = browserStorage()): void {
+  try {
+    const stored = storage?.getItem("substream.companion-device-identity");
+    const deviceId = stored ? (JSON.parse(stored) as Partial<CompanionDeviceIdentity>).deviceId : "";
+    if (typeof deviceId === "string" && /^[a-f0-9]{32}$/.test(deviceId)) {
+      if (storage) discardedDeviceIdentities.set(storage, deviceId); else discardedVolatileDeviceIdentity = deviceId;
+    }
+  } catch { /* A new in-memory identity below still permits re-pairing. */ }
+  if (storage) volatileDeviceIdentities.delete(storage); else volatileDeviceIdentity = null;
+  try { storage?.removeItem("substream.companion-device-identity"); } catch { /* Storage denial is handled by the in-memory identity. */ }
 }
 
 function tvCredentialStorageKey(server: string): string {
@@ -162,7 +181,12 @@ export async function connectCompanionService(server: string, sourceFingerprint:
       throw new Error("TV app and LAN service versions do not match. Restart the LAN service and install the latest TV app.");
     }
     if (response.status === 404 && value?.error === "Companion connection could not be established.") {
-      throw new Error("The LAN service rejected this TV's saved pairing. Restart the LAN service, then connect and pair this TV again.");
+      const error = new Error("The LAN service rejected this TV's saved pairing. Restart the LAN service, then connect and pair this TV again.") as Error & { code?: string };
+      // An installation that no longer has its credential cannot authenticate
+      // its old registration. The controller may safely create a distinct
+      // registration and require normal browser pairing.
+      if (!tvCredential) error.code = "companion-missing-tv-credential";
+      throw error;
     }
     if (value?.error === "Request origin is not allowed.") throw new Error("The LAN service rejected this app's origin. Check the relay's allowed origins.");
     if (value?.error === "The relay has reached its TV connection limit.") throw new Error("The LAN service has reached its TV connection limit. Disconnect unused TVs or restart the LAN service.");
@@ -188,12 +212,11 @@ export async function getCompanionConnection(server: string, browserCredential: 
 }
 
 export async function redeemCompanionCode(server: string, code: string): Promise<BrowserCompanionConnection> {
-  let response: Response;
-  let value: Partial<BrowserCompanionConnection> & { protocolVersion?: unknown };
-  try {
-    response = await fetch(server + "/api/pair/redeem", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, code: code.trim() }) });
-    value = await response.json() as typeof value;
-  } catch { throw new Error("Could not redeem the TV pairing code."); }
+  const { response, value } = await companionJsonRequest<Partial<BrowserCompanionConnection> & { protocolVersion?: unknown }>(server + "/api/pair/redeem", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ protocolVersion: COMPANION_PROTOCOL_VERSION, code: code.trim() }),
+  }, "Could not redeem the TV pairing code.");
   if (!response.ok || !supportsCompanionProtocolVersion(value.protocolVersion) || !/^[a-f0-9]{64}$/i.test(value.browserCredential || "") || !/^[a-f0-9]{32}$/.test(value.deviceId || "") || typeof value.deviceName !== "string" || !Number.isFinite(value.expiresAt) || typeof value.sourceFingerprint !== "string" || value.capabilities?.localMedia !== true) throw new Error("Pairing code is invalid or expired.");
   return value as BrowserCompanionConnection;
 }

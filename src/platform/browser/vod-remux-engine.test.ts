@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BufferSource, BufferTarget, EncodedAudioPacketSource, EncodedVideoPacketSource, EncodedPacketSink, Input, MkvOutputFormat, Output, MATROSKA, MP4 } from "mediabunny";
-import { installVodRemuxWorker, type VodRemuxWorkerScope } from "./vod-remux-engine.ts";
+import { installVodRemuxWorker, vodRemuxAacBitrate, type VodRemuxWorkerScope } from "./vod-remux-engine.ts";
 import type { VodRemuxWorkerRequest, VodRemuxWorkerResponse } from "./vod-remux-protocol.ts";
 
 const syntheticMkv = new Uint8Array(readFileSync(fileURLToPath(new URL("./__fixtures__/vod-remux-synthetic.mkv", import.meta.url))));
@@ -189,6 +189,60 @@ describe("VOD remux worker", () => {
     expect((await new EncodedPacketSink(resultVideo!).getFirstPacket())!.data)
       .toEqual((await new EncodedPacketSink(sourceVideo!).getFirstPacket())!.data);
     original.dispose(); output.dispose(); worker.send({ type: "dispose" });
+  });
+
+  it("converts a local EAC3 file to AAC in place without any network request", async () => {
+    const bytes = new Uint8Array(readFileSync(fileURLToPath(new URL("./__fixtures__/vod-remux-eac3.mkv", import.meta.url))));
+    const fetchSpy = vi.fn(async () => { throw new Error("local files must not be fetched"); });
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubGlobal("AudioDecoder", undefined);
+    vi.stubGlobal("AudioEncoder", undefined);
+    const file = new File([bytes], "Synthetic.Local.S01E01.mkv", { type: "video/x-matroska" });
+    const worker = new SyntheticWorkerScope();
+    installVodRemuxWorker(worker);
+    worker.send({ type: "start", file, startSeconds: 0, supportedAudioCodecs: ["aac"] });
+    await worker.waitFor(m => m.type === "end" || m.type === "error");
+    expect(worker.messages.at(-1)).toEqual({ type: "end" });
+    expect(worker.messages.find(m => m.type === "metadata")).toMatchObject({ audioProcessing: "dolby-to-aac" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(worker.messages.filter(m => m.type !== "chunk"))).not.toContain("Synthetic.Local");
+    const mp4 = concat(worker.messages.flatMap(m => m.type === "chunk" ? [new Uint8Array(m.buffer)] : []));
+    const output = new Input({ formats: [MP4], source: new BufferSource(mp4) });
+    expect(await (await output.getPrimaryAudioTrack())!.getCodec()).toBe("aac");
+    output.dispose();
+    worker.send({ type: "dispose" });
+  });
+
+  it("packet-copies browser-supported audio from a local file at a seek position", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("local files must not be fetched"); }));
+    const worker = new SyntheticWorkerScope();
+    installVodRemuxWorker(worker);
+    worker.send({ type: "start", file: new Blob([syntheticMkv]), startSeconds: 0.5 });
+    await worker.waitFor(m => m.type === "end" || m.type === "error");
+    expect(worker.messages.at(-1)).toEqual({ type: "end" });
+    expect(worker.messages.find(m => m.type === "metadata")).toMatchObject({ audioProcessing: "copy" });
+    worker.send({ type: "dispose" });
+  });
+
+  it.each([
+    [{ type: "start", startSeconds: 0 }],
+    [{ type: "start", startSeconds: 0, file: new Blob([]) }],
+    [{ type: "start", startSeconds: 0, url: "https://media.synthetic.invalid/a.mkv", file: new Blob([new Uint8Array([1])]) }],
+  ])("rejects a start request without exactly one usable source (%#)", async (request) => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("must not fetch"); }));
+    const worker = new SyntheticWorkerScope();
+    installVodRemuxWorker(worker);
+    worker.send(request as unknown as VodRemuxWorkerRequest);
+    await worker.waitFor(m => m.type === "error");
+    expect(worker.messages).toEqual([{ type: "error", reason: "invalid-media" }]);
+  });
+
+  it("sizes the AAC bitrate for multichannel Dolby without lowering stereo", () => {
+    expect(vodRemuxAacBitrate(1)).toBe(192_000);
+    expect(vodRemuxAacBitrate(2)).toBe(192_000);
+    expect(vodRemuxAacBitrate(6)).toBe(384_000);
+    expect(vodRemuxAacBitrate(8)).toBe(512_000);
+    expect(vodRemuxAacBitrate(Number.NaN)).toBe(192_000);
   });
 
   it.each([

@@ -3,7 +3,7 @@ import { browserStorage, preferencesStorage } from "../web/preferences-storage.t
 import { CompanionController } from "../../application/companion-controller.ts";
 import { createAbortController } from "../abort-controller.ts";
 import { XtreamClient } from "../xtream/client.ts";
-import { acknowledgeCompanionEvents, companionDeviceIdentity, companionEvents, companionSelectionTitle, connectCompanionService, resetCompanionPairing, storedCompanionTvCredential, storeCompanionTvCredential } from "./client.ts";
+import { acknowledgeCompanionEvents, companionDeviceIdentity, companionEvents, companionSelectionTitle, connectCompanionService, resetCompanionDeviceIdentity, resetCompanionPairing, storedCompanionTvCredential, storeCompanionTvCredential } from "./client.ts";
 
 export function createCompanionController(playlistUrl: () => string, runtime?: { preferences: PreferencesRepository; transport: TransportRepository }): CompanionController {
   const storage = runtime ? preferencesStorage(runtime.preferences) : browserStorage();
@@ -16,6 +16,7 @@ export function createCompanionController(playlistUrl: () => string, runtime?: {
     reset: (server, credential) => resetCompanionPairing(server, credential, request),
     loadCredential: (server) => storedCompanionTvCredential(server, storage),
     saveCredential: (server, credential) => storeCompanionTvCredential(server, credential, storage),
+    resetIdentity: () => resetCompanionDeviceIdentity(storage),
     resolveSelection: (selection) => {
       const client = XtreamClient.fromPlaylistUrl(playlistUrl());
       if (!client || selection.sourceFingerprint !== client.pairingFingerprint()) return null;

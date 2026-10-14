@@ -10,8 +10,15 @@ export type VodRemuxAudioCodec = keyof typeof VOD_REMUX_AUDIO_MIME_CODECS;
 export const VOD_REMUX_AUDIO_LABELS = ["AAC", "OPUS", "FLAC", "MP3", "AC3", "EAC3", "DTS", "VORBIS", "PCM", "unknown"] as const;
 export type VodRemuxAudioLabel = typeof VOD_REMUX_AUDIO_LABELS[number];
 
+/** Provider media is read with bounded HTTP ranges; a local file is read in place on the device. */
+export type VodRemuxStartSource = { url: string; file?: undefined } | { file: Blob; url?: undefined };
+
+export type VodRemuxStartRequest = {
+  type: "start"; startSeconds: number; audioTrackId?: number; supportedAudioCodecs?: VodRemuxAudioCodec[]; forceDolbyAac?: boolean;
+} & VodRemuxStartSource;
+
 export type VodRemuxWorkerRequest =
-  | { type: "start"; url: string; startSeconds: number; audioTrackId?: number; supportedAudioCodecs?: VodRemuxAudioCodec[]; forceDolbyAac?: boolean }
+  | VodRemuxStartRequest
   | { type: "ack" }
   | { type: "dispose" };
 

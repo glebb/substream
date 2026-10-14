@@ -29,7 +29,7 @@ function setup(overrides: Partial<CompanionDependencies> = {}) {
     identity: () => ({ deviceId: "synthetic-device", deviceName: "Synthetic TV" }),
     connect: vi.fn(async () => connection), events: vi.fn(() => pendingEvents.promise),
     acknowledge: vi.fn(async () => {}), reset: vi.fn(async () => ({ pairingCode: "87654321", pairingExpiresAt: 700_000 })),
-    loadCredential: () => "", saveCredential: vi.fn(), resolveSelection: () => title,
+    loadCredential: () => "", saveCredential: vi.fn(), resetIdentity: vi.fn(), resolveSelection: () => title,
     createAbortController: () => undefined, now: () => 0, ...overrides,
   };
   const controller = new CompanionController(dependencies);
@@ -215,6 +215,16 @@ describe("application companion lifecycle", () => {
     expect(vi.getTimerCount()).toBe(1);
     controller.dispose();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("creates a distinct unpaired registration when this TV lost its relay credential", async () => {
+    const missingCredential = Object.assign(new Error("saved pairing rejected"), { code: "companion-missing-tv-credential" });
+    const { controller, dependencies, start } = setup({ connect: vi.fn().mockRejectedValueOnce(missingCredential).mockResolvedValue(connection) });
+    start(); await flush();
+    expect(dependencies.resetIdentity).toHaveBeenCalledOnce();
+    expect(dependencies.connect).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot()).toMatchObject({ state: "available", error: "" });
+    controller.dispose();
   });
 
   it.each([

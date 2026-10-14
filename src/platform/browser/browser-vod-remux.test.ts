@@ -180,6 +180,24 @@ describe("BrowserVodRemuxSession", () => {
     expect(f.errors).toEqual([]);
   });
 
+  it("hands a local file to the worker in place and reuses it for seeks and audio switches", () => {
+    const f = fixture();
+    const file = new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3])]);
+    f.session.start({ kind: "file", file }, 0);
+    (f.session as unknown as { source: FakeMediaSource }).source.open();
+    expect(f.workers[0]?.messages).toEqual([{ type: "start", file, startSeconds: 0, supportedAudioCodecs: Object.keys(VOD_REMUX_AUDIO_MIME_CODECS) }]);
+    expect(f.workers[0]?.messages[0]).not.toHaveProperty("url");
+    f.workers[0]!.emit({ type: "metadata", durationSeconds: 100, mimeType, audioTracks: [{ id: 1, label: "Audio 1", language: "fi" }, { id: 2, label: "Audio 2", language: "en" }], selectedAudioTrackId: 1, audioProcessing: "dolby-to-aac" });
+    expect(f.session.getBufferDiagnostics()).toContain("Audio: Dolby → AAC");
+    f.session.seek(30);
+    (f.session as unknown as { source: FakeMediaSource }).source.open();
+    expect(f.workers[1]?.messages[0]).toMatchObject({ type: "start", file, startSeconds: 30 });
+    expect(f.session.selectAudioTrack("remux:2")).toBe(true);
+    (f.session as unknown as { source: FakeMediaSource }).source.open();
+    expect(f.workers[2]?.messages[0]).toMatchObject({ type: "start", file, audioTrackId: 2 });
+    f.session.dispose();
+  });
+
   it("gates metadata MIME with MediaSource.isTypeSupported before adding a buffer", () => {
     const f = fixture();
     FakeMediaSource.supported = false;

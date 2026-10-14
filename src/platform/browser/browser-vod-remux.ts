@@ -19,6 +19,9 @@ interface RemuxWorker {
   terminate(): void;
 }
 export type BrowserVodRemuxFailure = "cors-range" | "provider-redirect" | "provider-timeout" | "range-unsupported" | "range-metadata" | "range-invalid" | "unsupported-video" | "unsupported-audio" | "invalid-media" | "processing-failed" | "browser-unsupported" | "buffer-failed";
+/** A provider URL, or a device-local file that the worker reads in place without any upload. */
+export type BrowserVodRemuxSource = string | { kind: "file"; file: Blob };
+
 export interface BrowserVodRemuxOptions {
   onReady(): void;
   onError(reason: BrowserVodRemuxFailure, audioCodec?: VodRemuxAudioLabel): void;
@@ -60,7 +63,7 @@ export class BrowserVodRemuxSession {
   private seekApplied = false;
   private callbacks: Array<() => void> = [];
   private previousRemotePlayback: boolean | undefined;
-  private sourceUrl: string | undefined;
+  private sourceRef: BrowserVodRemuxSource | undefined;
   private audioTrackId: number | undefined;
   private audioTracks: AudioTrack[] = [];
   private playbackCodecs: { videoCodec?: string; audioCodec?: string } = {};
@@ -70,9 +73,9 @@ export class BrowserVodRemuxSession {
 
   constructor(private readonly video: HTMLVideoElement, private readonly options: BrowserVodRemuxOptions) {}
 
-  start(url: string, seconds = 0): void {
+  start(mediaSource: BrowserVodRemuxSource, seconds = 0): void {
     this.release();
-    this.sourceUrl = url;
+    this.sourceRef = mediaSource;
     this.startSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
     this.seekApplied = this.startSeconds === 0;
     this.failed = false;
@@ -115,7 +118,8 @@ export class BrowserVodRemuxSession {
           const supportedAudioCodecs = (Object.keys(VOD_REMUX_AUDIO_MIME_CODECS) as VodRemuxAudioCodec[]).filter((codec) => {
             try { return Constructor.isTypeSupported(`audio/mp4; codecs="${VOD_REMUX_AUDIO_MIME_CODECS[codec]}"`); } catch { return false; }
           });
-          worker.postMessage({ type: "start", url, startSeconds: this.startSeconds, supportedAudioCodecs, ...(this.audioTrackId !== undefined ? { audioTrackId: this.audioTrackId } : {}) });
+          const location = typeof mediaSource === "string" ? { url: mediaSource } : { file: mediaSource.file };
+          worker.postMessage({ type: "start", ...location, startSeconds: this.startSeconds, supportedAudioCodecs, ...(this.audioTrackId !== undefined ? { audioTrackId: this.audioTrackId } : {}) });
         } catch { this.fail("processing-failed"); }
       });
       listen(source, "startstreaming", () => { this.wantsData = true; this.pump(); });
@@ -137,7 +141,7 @@ export class BrowserVodRemuxSession {
   }
 
   seek(seconds: number): void {
-    if (this.sourceUrl) this.start(this.sourceUrl, seconds);
+    if (this.sourceRef) this.start(this.sourceRef, seconds);
   }
 
   getPlaybackCodecs() { return { ...this.playbackCodecs }; }
@@ -145,7 +149,7 @@ export class BrowserVodRemuxSession {
   getAudioTracks(): AudioTrack[] { return this.audioTracks.map((track) => ({ ...track })); }
 
   selectAudioTrack(id: string): boolean {
-    if (!this.sourceUrl || !this.audioTracks.some((track) => track.id === id)) return false;
+    if (!this.sourceRef || !this.audioTracks.some((track) => track.id === id)) return false;
     this.audioTrackId = Number(id.replace(/^remux:/, ""));
     this.seek(this.video.currentTime);
     return true;
@@ -371,5 +375,5 @@ export class BrowserVodRemuxSession {
   }
 
   stop(): void { this.release(); }
-  dispose(): void { this.release(); this.sourceUrl = undefined; this.audioTracks = []; }
+  dispose(): void { this.release(); this.sourceRef = undefined; this.audioTracks = []; }
 }

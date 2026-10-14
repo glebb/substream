@@ -7,6 +7,7 @@ import {
   EncodedPacketSink,
   EncodedVideoPacketSource,
   Input,
+  BlobSource,
   CustomSource,
   MATROSKA,
   Mp4OutputFormat,
@@ -15,6 +16,7 @@ import {
   WEBM,
   type InputAudioTrack,
   type InputVideoTrack,
+  type Source,
   type StreamTargetChunk,
 } from "mediabunny";
 import { VodRangeSource, VodRangeSourceError } from "./vod-range-source.ts";
@@ -26,6 +28,7 @@ import {
   VOD_REMUX_MAX_CHUNK_BYTES,
   type VodRemuxAudioTrack,
   type VodRemuxFailureReason,
+  type VodRemuxStartRequest,
   type VodRemuxWorkerRequest,
   type VodRemuxWorkerResponse,
 } from "./vod-remux-protocol.ts";
@@ -34,6 +37,16 @@ const MAX_PACKET_BYTES = 8 * 1024 * 1024;
 const MAX_BUFFERED_PACKET_BYTES = 32 * 1024 * 1024;
 const MAX_SOURCE_REQUEST_BYTES = 32 * 1024 * 1024;
 const SOURCE_RANGE_BYTES = 2 * 1024 * 1024;
+const SOURCE_CACHE_BYTES = 8 * 1024 * 1024;
+const MIN_AAC_BITRATE = 192_000;
+const MAX_AAC_BITRATE = 512_000;
+const AAC_BITRATE_PER_CHANNEL = 64_000;
+
+/** Stereo keeps the former 192 kbps; multichannel Dolby gets ~64 kbps per channel (5.1 → 384 kbps). */
+export function vodRemuxAacBitrate(channels: number): number {
+  const count = Number.isSafeInteger(channels) && channels > 0 ? channels : 2;
+  return Math.min(MAX_AAC_BITRATE, Math.max(MIN_AAC_BITRATE, count * AAC_BITRATE_PER_CHANNEL));
+}
 
 export interface VodRemuxWorkerScope {
   addEventListener(type: "message", listener: (event: MessageEvent<VodRemuxWorkerRequest>) => void): void;
@@ -75,6 +88,7 @@ export function installVodRemuxWorker(scope: VodRemuxWorkerScope): void {
   let abort: AbortController | undefined;
   let source: VodRangeSource | undefined;
   let input: Input | undefined;
+  let audioBitrate = MIN_AAC_BITRATE;
   let output: Output | undefined;
   let failureReported = false;
   let activeReads = 0;
@@ -124,27 +138,37 @@ export function installVodRemuxWorker(scope: VodRemuxWorkerScope): void {
     });
   });
 
-  async function run(request: Extract<VodRemuxWorkerRequest, { type: "start" }>): Promise<void> {
-    if (typeof request.url !== "string" || request.url.length === 0
+  async function run(request: VodRemuxStartRequest): Promise<void> {
+    const file = isLocalFile(request.file) ? request.file : undefined;
+    const url = typeof request.url === "string" && request.url.length > 0 ? request.url : undefined;
+    // Exactly one source: a provider URL or a device-local file, never both.
+    if ((file ? request.url !== undefined : !url || request.file !== undefined)
       || !Number.isFinite(request.startSeconds) || request.startSeconds < 0
       || (request.audioTrackId !== undefined && !Number.isSafeInteger(request.audioTrackId))) {
       throw new FixedRemuxError("invalid-media");
     }
 
-    source = new VodRangeSource(request.url, abort?.signal ? { signal: abort.signal } : {});
-    const rangedSource = new CustomSource({
-      getSize: () => source!.getSize(),
-      read: (start, end) => createRangedReadStream(source!, start, end, (active) => {
-        activeReads += active ? 1 : -1;
-      }),
-      dispose: () => source?.dispose(),
-      // Network prefetch grows to 8 MiB. A smaller parser cache evicts
-      // prefetched bytes before interleaved audio/video clusters consume them.
-      maxCacheSize: 8 * 1024 * 1024,
-      prefetchProfile: "network",
-      handleUnhandledError: reportFailure,
-    });
-    input = new Input({ formats: [MATROSKA, WEBM], source: rangedSource });
+    let mediaSource: Source;
+    if (file) {
+      // The user's file is sliced in place inside this worker. Its bytes and
+      // name are never uploaded and no network request is made for them.
+      mediaSource = new BlobSource(file, { maxCacheSize: SOURCE_CACHE_BYTES, handleUnhandledError: reportFailure });
+    } else {
+      source = new VodRangeSource(url!, abort?.signal ? { signal: abort.signal } : {});
+      mediaSource = new CustomSource({
+        getSize: () => source!.getSize(),
+        read: (start, end) => createRangedReadStream(source!, start, end, (active) => {
+          activeReads += active ? 1 : -1;
+        }),
+        dispose: () => source?.dispose(),
+        // Network prefetch grows to 8 MiB. A smaller parser cache evicts
+        // prefetched bytes before interleaved audio/video clusters consume them.
+        maxCacheSize: SOURCE_CACHE_BYTES,
+        prefetchProfile: "network",
+        handleUnhandledError: reportFailure,
+      });
+    }
+    input = new Input({ formats: [MATROSKA, WEBM], source: mediaSource });
     if (!await input.canRead()) throw new FixedRemuxError("invalid-media");
 
     const videoTrack = await input.getPrimaryVideoTrack();
@@ -194,6 +218,7 @@ export function installVodRemuxWorker(scope: VodRemuxWorkerScope): void {
         decoder.registerAc3Decoder();
         encoder.registerAacEncoder();
         convertAudio = true;
+        audioBitrate = vodRemuxAacBitrate(config.numberOfChannels);
         selected = { track: requestedAudio, codec: "aac", config: { codec: "mp4a.40.2", sampleRate: config.sampleRate, numberOfChannels: config.numberOfChannels } };
         playableAudio.push(selected);
       }
@@ -228,7 +253,7 @@ export function installVodRemuxWorker(scope: VodRemuxWorkerScope): void {
       if (!disposed) scope.postMessage({ type: "progress", phase: activeReads > 0 ? "downloading" : waitingForCredit ? "waiting" : "remuxing" });
     }, 1000);
     const videoSource = new EncodedVideoPacketSource(videoCodec);
-    const audioSource = convertAudio ? new AudioSampleSource({ codec: "aac", bitrate: 192_000 }) : new EncodedAudioPacketSource(audioCodec);
+    const audioSource = convertAudio ? new AudioSampleSource({ codec: "aac", bitrate: audioBitrate }) : new EncodedAudioPacketSource(audioCodec);
     let expectedPosition = 0;
     const outputPosition = { value: 0 };
     const target = new StreamTarget(new WritableStream<StreamTargetChunk>({
@@ -375,6 +400,10 @@ function createRangedReadStream(source: VodRangeSource, start: number, end: numb
       controller.enqueue(bytes);
     },
   });
+}
+
+function isLocalFile(value: unknown): value is Blob {
+  return typeof Blob === "function" && value instanceof Blob && value.size > 0;
 }
 
 function isSupportedVideoConfig(

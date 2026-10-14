@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifyLocalFilename, LocalMediaSource, localDisplayTitle, localSubtitleQuery } from "./local-media-source.ts";
+import { classifyLocalFilename, guessLocalContainer, LocalMediaSource, localDisplayTitle, localSubtitleQuery, probeLocalContainer } from "./local-media-source.ts";
+
+function ebmlHeader(docType: string): Uint8Array {
+  const doc = [...docType].map((character) => character.charCodeAt(0));
+  // EBML magic, header size, EBMLVersion (0x4286 = 1), then DocType (0x4282).
+  return new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x80 | doc.length, ...doc, 0x18, 0x53, 0x80, 0x67]);
+}
 
 describe("local media source", () => {
   afterEach(() => vi.useRealTimers());
@@ -20,6 +26,24 @@ describe("local media source", () => {
     expect(source.file).toBeNull();
     expect(source.url).toBeNull();
     expect(urls.revokeObjectURL).toHaveBeenCalledOnce();
+  });
+
+  it("detects Matroska and WebM from the EBML header regardless of the filename", async () => {
+    expect(await probeLocalContainer(new File([ebmlHeader("matroska")], "renamed.mp4"))).toBe("matroska");
+    expect(await probeLocalContainer(new File([ebmlHeader("webm")], "clip.mkv"))).toBe("webm");
+    expect(await probeLocalContainer(new File([new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70])], "movie.mkv"))).toBe("other");
+    const unreadable = { name: "movie.mkv", type: "", slice: () => ({ arrayBuffer: () => Promise.reject(new Error("unreadable")) }) } as unknown as File;
+    expect(await probeLocalContainer(unreadable)).toBe("matroska");
+    expect(guessLocalContainer({ name: "clip.WEBM" })).toBe("webm");
+    expect(guessLocalContainer({ name: "movie.mp4", type: "video/mp4" })).toBe("other");
+  });
+
+  it("starts from a filename guess and updates the container after the header probe", async () => {
+    const file = new File([ebmlHeader("matroska")], "Example.bin");
+    const source = new LocalMediaSource(file, { createObjectURL: () => "blob:synthetic", revokeObjectURL: vi.fn() });
+    expect(source.container).toBe("other");
+    await vi.waitFor(() => expect(source.container).toBe("matroska"));
+    source.dispose();
   });
 
   it("normalizes the display/search name and preserves uncertain filename classification", () => {

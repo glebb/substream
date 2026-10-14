@@ -5,7 +5,7 @@ vi.mock("../package-defaults.ts", () => ({ packageDefaults: {
   companionServerUrl: "http://192.0.2.44:8787",
 } }));
 
-import { acknowledgeCompanionEvents, companionDeviceIdentity, companionDeviceLabel, companionEvents, companionSelectionTitle, companionServerUrl, connectCompanionService, getCompanionConnection, redeemCompanionCode, resetCompanionPairing, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, sendStopLocalCompanionPlayback, stageLocalMedia, storedCompanionTvCredential, storeCompanionTvCredential } from "./client.ts";
+import { acknowledgeCompanionEvents, companionDeviceIdentity, companionDeviceLabel, companionEvents, companionSelectionTitle, companionServerUrl, connectCompanionService, getCompanionConnection, redeemCompanionCode, resetCompanionDeviceIdentity, resetCompanionPairing, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, sendStopLocalCompanionPlayback, stageLocalMedia, storedCompanionTvCredential, storeCompanionTvCredential } from "./client.ts";
 
 describe("companion client", () => {
   const identity = { deviceId: "a".repeat(32), deviceName: "Test TV" };
@@ -28,6 +28,18 @@ describe("companion client", () => {
         expiresAt: 20, paired: false, sourceFingerprint: "vod_test", capabilities: { localMedia: true },
       }) }));
       await expect(connectCompanionService("http://192.0.2.44:8787", "vod_test", identity)).resolves.toMatchObject(identity);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
+  });
+
+  it("times out a stalled browser pairing redemption", async () => {
+    vi.useFakeTimers();
+    const hung = new Promise<never>(() => {});
+    vi.stubGlobal("fetch", vi.fn(async () => hung));
+    try {
+      const rejected = expect(redeemCompanionCode("http://192.0.2.44:8787", "12345678")).rejects.toThrow("did not respond within 10 seconds");
+      await vi.advanceTimersByTimeAsync(10_000);
+      await rejected;
       expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
   });
@@ -65,6 +77,18 @@ describe("companion client", () => {
       expect(storedCompanionTvCredential("https://other.home.arpa:8787")).toBe("");
       saveCompanionDeviceLabel(first.deviceId, "Kitchen");
       expect(companionDeviceLabel(first.deviceId, first.deviceName)).toBe("Kitchen");
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("replaces an identity whose relay credential is no longer available", () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
+    try {
+      const previous = companionDeviceIdentity();
+      resetCompanionDeviceIdentity();
+      const replacement = companionDeviceIdentity();
+      expect(replacement.deviceId).not.toBe(previous.deviceId);
+      expect(companionDeviceIdentity()).toEqual(replacement);
     } finally { vi.unstubAllGlobals(); }
   });
 

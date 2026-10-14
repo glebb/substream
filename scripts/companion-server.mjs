@@ -858,8 +858,12 @@ export async function route(request, response, url) {
       session.pairingCode = "";
       session.browserCredential = randomBytes(32).toString("hex");
       sessionIdsByCredential.set(session.browserCredential, session.deviceId);
+      // Finish the browser's one-time redemption before releasing the TV's
+      // long poll. A delayed or broken TV connection must not hold the
+      // browser response open after the code was accepted.
+      json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, ...publicSession(session), browserCredential: session.browserCredential });
       wakeEventWaiters(session);
-      return json(response, 200, { protocolVersion: COMPANION_PROTOCOL_VERSION, ...publicSession(session), browserCredential: session.browserCredential });
+      return;
     } catch { return json(response, 400, { error: "Pairing request was invalid." }); }
   }
   if (request.method === "POST" && url.pathname === "/api/pair/reset") {

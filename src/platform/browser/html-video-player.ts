@@ -1,5 +1,5 @@
 import { positiveMetadataNumber, technicalToken } from "../stream-information.ts";
-import type { AudioTrack, EmbeddedSubtitleTrack, LiveBufferWindow, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, StreamInformation, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
+import type { AudioTrack, EmbeddedSubtitleTrack, LiveBufferWindow, LocalMediaFile, MediaPlayer, MediaPlayerEventHandlers, PlaybackState, StreamInformation, SubtitleAttachment, VideoDisplayMode } from "../media-player.ts";
 import { srtToWebVtt } from "../../core/subtitles/srt-to-vtt.ts";
 import { shiftWebVttCues } from "../../core/subtitles/webvtt-timing.ts";
 import { normalizeSubtitleOffsetSeconds } from "../../core/subtitles/timing.ts";
@@ -154,6 +154,8 @@ export class HtmlVideoPlayer implements MediaPlayer {
   private userPaused = false;
   private remuxSession: BrowserVodRemuxSession | undefined;
   private remuxStatus = "none";
+  /** The viewer's local file for the current object URL; `remux` turns off after a native fallback. */
+  private localMedia: (LocalMediaFile & { remux: boolean }) | undefined;
   private bufferingTimer: ReturnType<typeof setTimeout> | undefined;
   private bufferingStartTime: number | undefined;
   private readonly eventListeners: Array<[string, EventListener]>;
@@ -229,6 +231,16 @@ export class HtmlVideoPlayer implements MediaPlayer {
 
   isVodSubtitleDiscoveryComplete(): boolean { return this.vodSubtitleDiscoveryComplete; }
 
+  /**
+   * Local Matroska goes through the same on-device remux as provider MKV, so
+   * Dolby audio that the browser cannot decode is converted to AAC instead of
+   * playing silently. Other containers keep native object-URL playback.
+   */
+  loadLocalFile(media: LocalMediaFile): void {
+    this.localMedia = { file: media.file, url: media.url, container: media.container, remux: media.container === "matroska" };
+    this.load(media.url);
+  }
+
   load(streamUrl: string): void {
     this.backgroundSuspended = false;
     this.pendingSeekSeconds = null;
@@ -243,6 +255,9 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.playFailure = "none";
     this.playAttempt += 1;
     this.sourceUrl = streamUrl;
+    // A background resume reloads the same object URL and keeps its file.
+    if (this.localMedia && this.localMedia.url !== streamUrl) this.localMedia = undefined;
+    const localMedia = this.localMedia;
     const generation = ++this.loadGeneration;
     this.stopCompatibilityPlayback();
     this.compatibilitySourceUrl = undefined;
@@ -271,7 +286,13 @@ export class HtmlVideoPlayer implements MediaPlayer {
       return;
     }
     this.armPlaybackStartTimer(generation);
-    if (this.shouldRemuxMatroska() && this.vodSubtitleMode && /\.mkv(?:[?#]|$)/i.test(streamUrl)) {
+    const wantsRemux = this.shouldRemuxMatroska() && this.vodSubtitleMode
+      && (localMedia ? localMedia.remux : /\.mkv(?:[?#]|$)/i.test(streamUrl));
+    if (wantsRemux && localMedia && !canRemuxBrowserVod()) {
+      // Without MSE/workers the browser may still decode the file natively.
+      localMedia.remux = false;
+      this.remuxStatus = "MP4 streaming unavailable; playing file directly";
+    } else if (wantsRemux) {
       if (!canRemuxBrowserVod()) {
         this.remuxStatus = "browser streaming unavailable";
         this.video.pause();
@@ -282,9 +303,11 @@ export class HtmlVideoPlayer implements MediaPlayer {
         return;
       }
       this.remuxStatus = "preparing";
+      let sessionReady = false;
       const session = new BrowserVodRemuxSession(this.video, {
         onReady: () => {
           if (generation !== this.loadGeneration || this.remuxSession !== session) return;
+          sessionReady = true;
           this.remuxStatus = "copying tracks to MP4";
           void this.requestPlay();
         },
@@ -308,6 +331,17 @@ export class HtmlVideoPlayer implements MediaPlayer {
             "buffer-failed": "browser media buffer failed",
           };
           this.remuxStatus = reasons[reason] + (audioCodec ? ` (${audioCodec})` : "");
+          // A local file the remux cannot represent (for example VP9/AV1 video
+          // in MKV) may still play natively. Unsupported audio stays an error
+          // instead of silently playing video without sound.
+          if (localMedia && !sessionReady && localMedia.remux
+            && (reason === "unsupported-video" || reason === "invalid-media" || reason === "browser-unsupported")) {
+            const fallbackStatus = `${reasons[reason]}; playing file directly`;
+            localMedia.remux = false;
+            this.load(streamUrl);
+            this.remuxStatus = fallbackStatus;
+            return;
+          }
           if ((reason === "provider-timeout" || reason === "cors-range")
             && this.scheduleRecovery(() => session.seek(this.recoveryStartSeconds))) return;
           this.clearPlaybackStartTimer();
@@ -315,7 +349,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
         },
       });
       this.remuxSession = session;
-      session.start(streamUrl);
+      session.start(localMedia ? { kind: "file", file: localMedia.file } : streamUrl);
       return;
     }
     const isHlsStream = /\.m3u8(?:[?#]|$)/i.test(streamUrl);
@@ -735,6 +769,7 @@ export class HtmlVideoPlayer implements MediaPlayer {
     this.cancelRecovery();
     this.backgroundSuspended = false;
     this.sourceUrl = undefined;
+    this.localMedia = undefined;
     this.loadGeneration += 1;
     this.remuxSession?.dispose();
     this.remuxSession = undefined;

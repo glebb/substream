@@ -392,6 +392,9 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const subtitleRequestRef = useRef(0);
   const localSubtitleSnapshotRef = useRef<Omit<CompanionLocalSubtitle, "version"> | null>(null);
+  // Read by the playback effect without restarting playback when the prop object changes.
+  const localSourceRef = useRef(localSource);
+  localSourceRef.current = localSource;
   const localSubtitlePreparationRef = useRef<{ sourceUrl: string; query: string; preference: SubtitleLanguage; apiKeyTag: string; promise: Promise<LocalSubtitleSnapshot | null>; cancel: () => void } | null>(null);
   const localAutomaticSubtitleRef = useRef<{ sourceUrl: string; query: string; preference: SubtitleLanguage; apiKeyTag: string } | null>(null);
   const localSubtitlePublishQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -1198,6 +1201,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       setWebTvConnectionStatus("Set the LAN relay address before entering the TV pairing code.");
       return;
     }
+    setWebTvConnectionStatus("Pairing browser…");
     try {
       const paired = await redeemCompanionCode(server, webTvPairingCode);
       const deviceName = webTvPairingName.trim().slice(0, 40) || companionDeviceLabel(paired.deviceId, paired.deviceName);
@@ -1208,8 +1212,12 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
       setWebTvPairingCode("");
       setWebTvPairingName("");
       setWebTvConnectionStatus(`Browser paired with ${named.deviceName}. You can choose it as the playback target.`);
-    } catch {
-      setWebTvConnectionStatus("Pairing code is invalid or expired. Read the latest code shown in TV Settings.");
+    } catch (error) {
+      setWebTvConnectionStatus(error instanceof Error && error.message === "Could not redeem the TV pairing code."
+        ? "Could not reach the LAN service to pair this browser. Check the relay address and service, then try again."
+        : error instanceof Error && error.message.includes("did not respond within 10 seconds")
+          ? "The LAN service did not respond within 10 seconds. Check the relay address and service, then try again."
+          : "Pairing code is invalid or expired. Read the latest code shown in TV Settings.");
     }
   };
 
@@ -2848,7 +2856,13 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         // on the periodic save alone loses the final interval on quick exits.
         pageHideListener = () => persistCurrentProgress(playbackProgressRef.current);
         window.addEventListener("pagehide", pageHideListener);
-        player.load(selectedTitle.streamUrl);
+        const localPlayback = selectedTitleSource === "local" ? localSourceRef.current : null;
+        if (localPlayback?.file && localPlayback.url === selectedTitle.streamUrl && player.loadLocalFile) {
+          // The file stays on this device; the player remuxes MKV locally when needed.
+          player.loadLocalFile({ file: localPlayback.file, url: localPlayback.url, container: localPlayback.container });
+        } else {
+          player.load(selectedTitle.streamUrl);
+        }
         if (selectedTitleSource === "local" && localSubtitleSnapshotRef.current) {
           const snapshot = localSubtitleSnapshotRef.current;
           void player.setSubtitle(snapshot.text, snapshot.label, snapshot.language).then((attachment) => {

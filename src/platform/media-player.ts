@@ -106,6 +106,16 @@ export interface MediaPlayerEventHandlers {
   onEmbeddedSubtitleTracksChange?(tracks: EmbeddedSubtitleTrack[]): void;
 }
 
+/** Container detected from a local file's header (filename/MIME only as a fallback). */
+export type LocalMediaContainer = "matroska" | "webm" | "other";
+
+/** A device-local video; `url` is the same-origin object URL for `file`. */
+export interface LocalMediaFile {
+  file: Blob;
+  url: string;
+  container: LocalMediaContainer;
+}
+
 export interface MediaPlayer {
   setEventHandlers(handlers: MediaPlayerEventHandlers | null): void;
   /** Enables automatic Finnish/English selection for embedded live subtitles. */
@@ -129,6 +139,12 @@ export interface MediaPlayer {
   /** Indicates that a platform is still resolving live audio language defaults. */
   isAudioTrackSelectionPending?(): boolean;
   load(streamUrl: string): void;
+  /**
+   * Plays a viewer-selected file from this device. Players that can remux
+   * Matroska read the file in place and convert unsupported Dolby audio
+   * locally; the file is never uploaded. Players without it use `load(url)`.
+   */
+  loadLocalFile?(media: LocalMediaFile): void;
   /** Seeks to an absolute playhead position, including while the stream is preparing. */
   seekTo?(seconds: number): void;
   /** Returns the provider's currently seekable live/DVR window, if it exposes one. */

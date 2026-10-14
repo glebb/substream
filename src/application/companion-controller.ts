@@ -24,6 +24,7 @@ export interface CompanionDependencies {
   reset(server: string, credential: string): Promise<{ pairingCode: string; pairingExpiresAt: number }>;
   loadCredential(server: string): string;
   saveCredential(server: string, credential: string): void;
+  resetIdentity(): void;
   resolveSelection(selection: CompanionSelection): VodCatalogItem | null;
   createAbortController(): AbortController | undefined;
   now(): number;
@@ -199,6 +200,15 @@ export class CompanionController {
         await this.wait(250);
       } catch (cause) {
         if (!this.active(generation)) return;
+        if ((cause as { code?: unknown })?.code === "companion-missing-tv-credential") {
+          // Do not bypass the relay's credential check. The old registration
+          // remains inaccessible; make a new one which must be paired in the
+          // browser in the normal way.
+          this.dependencies.resetIdentity();
+          this.connection = null;
+          this.sequence = 0;
+          continue;
+        }
         if (cause instanceof Error && cause.message === "Companion connection expired.") this.connection = null;
         const error = cause instanceof Error && connectionDiagnostics.has(cause.message)
           ? cause.message : "TV connection was interrupted. Reconnecting…";

@@ -2,7 +2,9 @@
 
 The LG webOS HTML player also reuses this client-side VOD implementation where runtime codec/MSE/worker checks permit it. Desktop or WebKit results below do not validate LG MKV, Dolby audio, range handling or seeking. No server conversion fallback is added for LG; those cases remain in the [LG physical checklist](verification.md#lg-webos-physical-tv-check).
 
-On supported browsers, the VOD player can play selected Matroska (`.mkv`) files by remuxing their existing encoded packets into fragmented MP4 on the device. The app uses Mediabunny in a dedicated worker, then appends the output to a browser media source. Compatible tracks are copied without decoding. When native MP4 streaming rejects AC3/EAC3 audio and accepts AAC, the worker lazily loads Mediabunny WASM codecs and converts only that audio to AAC-LC; video remains packet copied. The codec assets are shipped with the public app and conversion runs on the client.
+On supported browsers, the VOD player can play selected Matroska (`.mkv`) files by remuxing their existing encoded packets into fragmented MP4 on the device. The app uses Mediabunny in a dedicated worker, then appends the output to a browser media source. Compatible tracks are copied without decoding. When native MP4 streaming rejects AC3/EAC3 audio and accepts AAC, the worker lazily loads Mediabunny WASM codecs and converts only that audio to AAC-LC; video remains packet copied. The codec assets are shipped with the public app and conversion runs on the client. The AAC bitrate is about 64 kbps per channel with a 192 kbps minimum and 512 kbps maximum (5.1 → 384 kbps).
+
+The same worker also plays a viewer-selected local Matroska file. Instead of a provider URL, the worker receives the `File` and reads it in place with `BlobSource`; the provider range, CORS and redirect rules below do not apply to that source, while the packet, output-chunk and append bounds do. See [local file playback](local-file-playback.md).
 
 ## Supported media
 
