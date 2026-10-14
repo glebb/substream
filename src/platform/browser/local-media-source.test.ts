@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyLocalFilename, guessLocalContainer, LocalMediaSource, localDisplayTitle, localSubtitleQuery, probeLocalContainer } from "./local-media-source.ts";
 
-function ebmlHeader(docType: string): Uint8Array {
+function ebmlHeader(docType: string): Uint8Array<ArrayBuffer> {
   const doc = [...docType].map((character) => character.charCodeAt(0));
   // EBML magic, header size, EBMLVersion (0x4286 = 1), then DocType (0x4282).
   return new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x80 | doc.length, ...doc, 0x18, 0x53, 0x80, 0x67]);
