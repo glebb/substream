@@ -3744,7 +3744,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
               {detailsPosterUrl || details.posterUrl ? <img src={detailsPosterUrl || details.posterUrl} alt="" loading="lazy" /> : <span>{detailsMetadataStatus === "Loading title details…" ? "Loading artwork…" : "Artwork unavailable"}</span>}
             </div>
             <a className="tmdb-attribution" href="https://www.themoviedb.org/" target="_blank" rel="noreferrer" aria-label="Visit TMDB">
-              <img src="/branding/tmdb-logo.svg" alt="TMDB" />
+              <img src="./branding/tmdb-logo.png" alt="TMDB" />
               <span>This product uses the TMDB API but is not endorsed or certified by TMDB.</span>
             </a>
           </div>
