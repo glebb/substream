@@ -5,7 +5,7 @@ import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, use
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { preferredAudioTrackIndex } from "../core/media/audio.ts";
-import type { AudioTrack, LiveBufferWindow, MediaPlayer, PlaybackState } from "../platform/media-player.ts";
+import type { AudioTrack, LiveBufferWindow, MediaPlayer, PlaybackState, VideoDisplayMode } from "../platform/media-player.ts";
 import { resolveLiveRelayChannel } from "../application/live-relay-routing.ts";
 import { isBackKey, normalizedRemoteKey } from "../contracts/input.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
@@ -148,6 +148,8 @@ export function LiveTv({ onMainMenu }: Props) {
   const [liveSubtitlesEnabled, setLiveSubtitlesEnabled] = useState(true);
   const [embeddedSubtitleTracks, setEmbeddedSubtitleTracks] = useState<import("../platform/media-player.ts").EmbeddedSubtitleTrack[]>([]);
   const [liveSource, setLiveSource] = useState<"hls" | "ts">("hls");
+  const [videoDisplayMode, setVideoDisplayMode] = useState<VideoDisplayMode>("auto");
+  const videoDisplayModeRef = useRef<VideoDisplayMode>("auto");
   const liveSubtitlesEnabledRef = useRef(true);
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
   const [audioStatus, setAudioStatus] = useState("");
@@ -603,7 +605,7 @@ export function LiveTv({ onMainMenu }: Props) {
         ? runtime.playbackFactory.createRelay?.({ container: objectRef.current, config, channelId: hostedChannelId,
           preferredLanguage: settings.loadSubtitlePreferences().languagePreference, mediaToPlayheadOffsetMs: config.offsetMs ?? 0 }) ?? null
         : null,
-      onPlayer: (active) => { if (cancelled) return; playerRef.current = active; active?.setLiveSubtitleMode?.(true); },
+      onPlayer: (active) => { if (cancelled) return; playerRef.current = active; active?.setLiveSubtitleMode?.(true); active?.setDisplayMode(videoDisplayModeRef.current); },
       onRelayState: (state) => {
         if (cancelled) return;
         if (state === "starting" || state === "ready") setRelayPlaybackLabel("Subtitle relay · Timing test");
@@ -684,6 +686,11 @@ export function LiveTv({ onMainMenu }: Props) {
     if (!selected || playbackState !== "playing") return;
     reconcileEmbeddedSubtitles(playerRef.current, playerRef.current?.getEmbeddedSubtitleTracks?.() ?? []);
   }, [playbackState, selected]);
+
+  useEffect(() => {
+    videoDisplayModeRef.current = videoDisplayMode;
+    playerRef.current?.setDisplayMode(videoDisplayMode);
+  }, [videoDisplayMode]);
 
   useEffect(() => {
     if (!selected) return;
@@ -934,6 +941,7 @@ export function LiveTv({ onMainMenu }: Props) {
       {runtime.capabilities.nativeVideoSurface && !playerFullscreen && <button type="button" onClick={toggleLiveSource} ref={(element) => { playerControlRefs.current[9] = element; }}>{liveSource === "hls" ? "Try direct TS source" : "Switch back to HLS"}</button>}
       {embeddedSubtitleTracks.length > 1 && <button type="button" onClick={selectNextSubtitleTrack} ref={(element) => { playerControlRefs.current[10] = element; }}>Subtitle language</button>}
       <button type="button" onClick={() => setShowStreamInfo((visible) => !visible)} aria-pressed={showStreamInfo} ref={(element) => { playerControlRefs.current[11] = element; }}>Info</button>
+      <button type="button" onClick={() => setVideoDisplayMode((current) => ({ auto: "fit", fit: "fill", fill: "auto" } as const)[current])} ref={(element) => { playerControlRefs.current[12] = element; }}>Aspect: {videoDisplayMode === "auto" ? "Auto" : videoDisplayMode === "fit" ? "Fit" : "Fill"}</button>
       {audioStatus && <span className="live-buffer-status" role="status">{audioStatus}</span>}
       <span className="playback-status" role="status" aria-live="polite">{relayPlaybackLabel === "Channel connection lost · Reconnecting…" ? relayPlaybackLabel : <>{relayPlaybackLabel || (liveSource === "hls" ? "HLS" : "Direct TS")}{" · "}{playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}{relayDiagnostics ? ` · ${relayDiagnostics}` : ""}</>}</span>
       {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}
