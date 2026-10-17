@@ -373,8 +373,13 @@ export function LiveTv({ onMainMenu }: Props) {
     }
   }, [channels, focusIndex, selectedCategory?.id]);
 
+  // The guide is only visible in the channel list. Pausing its refresh while a
+  // channel plays keeps periodic cache parsing, guide requests and synchronous
+  // storage writes from competing with live segment loading and appends.
+  const guidePaused = !!selected;
+
   useEffect(() => {
-    if (!selectedCategory || !channels.length || !client) return;
+    if (guidePaused || !selectedCategory || !channels.length || !client) return;
     const workScope = createGuideWorkScope();
     const cachePrefix = EPG_CACHE_PREFIX + client.pairingFingerprint() + ".";
     const initial: Record<string, CachedGuide> = {};
@@ -523,9 +528,11 @@ export function LiveTv({ onMainMenu }: Props) {
       if (cacheWriteTimer !== null) window.clearTimeout(cacheWriteTimer);
       if (scanTimer !== null) window.clearTimeout(scanTimer);
     };
-  }, [cacheKey, channels, client, guideRefresh, nordicEpgClient, selectedCategory]);
+  }, [cacheKey, channels, client, guidePaused, guideRefresh, nordicEpgClient, selectedCategory]);
 
   useEffect(() => {
+    if (guidePaused) return;
+    setGuideNow(Date.now());
     const timer = window.setInterval(() => setGuideNow(Date.now()), 30_000);
     const refreshTimer = window.setInterval(() => setGuideRefresh((value) => value + 1), 60_000);
     const onResume = () => {
@@ -536,10 +543,10 @@ export function LiveTv({ onMainMenu }: Props) {
     };
     document.addEventListener("visibilitychange", onResume);
     return () => { window.clearInterval(timer); window.clearInterval(refreshTimer); document.removeEventListener("visibilitychange", onResume); };
-  }, []);
+  }, [guidePaused]);
 
   useEffect(() => {
-    if (!selectedCategory || !channels.length) return;
+    if (guidePaused || !selectedCategory || !channels.length) return;
     let nextEnd = Infinity;
     channels.forEach((channel) => {
       (guideByChannel[channel.id]?.programmes ?? []).forEach((programme) => {
@@ -552,7 +559,7 @@ export function LiveTv({ onMainMenu }: Props) {
       setGuideRefresh((value) => value + 1);
     }, Math.max(1_000, nextEnd - guideNow + 500));
     return () => window.clearTimeout(timer);
-  }, [channels, guideByChannel, guideNow, selectedCategory]);
+  }, [channels, guideByChannel, guideNow, guidePaused, selectedCategory]);
 
   const guideSlotsCacheRef = useRef<Record<string, { guide: CachedGuide | undefined; now: number; slots: ReturnType<typeof selectCurrentAndNextProgramme> }>>({});
   const guideSlotsByChannel = useMemo(() => {

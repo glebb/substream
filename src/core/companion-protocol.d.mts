@@ -21,6 +21,8 @@ export type CompanionLocalMediaWire = {
   season: number | null;
   episode: number | null;
   contentType: "movie" | "series" | "unknown";
+  /** Requested playback start in whole seconds; 0 starts from the beginning. */
+  startSeconds: number;
   mediaType: string;
   size: number;
 };
@@ -46,6 +48,8 @@ export type CompanionEventsPayload = {
   retentionGap: { throughSequence: number; firstAvailableSequence: number } | null;
 };
 
+export const MAX_LOCAL_START_SECONDS: number;
+export function parseLocalStartSeconds(value: unknown): number;
 export function supportsCompanionProtocolVersion(value: unknown): boolean;
 export function parseCompanionSelection(value: unknown): CompanionSelectionWire | null;
 export function parseCompanionEvent(value: unknown): CompanionEventWire | null;

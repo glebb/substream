@@ -35,6 +35,7 @@ describe("application runtime composition", () => {
       directGuideRequests: true,
       supportsCompanion: true,
       supportsLiveRelay: false,
+      companionLocalMediaTransport: "hls",
     });
     expect(runtime.playbackFactory.constructor.name).toBe("WebOsPlaybackPlayerFactory");
     runtime.input.platformBack?.();

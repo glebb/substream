@@ -59,11 +59,13 @@ describe("local companion media route", () => {
     expect(finalized.status).toBe(200);
     const subtitleText = "1\n00:00:01,000 --> 00:00:02,000\nSynthetic cue\n";
     expect((await json(`/api/local-media/sessions/${created.sessionId}/subtitle`, { method: "PUT", credential: credentials.browserCredential, body: { text: subtitleText, label: "synthetic.srt", language: "fi", enabled: true, offsetSeconds: 0.5 } })).status).toBe(200);
-    const dispatched = await json("/api/pair/play-local", { method: "POST", credential: credentials.browserCredential, body: { protocolVersion, sessionId: created.sessionId, metadata: { title: "Synthetic" } } });
+    const dispatched = await json("/api/pair/play-local", { method: "POST", credential: credentials.browserCredential, body: { protocolVersion, sessionId: created.sessionId, metadata: { title: "Synthetic", startSeconds: 125.7 } } });
     expect(dispatched.status).toBe(200);
     const eventsResponse = await json("/api/pair/events?after=0&wait=0", { credential: credentials.tvCredential });
     const [playEvent] = (await eventsResponse.json()).events;
     expect(playEvent.action).toBe("play-local");
+    // Without a probed duration the requested start is only floored and capped.
+    expect(playEvent.localMedia.startSeconds).toBe(125);
     const subtitleUrl = `/api/local-media/${created.sessionId}/subtitle?ticket=${playEvent.localMedia.ticket}`;
     expect((await json(`/api/local-media/${created.sessionId}/subtitle?ticket=${"f".repeat(64)}`)).status).toBe(404);
     expect(await (await json(subtitleUrl)).json()).toMatchObject({ text: subtitleText, language: "fi", enabled: true, offsetSeconds: 0.5, version: 1 });
@@ -107,8 +109,10 @@ describe("local companion media route", () => {
       const finalized = await json(`/api/local-media/sessions/${created.sessionId}/finalize`, { method: "POST", credential: credentials.browserCredential, body: { tvCompatibility: true } });
       expect(finalized.status).toBe(200);
       expect(await finalized.json()).toMatchObject({ state: "ready", expectedSize: data.length, uploadOffset: data.length });
-      expect((await json("/api/pair/play-local", { method: "POST", credential: credentials.browserCredential, body: { protocolVersion, sessionId: created.sessionId, metadata: { title: "Synthetic" } } })).status).toBe(200);
+      expect((await json("/api/pair/play-local", { method: "POST", credential: credentials.browserCredential, body: { protocolVersion, sessionId: created.sessionId, metadata: { title: "Synthetic", startSeconds: 3600 } } })).status).toBe(200);
       const [event] = (await (await json("/api/pair/events?after=0&wait=0", { credential: credentials.tvCredential })).json()).events;
+      // The probed one-second video cannot start an hour in; it starts from the beginning instead.
+      expect(event.localMedia.startSeconds).toBe(0);
       const url = `/api/local-media/${created.sessionId}?ticket=${event.localMedia.ticket}`;
       const response = await fetch(base + url);
       expect(response.headers.get("content-type")).toBe("video/mp4");
@@ -119,8 +123,25 @@ describe("local companion media route", () => {
       const range = await fetch(base + url, { headers: { range: "bytes=7-31" } });
       expect(range.headers.get("content-range")).toBe(`bytes 7-31/${output.length}`);
       expect(new Uint8Array(await range.arrayBuffer())).toEqual(output.slice(7, 32));
+      const hlsUrl = `/api/local-media/${created.sessionId}/hls/index.m3u8?ticket=${event.localMedia.ticket}`;
+      expect((await fetch(base + `/api/local-media/${created.sessionId}/hls/index.m3u8?ticket=${"f".repeat(64)}`)).status).toBe(404);
+      expect((await fetch(base + `/api/local-media/${created.sessionId}/hls/..?ticket=${event.localMedia.ticket}`)).status).toBe(404);
+      const [first, concurrent] = await Promise.all([fetch(base + hlsUrl), fetch(base + hlsUrl)]);
+      expect(first.headers.get("content-type")).toBe("application/vnd.apple.mpegurl");
+      const playlist = await first.text();
+      expect(await concurrent.text()).toBe(playlist);
+      expect(playlist).toContain("#EXT-X-PLAYLIST-TYPE:VOD");
+      expect(playlist).toContain("#EXT-X-ENDLIST");
+      const segments = playlist.split("\n").filter((line) => line && !line.startsWith("#"));
+      expect(segments.length).toBeGreaterThan(0);
+      for (const segment of segments) expect(segment).toBe(`${segment.split("?")[0]}?ticket=${event.localMedia.ticket}`);
+      const segmentResponse = await fetch(new URL(segments[0], base + hlsUrl));
+      expect(segmentResponse.status).toBe(200);
+      expect(segmentResponse.headers.get("content-type")).toBe("video/mp2t");
+      expect(new Uint8Array(await segmentResponse.arrayBuffer())[0]).toBe(0x47);
       expect((await json(`/api/local-media/sessions/${created.sessionId}/status`, { method: "DELETE", credential: credentials.browserCredential })).status).toBe(200);
       expect((await fetch(base + url)).status).toBe(404);
+      expect((await fetch(new URL(segments[0], base + hlsUrl))).status).toBe(404);
     } finally { await rm(dir, { recursive: true, force: true }); }
   }, 15000);
 

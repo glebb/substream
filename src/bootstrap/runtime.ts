@@ -55,6 +55,8 @@ export function createAppRuntime(overrides: AppRuntimeOverrides = {}): AppRuntim
       directGuideRequests: tizen || webos || android,
       supportsCompanion: true,
       supportsLiveRelay: !webos && !android && nativeVideoSurface,
+      // LG's native progressive pipeline exhausts memory on long companion files; HLS stays bounded.
+      companionLocalMediaTransport: webos ? "hls" : "progressive",
     },
     input: {
       registerKeys: webos ? registerWebOsPlaybackKeys : registerTizenPlaybackKeys,

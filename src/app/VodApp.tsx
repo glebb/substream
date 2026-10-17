@@ -46,12 +46,14 @@ import { LiveRelaySettings } from "./LiveRelaySettings.tsx";
 import { type NormalizedLiveRelayConfig } from "../platform/live-relay/config.ts";
 import { createAbortController } from "../platform/abort-controller.ts";
 import { LanguageContext, Localized, translate, type UiLanguage } from "./language.tsx";
-import { LocalMediaSource, classifyLocalFilename, localDisplayTitle, localSubtitleQuery } from "../platform/browser/local-media-source.ts";
+import { LocalMediaSource, classifyLocalFilename, localDisplayTitle, localSubtitleQuery, probeLocalDuration } from "../platform/browser/local-media-source.ts";
+import { clampStartTime, parseStartTime } from "../core/media/start-time.ts";
 import { readLocalSubtitleFile } from "../platform/browser/local-subtitle-file.ts";
 import { loadPreferredLocalSubtitle, type LocalSubtitleSnapshot } from "../platform/browser/local-subtitle-match.ts";
 import { ScreenNavigation } from "./ScreenNavigation.tsx";
 import { useFixedListRowHeight } from "./fixed-list-sizing.ts";
 import { useRuntime } from "./runtime.tsx";
+import { nextCompanionLocalSession } from "./companion-local-state.ts";
 import { LoadingStatus } from "./LoadingStatus.tsx";
 import { createDeviceSettings } from "../bootstrap/settings.ts";
 import { useCompanion } from "./companion.tsx";
@@ -94,6 +96,9 @@ function playbackHistoryItem(title: VodCatalogItem, progress: PlaybackProgress, 
     } : {}),
   };
 }
+
+/** Slider range when neither the file nor TMDb reports a duration. */
+const LOCAL_TV_START_FALLBACK_SECONDS = 3 * 60 * 60;
 
 function formatPlaybackTime(seconds: number): string {
   const safeSeconds = Math.max(0, Math.floor(seconds));
@@ -189,6 +194,10 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
   const [detailsOrigin, setDetailsOrigin] = useState<{ kind: "browse" | "search" | "local"; focusIndex: number } | null>(null);
   const [detailsSearchRecord, setDetailsSearchRecord] = useState<SafeSearchRecord | null>(null);
   const [tvPlaybackStatus, setTvPlaybackStatus] = useState("");
+  // Where the TV should start a local file; chosen on the host before "Play on TV".
+  const [localTvStartSeconds, setLocalTvStartSeconds] = useState(0);
+  const [localTvStartDraft, setLocalTvStartDraft] = useState<string | null>(null);
+  const [localDurationSeconds, setLocalDurationSeconds] = useState<number | null>(null);
   const [localUpload, setLocalUpload] = useState<{ session: LocalMediaUploadStatus | null; sentBytes: number; totalBytes: number; state: "idle" | "uploading" | "preparing" | "ready" }>({ session: null, sentBytes: 0, totalBytes: 0, state: "idle" });
   const localUploadControllerRef = useRef<AbortController | null>(null);
   const localComputerStartPendingRef = useRef(false);
@@ -582,6 +591,17 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     if (localSource) return;
     void refreshCatalog();
   }, []);
+
+  useEffect(() => {
+    setLocalTvStartSeconds(0);
+    setLocalTvStartDraft(null);
+    setLocalDurationSeconds(null);
+    const url = localSource?.url;
+    if (!url || isTvProfile) return;
+    let current = true;
+    void probeLocalDuration(url).then((duration) => { if (current) setLocalDurationSeconds(duration); });
+    return () => { current = false; };
+  }, [localSource]);
 
   useEffect(() => {
     if (!localSource) return;
@@ -1111,6 +1131,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         season: detailsTitle.season ?? null,
         episode: detailsTitle.episode ?? null,
         contentType: detailsTitle.contentType === "other" ? "unknown" : detailsTitle.contentType,
+        startSeconds: localTvStartSeconds,
       });
       if (controller?.signal.aborted) throw new DOMException("Local TV upload cancelled.", "AbortError");
       setLocalUpload({ session: uploaded, sentBytes: uploaded.expectedSize, totalBytes: uploaded.expectedSize, state: "ready" });
@@ -2802,15 +2823,12 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             setPlaybackStatus(status[playbackState]);
             setPlaybackDiagnostics(playbackState === "error" || (playbackState === "paused" && !hasPlayed) ? player.getPlaybackDiagnostics?.() ?? "" : "");
             const remoteMedia = remoteLocalMediaRef.current;
-            if (remoteMedia && selectedTitle.id === `companion-local-${remoteMedia.media.sessionId}`) {
-              const remoteState = playbackState === "playing" ? "playing"
-                : playbackState === "paused" ? "paused"
-                  : playbackState === "ended" ? "ended"
-                    : playbackState === "error" ? "failed" : "preparing";
-              const nextRemote = { ...remoteMedia, playbackState: remoteState as ActiveLocalTvSession["playbackState"] };
+            // Report only real state changes; see nextCompanionLocalSession.
+            const nextRemote = remoteMedia && selectedTitle.id === `companion-local-${remoteMedia.media.sessionId}` ? nextCompanionLocalSession(remoteMedia, playbackState) : null;
+            if (remoteMedia && nextRemote) {
               remoteLocalMediaRef.current = nextRemote;
               setActiveRemoteLocalMedia(nextRemote);
-              void reportLocalMediaState(remoteMedia.server, remoteMedia.tvCredential, remoteMedia.media.sessionId, remoteState).catch(() => undefined);
+              void reportLocalMediaState(remoteMedia.server, remoteMedia.tvCredential, remoteMedia.media.sessionId, nextRemote.playbackState).catch(() => undefined);
             }
             if (playbackState === "playing") {
               hasPlayed = true;
@@ -3550,7 +3568,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     </header>;
 
 
-  const openCompanionTitle = (title: VodCatalogItem, source: "catalogue" | "local" = "catalogue") => {
+  const openCompanionTitle = (title: VodCatalogItem, source: "catalogue" | "local" = "catalogue", startSeconds = 0) => {
     // A paired companion is a global input source. Its selection must win over
     // whatever transient TV screen is open, including the player.
     setSettingsConfirmation(null);
@@ -3563,11 +3581,11 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     setDetailsTitle(null);
     setDetailsSearchRecord(null);
     setDetailsOrigin(null);
-    startPlayback(title, 0, null, source);
+    startPlayback(title, startSeconds, null, source);
   };
   const openCompanionLocalMedia = (media: CompanionLocalPlayback, server: string, tvCredential: string) => {
     let streamUrl = "";
-    try { streamUrl = companionLocalMediaUrl(server, media); }
+    try { streamUrl = companionLocalMediaUrl(server, media, runtime.capabilities.companionLocalMediaTransport); }
     catch { setTvPlaybackStatus("The TV received an invalid local media session. Update the app and try again."); return; }
     const normalized = normalizeTitle(media.title);
     setState("ready");
@@ -3591,7 +3609,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
     remoteLocalMediaRef.current = active;
     setActiveRemoteLocalMedia(active);
     void reportLocalMediaState(server, tvCredential, media.sessionId, "preparing").catch(() => undefined);
-    openCompanionTitle(title, "local");
+    openCompanionTitle(title, "local", media.startSeconds);
   };
   const stopCompanionLocalMedia = (sessionId: string) => {
     if (remoteLocalMediaRef.current?.media.sessionId !== sessionId) return;
@@ -3736,6 +3754,27 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
           {detailsOrigin?.kind === "local" && onChooseLocalFile && <button className={detailsFocusIndex === 4 ? remoteFocusClass : ""} type="button" ref={(element) => { detailsControlsRef.current[5] = element; }} onFocus={() => setDetailsFocusIndex(4)} onClick={onChooseLocalFile}>Choose another file</button>}
           {!isTvProfile && detailsOrigin?.kind !== "local" && (detailsSearchRecord || /^xtream:(movie|series):\d{1,20}$/.test(detailsTitle.id)) && <button className={detailsFocusIndex === 3 ? remoteFocusClass : ""} type="button" ref={(element) => { detailsControlsRef.current[3] = element; }} onFocus={() => setDetailsFocusIndex(3)} disabled={Boolean(detailsTitle.providerSeriesId && (!detailsEpisodes.length || !detailsEpisodeId))} onClick={() => void playSearchResultOnTv(detailsTitle.providerSeriesId ? (detailsEpisodes.find((episode) => episode.id === detailsEpisodeId) ?? detailsTitle) : detailsTitle)}>Play on TV</button>}
         </div>
+        {detailsOrigin?.kind === "local" && !isTvProfile && (() => {
+          const maxSeconds = localDurationSeconds ?? (details.runtimeMinutes ? details.runtimeMinutes * 60 : LOCAL_TV_START_FALLBACK_SECONDS);
+          const locked = localUpload.state === "uploading" || localUpload.state === "preparing" || Boolean(localUpload.session && ["playing", "paused", "preparing", "accepted"].includes(localUpload.session.playbackState ?? ""));
+          const draftInvalid = localTvStartDraft !== null && parseStartTime(localTvStartDraft) === null;
+          const commitDraft = () => {
+            if (localTvStartDraft === null) return;
+            const parsed = parseStartTime(localTvStartDraft);
+            if (parsed !== null) setLocalTvStartSeconds(clampStartTime(parsed, maxSeconds));
+            setLocalTvStartDraft(null);
+          };
+          // Keep typing, Enter/Escape and slider arrows out of the details screen's remote navigation.
+          return <div className="local-tv-start" onKeyDown={(event) => event.stopPropagation()}>
+            <label htmlFor="local-tv-start-range">Start on TV at</label>
+            <div className="local-tv-start-controls">
+              <input id="local-tv-start-range" type="range" min={0} max={Math.floor(maxSeconds)} step={10} value={Math.min(localTvStartSeconds, Math.floor(maxSeconds))} disabled={locked} aria-valuetext={formatPlaybackTime(localTvStartSeconds)} onChange={(event) => { setLocalTvStartDraft(null); setLocalTvStartSeconds(clampStartTime(Number(event.target.value), maxSeconds)); }} />
+              <input className={draftInvalid ? "local-tv-start-time invalid" : "local-tv-start-time"} type="text" inputMode="numeric" aria-label="Start time (h:mm:ss, m:ss or minutes)" aria-invalid={draftInvalid} disabled={locked} value={localTvStartDraft ?? formatPlaybackTime(localTvStartSeconds)} onChange={(event) => setLocalTvStartDraft(event.target.value)} onBlur={commitDraft} onKeyDown={(event) => { if (event.key === "Enter") commitDraft(); else if (event.key === "Escape") setLocalTvStartDraft(null); }} />
+              <span className="local-tv-start-total">/ {localDurationSeconds ? formatPlaybackTime(localDurationSeconds) : details.runtimeMinutes ? `~${formatPlaybackTime(details.runtimeMinutes * 60)}` : "duration unknown"}</span>
+              <button type="button" disabled={locked || localTvStartSeconds === 0} onClick={() => { setLocalTvStartDraft(null); setLocalTvStartSeconds(0); }}>From start</button>
+            </div>
+          </div>;
+        })()}
         {tvPlaybackStatus && <p className="hint" role="status" aria-live="polite">{tvPlaybackStatus}</p>}
         {episodeStatus && <p className="hint" role="status" aria-live="polite">{episodeStatus}</p>}
         <div className="details-layout">
@@ -3756,7 +3795,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             <h3 className="details-section-heading">Overview</h3>
             <p className="details-synopsis">{details.synopsis ? <span translate="no">{details.synopsis}</span> : detailsMetadataStatus === "Loading title details…" ? "Loading details…" : "Synopsis unavailable for this title."}</p>
             {detailsMetadata && <TitleMetadataExtras metadata={detailsMetadata} language={language} />}
-            {detailsOrigin?.kind === "local" && <div className="details-metadata-search"><label htmlFor="local-details-search">Subtitle and artwork search title</label><input id="local-details-search" type="text" value={localDetailsSearchTitle} onChange={(event) => setLocalDetailsSearchTitle(event.target.value)} /></div>}
+            {detailsOrigin?.kind === "local" && <div className="details-metadata-search"><label htmlFor="local-details-search">Subtitle and artwork search title</label><input id="local-details-search" type="text" value={localDetailsSearchTitle} onChange={(event) => setLocalDetailsSearchTitle(event.target.value)} onKeyDown={(event) => { if (!isTvProfile || event.key === "Enter") event.stopPropagation(); }} /></div>}
             {detailsMetadataStatus && detailsMetadataStatus !== "Loading title details…" && <p className="hint" role="status">{detailsMetadataStatus}</p>}
             {detailsOrigin?.kind === "local" && detailsTitle.contentType === "other" && <p className="hint">{detailsTitle.classification?.evidence.join(" ")}</p>}
             {detailsOrigin?.kind === "local" && (tmdbCredentials.readAccessToken || tmdbCredentials.apiKey) && <button type="button" onClick={() => void openTitle(detailsTitle, { kind: "local", focusIndex: detailsFocusIndex })}>Search details again</button>}

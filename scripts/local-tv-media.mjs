@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { stat, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, unlink } from "node:fs/promises";
+import { join } from "node:path";
 
 const INPUT_OPTIONS = ["-protocol_whitelist", "file,pipe", "-format_whitelist", "matroska,webm,mov,mp4,mpegts,mpeg,avi,m4v,asf"];
 // Keep the aggregate bitrate within the conservative 20 Mbps 2017 FHD limit.
@@ -63,7 +64,7 @@ export async function prepareLocalTvMedia(input, output, { maxBytes, signal } = 
     const plan = localTvPlan(probe);
     // Even compatible MKV files are remuxed to an indexed MP4 with only selected AV streams.
     if (plan.copyVideo && (!plan.hasAudio || plan.copyAudio) && String(probe.format?.format_name).split(",").includes("mp4")) {
-      return { path: input, size: (await stat(input)).size, mediaType: "video/mp4", converted: false };
+      return { path: input, size: (await stat(input)).size, mediaType: "video/mp4", converted: false, durationSeconds: plan.duration };
     }
     const encoder = process.platform === "darwin" ? "h264_videotoolbox" : "libx264";
     try {
@@ -78,6 +79,37 @@ export async function prepareLocalTvMedia(input, output, { maxBytes, signal } = 
     const outputDuration = Number(outputProbe.format?.duration);
     // -fs can exit successfully with a truncated movie; never dispatch such an output.
     if (result.size <= 0 || result.size >= maxBytes || (plan.duration && (!Number.isFinite(outputDuration) || Math.abs(outputDuration - plan.duration) > 2))) throw new Error("The TV-compatible copy exceeds the companion service limit or is incomplete.");
-    return { path: output, size: result.size, mediaType: "video/mp4", converted: true };
+    return { path: output, size: result.size, mediaType: "video/mp4", converted: true, durationSeconds: Number.isFinite(outputDuration) && outputDuration > 0 ? outputDuration : plan.duration };
   } catch (cause) { await unlink(output).catch(() => {}); throw cause; }
+}
+
+export const LOCAL_HLS_PLAYLIST = "index.m3u8";
+export const LOCAL_HLS_SEGMENT = /^segment\d{5}\.ts$/;
+const MAX_SEGMENTATION_MS = 30 * 60 * 1000;
+
+export function localTvHlsArguments(input, directory, maxBytes) {
+  // Stream-copy only: the input is already the TV-compatible copy (or a file the
+  // TV accepted directly). MPEG-TS inserts the Annex B bitstream filter itself.
+  return ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", ...INPUT_OPTIONS, "-i", input, "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",
+    "-c", "copy", "-fs", String(maxBytes), "-f", "hls", "-hls_time", "6", "-hls_playlist_type", "vod", "-hls_list_size", "0",
+    "-hls_segment_filename", join(directory, "segment%05d.ts"), join(directory, LOCAL_HLS_PLAYLIST)];
+}
+
+/**
+ * LG's native progressive pipeline exhausts device memory on long local files,
+ * while its HLS pipeline stays bounded. Finish a VOD playlist before exposing it
+ * so the TV never treats a partial playlist as a live stream.
+ */
+export async function segmentLocalTvHls(input, directory, { maxBytes, signal } = {}) {
+  try {
+    await rm(directory, { recursive: true, force: true });
+    await mkdir(directory, { recursive: true });
+    await run(process.env.FFMPEG_PATH || "ffmpeg", localTvHlsArguments(input, directory, maxBytes), { signal, timeoutMs: MAX_SEGMENTATION_MS });
+    const playlist = await readFile(join(directory, LOCAL_HLS_PLAYLIST), "utf8");
+    if (!playlist.includes("#EXT-X-ENDLIST")) throw new Error("The TV playlist is incomplete.");
+    let size = 0;
+    for (const name of await readdir(directory)) size += (await stat(join(directory, name))).size;
+    if (size >= maxBytes) throw new Error("The TV playlist exceeds the companion service limit.");
+    return { directory, size };
+  } catch (cause) { await rm(directory, { recursive: true, force: true }).catch(() => {}); throw cause; }
 }

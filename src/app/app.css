@@ -638,6 +638,15 @@ button:disabled { cursor: default; opacity: .45; }
 .details-episode-picker select { display: block; margin-top: 10px; max-width: 100%; }
 .details-copy > .remote-editable-trigger { margin-top: 12px; }
 .details-actions { margin-bottom: 24px; }
+/* Host-only start position for local TV playback; flex and margins for the Chromium 47 baseline. */
+.local-tv-start { margin: -8px 0 20px; max-width: 46rem; }
+.local-tv-start > label { color: #b8c4d7; display: block; font-weight: 650; margin-bottom: 6px; }
+.local-tv-start-controls { align-items: center; display: flex; flex-wrap: wrap; }
+.local-tv-start-controls > * { margin: 0 12px 8px 0; }
+.local-tv-start-controls input[type="range"] { flex: 1 1 16rem; height: 32px; min-width: 12rem; padding: 0; }
+.local-tv-start-controls .local-tv-start-time { text-align: center; width: 6.5rem; }
+.local-tv-start-controls .local-tv-start-time.invalid { border-color: #ff8a8a; }
+.local-tv-start-total { color: #b8c4d7; white-space: nowrap; }
 
 /* Detail metadata uses flex and explicit margins on the Chromium 47 baseline. */
 .details-copy { flex: 1 1 auto; min-width: 0; }

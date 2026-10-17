@@ -213,6 +213,37 @@ control then resumed 1080p playback and advanced by five seconds without an
 error. Intentional pause cancels the startup and buffering deadlines; resuming
 arms a fresh deadline for a genuine playback stall.
 
+On 2026-10-17 a 64-minute 1280×640 H.264/AAC local file (450 MB prepared MP4)
+reproducibly turned the screen white after three to four minutes on the
+progressive companion route. Audio continued, the page stopped answering
+DevTools, and TV swap reached about 780 MB of 921 MB. Throttling the companion
+did not help, and a live HLS channel kept memory flat. Only about 36 MB had
+been delivered to the TV when the paced run failed, and the app's JavaScript
+heap and DOM stayed flat, so download volume and app script memory are not the
+cause. LG now plays companion local files through the companion's VOD HLS route
+(see [local file playback](../docs/local-file-playback.md#tv-playback-through-the-companion)).
+The same file then played natively from HLS with about 40 seconds buffered
+ahead, but the white screen still returned, later than on the progressive
+route. The cause was the TV app, not the transport. During steady local playback the
+player's state callback fired about five times a second, and each call
+reported the state to the companion and replaced the session object, which
+re-ran the lease and subtitle effects. The TV therefore sent about 15 companion
+requests a second (state, lease and subtitle). TV shared memory rose from about
+60 MB to 180 MB within a minute; a provider VOD title in the same session kept
+it flat at about 54 MB. The app now reports only state changes
+(`src/app/companion-local-state.ts`). With the fix the same 64-minute file
+played on 2026-10-17 for about 10 minutes from the HLS route. TV swap stayed at
+423–428 MB and shared memory at 52–57 MB, and the TV sent one subtitle poll every
+2 seconds, one lease renewal a minute and state reports only on changes. A full
+film and the progressive route with the fix have not been checked.
+
+After `npm run deploy`, the launched app once reported `document.visibilityState`
+as `hidden` while it was on screen and focused. The webOS player defers `load()`
+while hidden, so a local-play command showed only a black loading screen and no
+media request was made. Closing and relaunching the app (`ares-launch --close`,
+then `ares-launch`) restored `visible`. Check visibility through `ares-inspect`
+before debugging a source that never loads.
+
 Still pending physical-TV checks include provider command resolution, local
 subtitle transfer and seek, VOD seek/resume, audio and subtitle track
 selection, broader container/codec coverage, Magic Remote pointer and D-pad

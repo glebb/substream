@@ -131,6 +131,7 @@ The default LG capabilities are explicit:
 | `directGuideRequests` | `true` | Permits direct public-guide requests from the TV; provider/network availability remains best effort |
 | `supportsCompanion` | `true` | Enables pairing, the app-scoped receiver and TV connection controls; TV storage/USB picking remains unavailable |
 | `supportsLiveRelay` | `false` | No Samsung relay player or relay Settings controls |
+| `companionLocalMediaTransport` | `"hls"` | Requests companion-staged local files as a ticketed VOD HLS playlist; other platforms use `"progressive"` byte ranges |
 
 ### Playback and lifecycle
 

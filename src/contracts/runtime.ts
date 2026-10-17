@@ -12,6 +12,8 @@ export interface RuntimeCapabilities {
   directGuideRequests: boolean;
   supportsCompanion: boolean;
   supportsLiveRelay: boolean;
+  /** How the TV requests companion-staged local files; LG needs segmented HLS. */
+  companionLocalMediaTransport: "progressive" | "hls";
 }
 
 export interface AppRuntime {

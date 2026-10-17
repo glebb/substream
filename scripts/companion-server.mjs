@@ -9,8 +9,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { randomBytes as randomToken } from "node:crypto";
 import { prepareMedia } from "./media-compat.mjs";
-import { prepareLocalTvMedia } from "./local-tv-media.mjs";
-import { COMPANION_PROTOCOL_VERSION, parseCompanionSelection, supportsCompanionProtocolVersion } from "../src/core/companion-protocol.mjs";
+import { LOCAL_HLS_PLAYLIST, LOCAL_HLS_SEGMENT, prepareLocalTvMedia, segmentLocalTvHls } from "./local-tv-media.mjs";
+import { COMPANION_PROTOCOL_VERSION, parseCompanionSelection, parseLocalStartSeconds, supportsCompanionProtocolVersion } from "../src/core/companion-protocol.mjs";
 
 const port = Number(process.env.COMPANION_PORT || 8787);
 const lanEnabled = process.argv.includes("--lan") || process.env.COMPANION_LAN === "1";
@@ -38,6 +38,7 @@ const LOCAL_MEDIA_MAX_BYTES = Number.isSafeInteger(Number(process.env.COMPANION_
   ? Number(process.env.COMPANION_LOCAL_MEDIA_MAX_BYTES) : 100 * 1024 * 1024 * 1024;
 const LOCAL_MEDIA_MAX_SESSIONS = 2;
 const LOCAL_MEDIA_LEASE_MS = 5 * 60 * 1000;
+const LOCAL_START_END_MARGIN_SECONDS = 10;
 const LOCAL_MEDIA_ABANDONED_MS = 30 * 60 * 1000;
 const LOCAL_MEDIA_IDLE_MS = 2 * 60 * 60 * 1000;
 const MAX_ACTIVE_MEDIA_JOBS = 2;
@@ -153,7 +154,7 @@ function allowedPackagedTvRequest(request, url) {
   }
   if (method === "GET" || method === "HEAD") {
     return url.pathname === "/api/pair/events"
-      || /^\/api\/local-media\/[a-f0-9]{32}(?:\/subtitle)?$/.test(url.pathname);
+      || /^\/api\/local-media\/[a-f0-9]{32}(?:\/subtitle|\/hls\/[a-z0-9.]{1,32})?$/.test(url.pathname);
   }
   return false;
 }
@@ -530,6 +531,74 @@ async function deleteLocalMedia(media) {
   for (const path of new Set([media.path, media.playbackPath].filter(Boolean))) {
     try { await unlink(path); } catch { /* File may already be gone. */ }
   }
+  if (media.hls) {
+    media.hls.controller.abort();
+    await media.hls.job.catch(() => {});
+    await rm(media.hls.directory, { recursive: true, force: true }).catch(() => {});
+  }
+  return true;
+}
+
+function localPlaybackMedia(id, ticket) {
+  const media = localMediaSessions.get(id);
+  const pairedTv = media ? sessions.get(media.deviceId) : null;
+  if (!media || media.state !== "ready" || !media.ticket || ticket !== media.ticket.value || Date.now() >= media.ticket.expiresAt || media.ticket.deviceId !== media.deviceId || !pairedTv?.pairingRedeemed) return null;
+  return media;
+}
+
+/** Segments the playback file once per session; later requests share the job. */
+function localHlsJob(media) {
+  if (media.hls) return media.hls.job;
+  const size = media.playbackSize || media.expectedSize;
+  const otherBytes = [...localMediaSessions.values()].filter((item) => item !== media).reduce((sum, item) => sum + (item.reservedBytes || item.expectedSize), 0);
+  const ownBytes = media.reservedBytes || media.expectedSize;
+  const availableBytes = LOCAL_MEDIA_MAX_BYTES - otherBytes - ownBytes;
+  // MPEG-TS adds a few percent of packet overhead to the stream-copied data.
+  const maxBytes = Math.ceil(size * 1.15) + 16 * 1024 * 1024;
+  if (availableBytes < maxBytes) return Promise.reject(new Error("No space is available for a TV playlist."));
+  const controller = new AbortController();
+  const directory = (media.playbackPath || media.path) + ".hls";
+  media.reservedBytes = ownBytes + maxBytes;
+  const job = segmentLocalTvHls(media.playbackPath || media.path, directory, { maxBytes, signal: controller.signal });
+  media.hls = { controller, directory, job };
+  job.then(() => { media.lastLeaseAt = Date.now(); }, () => { if (media.hls?.job === job) media.hls = null; media.reservedBytes = ownBytes; });
+  return job;
+}
+
+async function serveLocalHls(request, response, media, name, ticket) {
+  media.lastLeaseAt = Date.now();
+  try { await localHlsJob(media); }
+  catch { return json(response, 503, { error: "The TV playlist could not be prepared. Check ffmpeg and the video file." }); }
+  if (!media.hls || media.deletePending) return json(response, 404, { error: "Local media is unavailable." });
+  const headers = { "cache-control": "no-store", "access-control-allow-origin": "*" };
+  if (name === LOCAL_HLS_PLAYLIST) {
+    const text = await readFile(join(media.hls.directory, LOCAL_HLS_PLAYLIST), "utf8");
+    // Relative segment URIs would drop the query string; carry the ticket explicitly.
+    const body = Buffer.from(text.split("\n").map((line) => LOCAL_HLS_SEGMENT.test(line.trim()) ? `${line.trim()}?ticket=${ticket}` : line).join("\n"));
+    response.writeHead(200, { ...headers, "content-type": "application/vnd.apple.mpegurl", "content-length": body.byteLength });
+    response.end(request.method === "HEAD" ? undefined : body);
+    return true;
+  }
+  const filename = join(media.hls.directory, name);
+  let info;
+  try { info = await stat(filename); } catch { return json(response, 404, { error: "Local media is unavailable." }); }
+  response.writeHead(200, { ...headers, "content-type": "video/mp2t", "content-length": info.size });
+  if (request.method === "HEAD") { response.end(); return true; }
+  media.activeReaders += 1;
+  let released = false;
+  const stream = createReadStream(filename);
+  const release = () => {
+    if (released) return;
+    released = true;
+    media.activeReaders = Math.max(0, media.activeReaders - 1);
+    media.readerStreams?.delete(stream);
+    if (media.deletePending && media.activeReaders === 0) void deleteLocalMedia(media);
+  };
+  media.readerStreams.add(stream);
+  stream.once("error", () => { release(); response.destroy(); });
+  response.once?.("close", () => { stream.destroy(); release(); });
+  stream.once("close", release);
+  stream.pipe(response);
   return true;
 }
 
@@ -686,6 +755,7 @@ async function localMediaRoute(request, response, url) {
             media.playbackPath = prepared.path;
             media.playbackSize = prepared.size;
             media.mediaType = prepared.mediaType;
+            media.durationSeconds = Number.isFinite(prepared.durationSeconds) && prepared.durationSeconds > 0 ? prepared.durationSeconds : null;
             media.reservedBytes = media.expectedSize + (prepared.path === media.path ? 0 : prepared.size);
           } finally {
             response.removeListener?.("close", onClose);
@@ -710,6 +780,15 @@ async function localMediaRoute(request, response, url) {
     return json(response, 405, { error: "Method not allowed." });
   }
 
+  const hlsPlayback = pathname.match(/^\/api\/local-media\/([a-f0-9]{32})\/hls\/([a-z0-9.]{1,32})$/);
+  if (hlsPlayback && (request.method === "GET" || request.method === "HEAD")) {
+    const name = hlsPlayback[2];
+    if (name !== LOCAL_HLS_PLAYLIST && !LOCAL_HLS_SEGMENT.test(name)) return json(response, 404, { error: "Local media is unavailable." });
+    const ticket = url.searchParams.get("ticket") || "";
+    const media = localPlaybackMedia(hlsPlayback[1], ticket);
+    if (!media) return json(response, 404, { error: "Local playback ticket expired." });
+    return serveLocalHls(request, response, media, name, ticket);
+  }
   const playback = pathname.match(/^\/api\/local-media\/([a-f0-9]{32})$/);
   if (!playback || (request.method !== "GET" && request.method !== "HEAD")) return false;
   const media = localMediaSessions.get(playback[1]);
@@ -942,6 +1021,9 @@ export async function route(request, response, url) {
       const title = typeof metadata.title === "string" ? metadata.title.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 240) : "";
       const searchTitle = typeof metadata.searchTitle === "string" ? metadata.searchTitle.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 240) : "";
       if (!title) return json(response, 400, { error: "Local playback metadata is invalid." });
+      // Never start inside the last seconds of a probed video; an unknown duration keeps the protocol cap.
+      const requestedStart = parseLocalStartSeconds(metadata.startSeconds);
+      const startSeconds = media.durationSeconds ? Math.min(requestedStart, Math.max(0, Math.floor(media.durationSeconds) - LOCAL_START_END_MARGIN_SECONDS)) : requestedStart;
       const ticket = randomBytes(32).toString("hex");
       media.ticket = { value: ticket, deviceId: browser.deviceId, expiresAt: Date.now() + LOCAL_MEDIA_LEASE_MS };
       media.lastLeaseAt = Date.now();
@@ -949,7 +1031,7 @@ export async function route(request, response, url) {
         sessionId: media.id, ticket, title, searchTitle, year: Number.isSafeInteger(metadata.year) ? metadata.year : null,
         season: Number.isSafeInteger(metadata.season) ? metadata.season : null, episode: Number.isSafeInteger(metadata.episode) ? metadata.episode : null,
         contentType: ["movie", "series", "unknown"].includes(metadata.contentType) ? metadata.contentType : "unknown",
-        mediaType: media.mediaType, size: media.playbackSize || media.expectedSize,
+        startSeconds, mediaType: media.mediaType, size: media.playbackSize || media.expectedSize,
       } };
       browser.events.push(event);
       if (browser.events.length > MAX_QUEUED_EVENTS) {

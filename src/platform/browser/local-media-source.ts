@@ -132,3 +132,28 @@ export function classifyLocalFilename(filename: string): { contentType: "series"
   }
   return { contentType: "other", evidence: ["Filename alone does not establish whether this video is a movie or series episode."] };
 }
+
+/** Read the duration from local media metadata; null when this browser cannot open the container. */
+export function probeLocalDuration(url: string, timeoutMs = 10_000): Promise<number | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement("video");
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let done = false;
+    const finish = (duration: number | null) => {
+      if (done) return;
+      done = true;
+      if (timer !== null) clearTimeout(timer);
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      video.removeAttribute("src");
+      video.load();
+      resolve(duration);
+    };
+    video.preload = "metadata";
+    video.muted = true;
+    video.onloadedmetadata = () => finish(Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null);
+    video.onerror = () => finish(null);
+    timer = setTimeout(() => finish(null), timeoutMs);
+    video.src = url;
+  });
+}

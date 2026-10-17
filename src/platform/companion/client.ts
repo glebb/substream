@@ -360,9 +360,11 @@ export async function sendStopLocalCompanionPlayback(server: string, browserCred
   } catch { throw new Error("Could not stop local TV playback."); }
 }
 
-export function companionLocalMediaUrl(server: string, media: Pick<CompanionLocalPlayback, "sessionId" | "ticket">): string {
+export function companionLocalMediaUrl(server: string, media: Pick<CompanionLocalPlayback, "sessionId" | "ticket">, transport: "progressive" | "hls" = "progressive"): string {
   if (!/^[a-f0-9]{32}$/.test(media.sessionId) || !/^[a-f0-9]{64}$/.test(media.ticket)) throw new Error("Local playback ticket was invalid.");
-  return `${server}/api/local-media/${media.sessionId}?ticket=${media.ticket}`;
+  return transport === "hls"
+    ? `${server}/api/local-media/${media.sessionId}/hls/index.m3u8?ticket=${media.ticket}`
+    : `${server}/api/local-media/${media.sessionId}?ticket=${media.ticket}`;
 }
 
 export async function publishLocalMediaSubtitle(server: string, browserCredential: string, sessionId: string, subtitle: Omit<CompanionLocalSubtitle, "version">): Promise<void> {

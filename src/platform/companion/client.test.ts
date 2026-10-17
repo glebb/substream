@@ -5,7 +5,7 @@ vi.mock("../package-defaults.ts", () => ({ packageDefaults: {
   companionServerUrl: "http://192.0.2.44:8787",
 } }));
 
-import { acknowledgeCompanionEvents, companionDeviceIdentity, companionDeviceLabel, companionEvents, companionSelectionTitle, companionServerUrl, connectCompanionService, getCompanionConnection, redeemCompanionCode, resetCompanionDeviceIdentity, resetCompanionPairing, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, sendStopLocalCompanionPlayback, stageLocalMedia, storedCompanionTvCredential, storeCompanionTvCredential } from "./client.ts";
+import { acknowledgeCompanionEvents, companionDeviceIdentity, companionLocalMediaUrl, companionDeviceLabel, companionEvents, companionSelectionTitle, companionServerUrl, connectCompanionService, getCompanionConnection, redeemCompanionCode, resetCompanionDeviceIdentity, resetCompanionPairing, saveCompanionDeviceLabel, saveCompanionServerUrl, sendCompanionPlayback, sendStopLocalCompanionPlayback, stageLocalMedia, storedCompanionTvCredential, storeCompanionTvCredential } from "./client.ts";
 
 describe("companion client", () => {
   const identity = { deviceId: "a".repeat(32), deviceName: "Test TV" };
@@ -305,5 +305,12 @@ describe("companion client", () => {
       expect(captured[0]?.init?.headers).toMatchObject({ authorization: `Bearer ${"b".repeat(64)}` });
       expect(JSON.parse(String(captured[0]?.init?.body))).toEqual({ protocolVersion: 4, sessionId: "d".repeat(32) });
     } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("builds progressive or ticketed HLS local media URLs and rejects malformed tickets", () => {
+    const media = { sessionId: "a".repeat(32), ticket: "b".repeat(64) };
+    expect(companionLocalMediaUrl("http://companion.example.invalid:8787", media)).toBe(`http://companion.example.invalid:8787/api/local-media/${media.sessionId}?ticket=${media.ticket}`);
+    expect(companionLocalMediaUrl("http://companion.example.invalid:8787", media, "hls")).toBe(`http://companion.example.invalid:8787/api/local-media/${media.sessionId}/hls/index.m3u8?ticket=${media.ticket}`);
+    expect(() => companionLocalMediaUrl("http://companion.example.invalid:8787", { ...media, ticket: "../x" }, "hls")).toThrow();
   });
 });

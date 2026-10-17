@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMPANION_PROTOCOL_VERSION, parseCompanionEvent, parseCompanionEventsPayload, parseCompanionSelection, supportsCompanionProtocolVersion } from "./companion-protocol.mjs";
+import { COMPANION_PROTOCOL_VERSION, MAX_LOCAL_START_SECONDS, parseCompanionEvent, parseCompanionEventsPayload, parseCompanionSelection, supportsCompanionProtocolVersion } from "./companion-protocol.mjs";
 
 describe("companion protocol", () => {
   const selection = { kind: "episode", id: 42, seriesId: "7", title: "  Example  ", year: 2024, season: 1, episode: 2, extension: "MKV", sourceFingerprint: "vod_test" };
@@ -42,6 +42,17 @@ describe("companion protocol", () => {
     } });
     expect(play).toMatchObject({ action: "play-local", localMedia: { sessionId: "a".repeat(32), size: 1024 } });
     expect(JSON.stringify(play)).not.toMatch(/streamUrl|unsafe\.invalid|secret/);
+    expect(play).toMatchObject({ localMedia: { startSeconds: 0 } });
+    const localMedia = { sessionId: "a".repeat(32), ticket: "b".repeat(64), title: "Local file", searchTitle: "", contentType: "movie", mediaType: "video/mp4", size: 1 };
+    const startOf = (startSeconds: unknown) => {
+      const event = parseCompanionEvent({ sequence: 8, action: "play-local", localMedia: { ...localMedia, startSeconds } });
+      return event && "localMedia" in event ? event.localMedia.startSeconds : null;
+    };
+    expect(startOf(754.9)).toBe(754);
+    expect(startOf(-5)).toBe(0);
+    expect(startOf("600")).toBe(0);
+    expect(startOf(Number.POSITIVE_INFINITY)).toBe(0);
+    expect(startOf(10 ** 9)).toBe(MAX_LOCAL_START_SECONDS);
     expect(parseCompanionEvent({ sequence: 6, action: "stop-local", sessionId: "c".repeat(32), browserCredential: "secret" }))
       .toEqual({ sequence: 6, action: "stop-local", sessionId: "c".repeat(32) });
     expect(parseCompanionEvent({ sequence: 7, action: "stop-local", sessionId: "invalid" })).toBeNull();

@@ -9,7 +9,14 @@ const ID_PATTERN = /^\d{1,20}$/;
 const EXTENSION_PATTERN = /^[a-z0-9]{1,10}$/i;
 const KINDS = new Set(["movie", "series", "episode"]);
 const ACTIONS = new Set(["play", "select"]);
+/** Upper bound for a requested local-media start position (24 hours). */
+export const MAX_LOCAL_START_SECONDS = 24 * 60 * 60;
 const LOCAL_MEDIA_TYPE = /^(video\/(?:mp4|webm|quicktime|x-matroska|mpeg|mp2t|x-msvideo)|application\/octet-stream)$/;
+
+/** Whole seconds within [0, MAX_LOCAL_START_SECONDS]; anything else starts from the beginning. */
+export function parseLocalStartSeconds(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(Math.min(value, MAX_LOCAL_START_SECONDS)) : 0;
+}
 
 export function supportsCompanionProtocolVersion(value) {
   return value === COMPANION_PROTOCOL_VERSION;
@@ -59,6 +66,7 @@ export function parseCompanionEvent(value) {
       year: Number.isSafeInteger(media.year) ? media.year : null,
       season: Number.isSafeInteger(media.season) && media.season > 0 ? media.season : null,
       episode: Number.isSafeInteger(media.episode) && media.episode > 0 ? media.episode : null,
+      startSeconds: parseLocalStartSeconds(media.startSeconds),
     } };
   }
   if (value.action === "stop-local") {
