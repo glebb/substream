@@ -15,7 +15,7 @@ body { margin: 0; overflow-x: hidden; }
 .header-actions > * + * { margin-left: .65rem; }
 .screen-navigation { flex: 0 0 auto; margin-left: auto; }
 .screen-navigation button { white-space: nowrap; }
-.app-home { background: linear-gradient(rgba(4, 10, 25, .18), rgba(4, 10, 25, .25)), url('../../public/branding/substream-splash.png') center/cover no-repeat; min-height: 100vh; position: relative; }
+.app-home { background: linear-gradient(rgba(4, 10, 25, .18), rgba(4, 10, 25, .25)), url('/branding/substream-splash.jpg') center/cover no-repeat; min-height: 100vh; position: relative; }
 .vod-route { min-height: 100vh; position: relative; }
 .shell-home-button { position: fixed; right: 1rem; top: 1rem; z-index: 19; }
 .home-brand { align-items: center; color: #f8f4ed; display: flex; flex-direction: column; left: 50%; position: absolute; text-align: center; top: 50%; transform: translate(-50%, -50%); }

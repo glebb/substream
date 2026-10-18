@@ -29,7 +29,7 @@ trust_anchor: []
 files:
   - icon.png
   - dist/branding/substream-icon.png
-  - dist/branding/substream-splash.png
+  - dist/branding/substream-splash.jpg
   - dist/assets/index-DhynigBq.js
   - dist/assets/index-CuEYLhs-.css
   - dist/assets/index-legacy-BfvO-CMX.js

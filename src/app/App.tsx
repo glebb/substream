@@ -98,10 +98,24 @@ export function App() {
   const [playlistSetupOpen, setPlaylistSetupOpen] = useState(() => !loadPlaylistUrl());
   useEffect(() => {
     if (route !== "home" || playlistSetupOpen) return;
-    // Let Home paint before parsing the larger VOD bundle on slower TVs.
-    // Module caching also helps Settings and local-file entry points.
-    const timer = window.setTimeout(() => { void loadVodApp().catch(() => undefined); }, 750);
-    return () => window.clearTimeout(timer);
+    // Parsing the VOD bundle blocks the main thread for over a second on
+    // Tizen 3, so wait until the remote has been idle on Home before warming
+    // it. Each key press restarts the wait; module caching then also helps
+    // Settings and local-file entry points.
+    let timer = 0;
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        window.removeEventListener("keydown", schedule, true);
+        void loadVodApp().catch(() => undefined);
+      }, 2_500);
+    };
+    window.addEventListener("keydown", schedule, true);
+    schedule();
+    return () => {
+      window.removeEventListener("keydown", schedule, true);
+      window.clearTimeout(timer);
+    };
   }, [route, playlistSetupOpen]);
   const [playlistDraft, setPlaylistDraft] = useState(loadPlaylistUrl);
   const [playlistError, setPlaylistError] = useState("");
