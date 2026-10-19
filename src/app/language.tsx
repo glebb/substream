@@ -46,8 +46,10 @@ export function translate(value: string, language: UiLanguage): string {
   if (companionReceived) return `${companionReceived[1]} vastaanotettu oheislaitteelta.`;
   const companionSent = value.match(/^(.+) sent to TV playback\.$/);
   if (companionSent) return `${companionSent[1]} lähetetty TV:n toistoon.`;
-  const finnishCategories = value.match(/^(.+) Finnish categories ready$/);
-  if (finnishCategories) return `${finnishCategories[1]} suomalaista kategoriaa valmiina`;
+  const liveCategories = value.match(/^([\d\s,.\u00a0\u202f]+) categories ready$/);
+  if (liveCategories) return `${liveCategories[1]} kategoriaa valmiina`;
+  const liveCountries = value.match(/^([\d\s,.\u00a0\u202f]+) countries ready$/);
+  if (liveCountries) return `${liveCountries[1]} maata valmiina`;
   const finnishAudio = value.match(/^Finnish audio unavailable · (.+)$/);
   if (finnishAudio) return `Suomenkielistä ääntä ei ole saatavilla · ${finnishAudio[1]}`;
   const subtitleOffset = value.match(/^([+-]?\d+(?:\.\d+)?) s \((in sync|later|earlier)\)$/);

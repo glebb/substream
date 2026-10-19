@@ -2,7 +2,7 @@ import { loadLiveGuideSource } from "../application/live-guide-source.ts";
 import { StreamInfoOverlay } from "./StreamInfoOverlay.tsx";
 import { requestPlayerFullscreen, exitBrowserFullscreen, releasePlayerOrientation } from "../platform/browser/fullscreen.ts";
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
+import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectLiveChannels, detectLiveCountry, groupLiveCategoriesByCountry, type EpgProgramme, type LiveCategory, type LiveChannel, type LiveCountryGroup } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { preferredAudioTrackIndex } from "../core/media/audio.ts";
 import type { AudioTrack, MediaPlayer, PlaybackState, VideoDisplayMode } from "../platform/media-player.ts";
@@ -13,7 +13,7 @@ import { DnaGuideClient } from "../platform/dna/client.ts";
 import { createAbortController } from "../platform/abort-controller.ts";
 import { NordicSkyShowtimeEpgClient, nordicGuideSourceUrl, skyShowtimeNordicXmltvId } from "../platform/nordic/skyshowtime-epg.ts";
 import { useCompanion } from "./companion.tsx";
-import { safeGuideCache as readGuideCache, safeDnaGuideCache as readDnaGuideCache, safeCache as readLiveCache, dnaGuideCacheKey, guideIsFresh, EPG_CACHE_TTL_MS, type CachedGuide, type CachedLive, type CachedDnaGuide } from "../application/live-cache.ts";
+import { safeGuideCache as readGuideCache, safeDnaGuideCache as readDnaGuideCache, safeCache as readLiveCache, dnaGuideCacheKey, guideIsFresh, liveCacheKey, EPG_CACHE_TTL_MS, type CachedGuide, type CachedLive, type CachedDnaGuide } from "../application/live-cache.ts";
 import { providerRequestUrl } from "../platform/provider-request.ts";
 import { focusTitleListItem } from "./title-list-focus.ts";
 import { useFixedListRowHeight } from "./fixed-list-sizing.ts";
@@ -25,7 +25,6 @@ import { useRuntime } from "./runtime.tsx";
 import { LivePlaybackController } from "../application/live-playback-controller.ts";
 
 type Props = { onMainMenu(): void };
-const CACHE_PREFIX = "substream.live.v2.";
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 const BROWSER_PLAYBACK_START_TIMEOUT_MS = 8_000;
 // Refresh titles cached before short Base64 programme names were decoded.
@@ -53,7 +52,17 @@ function programmeProgress(programme: EpgProgramme, now: number): number {
 
 
 function categoryLabel(name: string): string {
-  return name.replace(/^finland\s*[-:|]\s*/i, "").trim() || name;
+  return detectLiveCountry(name).displayName || name;
+}
+
+function countryGroupsFor(categories: readonly LiveCategory[], countries: readonly string[]): LiveCountryGroup[] {
+  const selected = new Set(countries);
+  return groupLiveCategoriesByCountry(categories).filter((group) => selected.has(group.country));
+}
+
+function liveListStatus(showingCountries: boolean, countryCount: number, categoryCount: number): string {
+  if (showingCountries) return countryCount ? `${countryCount.toLocaleString()} countries ready` : "No categories were found for the chosen countries.";
+  return categoryCount ? `${categoryCount.toLocaleString()} categories ready` : "No categories were found for the chosen countries.";
 }
 
 type LiveChannelRowProps = {
@@ -120,15 +129,27 @@ export function LiveTv({ onMainMenu }: Props) {
     });
     return new NordicSkyShowtimeEpgClient((url, init) => runtime.transport.fetch(url, init), sourceUrl);
   }, [runtime, companion.enabled, companion.controller.getSnapshot().server]);
-  const cacheKey = client ? CACHE_PREFIX + client.pairingFingerprint() : "";
+  const cacheKey = client ? liveCacheKey(client) : "";
   const cached = useMemo(() => cacheKey ? safeCache(cacheKey) : null, [cacheKey]);
   const [cacheSavedAt, setCacheSavedAt] = useState(cached?.savedAt ?? 0);
-  const [categories, setCategories] = useState<LiveCategory[]>(cached?.categories ?? []);
+  const [allCategories, setAllCategories] = useState<LiveCategory[]>(cached?.categories ?? []);
+  const countryPreference = useMemo(() => settings.loadLiveCountries(), [settings]);
+  const countryGroups = useMemo(() => countryGroupsFor(allCategories, countryPreference), [allCategories, countryPreference]);
+  // A country step is only shown when the user follows several countries.
+  const needsCountryStep = countryGroups.length > 1;
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
+  const activeCountryGroup = needsCountryStep ? countryGroups.find((group) => group.country === selectedCountry) ?? null : countryGroups[0] ?? null;
+  const showingCountries = needsCountryStep && !activeCountryGroup;
+  const categories = useMemo(() => activeCountryGroup?.categories ?? [], [activeCountryGroup]);
+  const [countryFocusIndex, setCountryFocusIndex] = useState(() => {
+    const last = settings.loadLastLiveCountry();
+    return Math.max(0, countryGroupsFor(cached?.categories ?? [], countryPreference).findIndex((group) => group.country === last));
+  });
   const [selectedCategory, setSelectedCategory] = useState<LiveCategory | null>(null);
   const [channels, setChannels] = useState<LiveChannel[]>([]);
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
-  const [status, setStatus] = useState(cached ? "Showing saved categories while checking for updates…" : "Loading Finnish categories…");
+  const [status, setStatus] = useState(cached ? "Showing saved categories while checking for updates…" : "Loading categories…");
   const [focusIndex, setFocusIndex] = useState(0);
   const focusIndexRef = useRef(0);
   const [guideByChannel, setGuideByChannel] = useState<Record<string, CachedGuide>>({});
@@ -168,11 +189,14 @@ export function LiveTv({ onMainMenu }: Props) {
   const playerRef = useRef<MediaPlayer | null>(null);
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const categoryRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const countryRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const listViewportRef = useRef<HTMLDivElement | null>(null);
-  const categoryRowStyle = useFixedListRowHeight(listViewportRef, categories.length, undefined, `${selectedCategory?.id ?? "categories"}:${selected?.id ?? "list"}:${playerFullscreen}`);
+  const countryRowStyle = useFixedListRowHeight(listViewportRef, countryGroups.length, undefined, `countries:${showingCountries}`);
+  const categoryRowStyle = useFixedListRowHeight(listViewportRef, categories.length, undefined, `${activeCountryGroup?.country ?? "countries"}:${selectedCategory?.id ?? "categories"}:${selected?.id ?? "list"}:${playerFullscreen}`);
   const channelRowStyle = useFixedListRowHeight(listViewportRef, channels.length, undefined, `${selectedCategory?.id ?? "no-category"}:${selected?.id ?? "list"}:${playerFullscreen}`);
   const mainMenuRef = useRef<HTMLButtonElement | null>(null);
-  const categoriesButtonRef = useRef<HTMLButtonElement | null>(null);
+  // The Back-to-previous-level header button: Categories on channels, Countries on categories.
+  const previousButtonRef = useRef<HTMLButtonElement | null>(null);
   const emptyRefreshRef = useRef<HTMLButtonElement | null>(null);
   const focusListItem = (element: HTMLButtonElement | null, keyboard = false) => {
     if (isTouchProfile && !keyboard) return;
@@ -184,6 +208,8 @@ export function LiveTv({ onMainMenu }: Props) {
   const requestRef = useRef(0);
   focusIndexRef.current = focusIndex;
   playbackStateRef.current = playbackState;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
 
   function reconcileEmbeddedSubtitles(player: MediaPlayer | null, tracks: import("../platform/media-player.ts").EmbeddedSubtitleTrack[]): void {
     if (!player || playbackStateRef.current !== "playing") return;
@@ -233,7 +259,7 @@ export function LiveTv({ onMainMenu }: Props) {
     }
     if (audioSelectionManualRef.current) {
       setAudioTracks(tracks);
-      if (player.getLiveAudioLanguageStatus && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
+      if (player.getLiveAudioLanguageStatus && selectedRef.current?.country === "finland" && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
         setAudioStatus(`Finnish audio unavailable · ${player.getLiveAudioLanguageStatus()}`);
       }
       return;
@@ -247,7 +273,7 @@ export function LiveTv({ onMainMenu }: Props) {
     if (preferred && !preferred.selected && player.selectAudioTrack?.(preferred.id)) {
       setAudioTracks(tracks.map((track) => ({ ...track, selected: track.id === preferred.id })));
     } else setAudioTracks(tracks);
-    if (player.getLiveAudioLanguageStatus && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
+    if (player.getLiveAudioLanguageStatus && selectedRef.current?.country === "finland" && !tracks.some((track) => /^(fi|fin)$/i.test(track.language ?? ""))) {
       setAudioStatus(`Finnish audio unavailable · ${player.getLiveAudioLanguageStatus()}`);
     }
   }
@@ -278,6 +304,7 @@ export function LiveTv({ onMainMenu }: Props) {
   }, []);
 
   const saveCache = (nextCategories: LiveCategory[], categoryId?: string, nextChannels?: LiveChannel[]) => {
+    // nextCategories is always the full provider list so changing countries needs no refetch.
     if (!cacheKey) return;
     const previous = safeCache(cacheKey);
     const channelsByCategory = { ...(previous?.channelsByCategory ?? {}) };
@@ -292,23 +319,28 @@ export function LiveTv({ onMainMenu }: Props) {
   const refreshCategories = async () => {
     const request = ++requestRef.current;
     if (!client) { setStatus("Live TV requires an Xtream-compatible playlist in Settings."); return; }
-    if (!categories.length) setStatus("Loading Finnish categories…");
+    if (!allCategories.length) setStatus("Loading categories…");
     try {
-      const finnishCategories = selectFinnishLiveCategories(await client.liveCategories());
+      const nextAll = await client.liveCategories();
       if (request !== requestRef.current) return;
-      setCategories(finnishCategories);
-      setCategoryFocusIndex((index) => Math.min(index, Math.max(0, finnishCategories.length - 1)));
-      setStatus(finnishCategories.length ? `${finnishCategories.length.toLocaleString()} Finnish categories ready` : "No Finnish categories were found at the provider.");
-      saveCache(finnishCategories);
+      const nextGroups = countryGroupsFor(nextAll, countryPreference);
+      const nextShowsCountries = nextGroups.length > 1 && !nextGroups.some((group) => group.country === selectedCountry);
+      const nextCategories = nextGroups.length > 1 ? nextGroups.find((group) => group.country === selectedCountry)?.categories ?? [] : nextGroups[0]?.categories ?? [];
+      setAllCategories(nextAll);
+      setCountryFocusIndex((index) => Math.min(index, Math.max(0, nextGroups.length - 1)));
+      setCategoryFocusIndex((index) => Math.min(index, Math.max(0, nextCategories.length - 1)));
+      setStatus(liveListStatus(nextShowsCountries, nextGroups.length, nextCategories.length));
+      saveCache(nextAll);
       window.requestAnimationFrame(() => {
         if (document.activeElement === mainMenuRef.current || document.activeElement === document.body) {
-          if (finnishCategories.length) focusListItem(categoryRefs.current[0] ?? null);
+          if (nextShowsCountries) focusListItem(countryRefs.current[0] ?? null);
+          else if (nextCategories.length) focusListItem(categoryRefs.current[0] ?? null);
           else emptyRefreshRef.current?.focus();
         }
       });
     } catch {
       if (request !== requestRef.current) return;
-      setStatus(categories.length ? "Saved categories are available, but the provider refresh failed." : "Finnish categories could not be loaded. Check the TV network and playlist settings.");
+      setStatus(allCategories.length ? "Saved categories are available, but the provider refresh failed." : "Live TV categories could not be loaded. Check the TV network and playlist settings.");
     }
   };
 
@@ -323,7 +355,7 @@ export function LiveTv({ onMainMenu }: Props) {
     if (!client) return;
     try {
       const streams = await client.liveStreams(category.id);
-      const result = selectFinnishChannels([category], streams, [], client.pairingFingerprint());
+      const result = selectLiveChannels([category], streams, null, client.pairingFingerprint());
       if (request !== requestRef.current) return;
       const focusedRow = rowRefs.current.indexOf(document.activeElement as HTMLButtonElement);
       const focusedChannelId = focusedRow >= 0 ? channelsRef.current[focusedRow]?.id : undefined;
@@ -331,14 +363,15 @@ export function LiveTv({ onMainMenu }: Props) {
       setFocusIndex(nextFocusIndex >= 0 ? nextFocusIndex : 0);
       setChannels(result.channels);
       setStatus(result.channels.length ? `${result.channels.length.toLocaleString()} channels ready` : "No channels were found in this category.");
-      saveCache(categories, category.id, result.channels);
+      saveCache(allCategories, category.id, result.channels);
       if (result.channels.length && !savedChannels.length) window.requestAnimationFrame(() => focusListItem(rowRefs.current[0] ?? null));
-      void dnaClient.channels().then((dnaCatalog) => {
+      // DNA is a Finnish operator guide, so only Finnish channels use it as a fallback.
+      if (result.channels.some((channel) => channel.country === "finland")) void dnaClient.channels().then((dnaCatalog) => {
         if (request !== requestRef.current) return;
-        const enriched = result.channels.map((channel) => attachDnaFallback(channel, matchDnaChannel(channel, dnaCatalog)));
+        const enriched = result.channels.map((channel) => channel.country === "finland" ? attachDnaFallback(channel, matchDnaChannel(channel, dnaCatalog)) : channel);
         if (request !== requestRef.current) return;
         setChannels(enriched);
-        saveCache(categories, category.id, enriched);
+        saveCache(allCategories, category.id, enriched);
       }).catch(() => { /* DNA guide is an optional fallback */ });
     } catch {
       if (request !== requestRef.current) return;
@@ -350,15 +383,31 @@ export function LiveTv({ onMainMenu }: Props) {
     requestRef.current += 1;
     setSelectedCategory(null);
     setChannels([]);
-    setStatus(`${categories.length.toLocaleString()} Finnish categories ready`);
+    setStatus(liveListStatus(false, countryGroups.length, categories.length));
     window.requestAnimationFrame(() => focusListItem(categoryRefs.current[categoryFocusIndex] ?? null));
+  };
+
+  const openCountry = (group: LiveCountryGroup, index: number) => {
+    setCountryFocusIndex(index);
+    setSelectedCountry(group.country);
+    settings.saveLastLiveCountry(group.country);
+    setCategoryFocusIndex(0);
+    setStatus(liveListStatus(false, countryGroups.length, group.categories.length));
+    window.requestAnimationFrame(() => focusListItem(categoryRefs.current[0] ?? null));
+  };
+
+  const leaveCountry = () => {
+    setSelectedCountry(null);
+    setStatus(liveListStatus(true, countryGroups.length, 0));
+    window.requestAnimationFrame(() => focusListItem(countryRefs.current[countryFocusIndex] ?? null));
   };
 
   useEffect(() => {
     if (selected || selectedCategory) return;
     window.requestAnimationFrame(() => {
       if (document.activeElement !== document.body) return;
-      if (categories.length) focusListItem(categoryRefs.current[categoryFocusIndex] ?? null);
+      if (showingCountries) focusListItem(countryRefs.current[countryFocusIndex] ?? null);
+      else if (categories.length) focusListItem(categoryRefs.current[categoryFocusIndex] ?? null);
       else mainMenuRef.current?.focus();
     });
   }, []);
@@ -581,6 +630,11 @@ export function LiveTv({ onMainMenu }: Props) {
     if (selectedCategory || !categories.length) return;
     window.requestAnimationFrame(() => focusListItem(categoryRefs.current[categoryFocusIndex] ?? null));
   }, [categories.length, categoryFocusIndex, selectedCategory]);
+
+  useEffect(() => {
+    if (!showingCountries || !countryGroups.length) return;
+    window.requestAnimationFrame(() => focusListItem(countryRefs.current[countryFocusIndex] ?? null));
+  }, [countryGroups.length, countryFocusIndex, showingCountries]);
 
   useEffect(() => {
     if (!selected || !client) return;
@@ -844,7 +898,7 @@ export function LiveTv({ onMainMenu }: Props) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const key = normalizedRemoteKey(event);
-      if (isBackKey(event)) { event.preventDefault(); selected ? leavePlayer() : selectedCategory ? leaveCategory() : onMainMenu(); return; }
+      if (isBackKey(event)) { event.preventDefault(); selected ? leavePlayer() : selectedCategory ? leaveCategory() : needsCountryStep && !showingCountries ? leaveCountry() : onMainMenu(); return; }
       if (selected) {
         if (key === "Info") { event.preventDefault(); setShowStreamInfo((visible) => !visible); return; }
         if (playerFullscreen && key === "ArrowUp") { event.preventDefault(); changeChannel(-1); }
@@ -863,11 +917,13 @@ export function LiveTv({ onMainMenu }: Props) {
         }
         return;
       }
-      const itemCount = selectedCategory ? channels.length : categories.length;
-      const currentIndex = selectedCategory ? focusIndex : categoryFocusIndex;
-      const refs = selectedCategory ? rowRefs : categoryRefs;
+      const itemCount = selectedCategory ? channels.length : showingCountries ? countryGroups.length : categories.length;
+      const currentIndex = selectedCategory ? focusIndex : showingCountries ? countryFocusIndex : categoryFocusIndex;
+      const refs = selectedCategory ? rowRefs : showingCountries ? countryRefs : categoryRefs;
+      const setCurrentIndex = selectedCategory ? setFocusIndex : showingCountries ? setCountryFocusIndex : setCategoryFocusIndex;
+      const hasPrevious = Boolean(selectedCategory) || (needsCountryStep && !showingCountries);
       const activeElement = document.activeElement;
-      const headerButtons = selectedCategory ? [categoriesButtonRef.current, mainMenuRef.current] : [mainMenuRef.current];
+      const headerButtons = hasPrevious ? [previousButtonRef.current, mainMenuRef.current] : [mainMenuRef.current];
       const activeHeaderIndex = headerButtons.indexOf(activeElement as HTMLButtonElement);
       const isEmptyRefreshFocused = activeElement === emptyRefreshRef.current;
       if (activeHeaderIndex >= 0) {
@@ -875,7 +931,7 @@ export function LiveTv({ onMainMenu }: Props) {
           event.preventDefault();
           if (itemCount > 0) focusListItem(refs.current[currentIndex] ?? null, true);
           else if (emptyRefreshRef.current) emptyRefreshRef.current.focus();
-          else if (selectedCategory) headerButtons[activeHeaderIndex === 0 ? 1 : 0]?.focus();
+          else if (hasPrevious) headerButtons[activeHeaderIndex === 0 ? 1 : 0]?.focus();
           else mainMenuRef.current?.focus();
         } else if (key === "ArrowLeft" || key === "ArrowRight") {
           event.preventDefault();
@@ -885,33 +941,33 @@ export function LiveTv({ onMainMenu }: Props) {
         return;
       }
       if (isEmptyRefreshFocused) {
-        if (key === "ArrowUp") { event.preventDefault(); (selectedCategory ? categoriesButtonRef.current : mainMenuRef.current)?.focus(); }
+        if (key === "ArrowUp") { event.preventDefault(); (hasPrevious ? previousButtonRef.current : mainMenuRef.current)?.focus(); }
         return;
       }
       if (!itemCount && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) {
         event.preventDefault();
-        (emptyRefreshRef.current ?? (selectedCategory ? categoriesButtonRef.current : mainMenuRef.current))?.focus();
+        (emptyRefreshRef.current ?? (hasPrevious ? previousButtonRef.current : mainMenuRef.current))?.focus();
         return;
       }
       if (key === "ArrowUp" || key === "ArrowDown") {
         event.preventDefault();
         if (key === "ArrowUp" && currentIndex === 0) {
-          (selectedCategory ? categoriesButtonRef.current : mainMenuRef.current)?.focus();
+          (hasPrevious ? previousButtonRef.current : mainMenuRef.current)?.focus();
           return;
         }
         const next = Math.max(0, Math.min(itemCount - 1, currentIndex + (key === "ArrowUp" ? -1 : 1)));
-        selectedCategory ? setFocusIndex(next) : setCategoryFocusIndex(next);
+        setCurrentIndex(next);
         focusListItem(refs.current[next] ?? null, true);
         if (runtime.interactionProfile !== "tv") refs.current[next]?.scrollIntoView({ block: "nearest" });
       } else if (key === "ArrowLeft" || key === "ArrowRight") {
         event.preventDefault();
-        if (selectedCategory) (key === "ArrowLeft" ? categoriesButtonRef.current : mainMenuRef.current)?.focus();
+        if (hasPrevious) (key === "ArrowLeft" ? previousButtonRef.current : mainMenuRef.current)?.focus();
         else mainMenuRef.current?.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [categories.length, categoryFocusIndex, channels, focusIndex, onMainMenu, playerFullscreen, selected, selectedCategory, runtime.interactionProfile]);
+  }, [categories.length, categoryFocusIndex, channels, countryFocusIndex, countryGroups, focusIndex, needsCountryStep, onMainMenu, playerFullscreen, selected, selectedCategory, showingCountries, runtime.interactionProfile]);
 
   if (selected) {
     const selectedIndex = channels.findIndex((channel) => channel.id === selected.id);
@@ -946,19 +1002,30 @@ export function LiveTv({ onMainMenu }: Props) {
   </main></Localized>;
   }
 
+  const countryLabel = activeCountryGroup ? translate(activeCountryGroup.label, language) : "";
+  if (showingCountries) return <Localized language={language}><main className={`screen live-screen${isTvProfile ? " tv-ui tv-fixed-list-screen" : ""}`}>
+    <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV</p><h1>Countries</h1></div><ScreenNavigation onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
+    <p className="hint" role="status" aria-live="polite">{status}{cacheSavedAt && Date.now() - cacheSavedAt > STALE_AFTER_MS ? " · Saved list may be out of date." : ""}</p>
+    <div className="live-list fixed-list-viewport" ref={listViewportRef}>
+      {countryGroups.map((group, index) => <button className={`live-row live-category-row fixed-list-item ${!isTouchProfile && index === countryFocusIndex ? "remote-focused" : ""}`} style={countryRowStyle} type="button" key={group.country} ref={(element) => { countryRefs.current[index] = element; }} onFocus={() => setCountryFocusIndex(index)} onClick={() => openCountry(group, index)}>
+        <span className="live-category-mark" aria-hidden="true">●</span><strong>{group.label}</strong><span className="live-category-arrow" aria-hidden="true">›</span>
+      </button>)}
+    </div>
+  </main></Localized>;
+
   if (!selectedCategory) return <Localized language={language}><main className={`screen live-screen${isTvProfile ? " tv-ui tv-fixed-list-screen" : ""}`}>
-    <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV</p><h1>Finland</h1></div><ScreenNavigation onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
+    <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV</p><h1>{countryLabel || "Live TV"}</h1></div><ScreenNavigation {...(needsCountryStep ? { onPrevious: leaveCountry, previousLabel: "Countries", previousRef: previousButtonRef } : {})} onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
     <p className="hint" role="status" aria-live="polite">{status}{cacheSavedAt && Date.now() - cacheSavedAt > STALE_AFTER_MS ? " · Saved list may be out of date." : ""}</p>
     <div className="live-list fixed-list-viewport" ref={listViewportRef}>
       {categories.map((category, index) => <button className={`live-row live-category-row fixed-list-item ${!isTouchProfile && index === categoryFocusIndex ? "remote-focused" : ""}`} style={categoryRowStyle} type="button" key={category.id} ref={(element) => { categoryRefs.current[index] = element; }} onFocus={() => setCategoryFocusIndex(index)} onClick={() => void openCategory(category)}>
         <span className="live-category-mark" aria-hidden="true">●</span><strong>{categoryLabel(category.name)}</strong><span className="live-category-arrow" aria-hidden="true">›</span>
       </button>)}
-      {!categories.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No Finnish categories</h2><p>The provider did not return any matching Finland categories.</p><button type="button" ref={emptyRefreshRef} onClick={() => void refreshCategories()}>Refresh</button></div>}
+      {!categories.length && !status.startsWith("Loading") && <div className="empty-state"><h2>No categories</h2><p>The provider did not return any categories for the countries chosen in Settings.</p><button type="button" ref={emptyRefreshRef} onClick={() => void refreshCategories()}>Refresh</button></div>}
     </div>
   </main></Localized>;
 
   return <Localized language={language}><main className={`screen live-screen${isTvProfile ? " tv-ui tv-fixed-list-screen" : ""}`}>
-    <header className="app-header"><div><p className="eyebrow">SUBSTREAM · LIVE TV · FINLAND</p><h1>{categoryLabel(selectedCategory.name)}</h1></div><ScreenNavigation onPrevious={leaveCategory} previousLabel="Categories" previousRef={categoriesButtonRef} onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
+    <header className="app-header"><div><p className="eyebrow">{`${translate("SUBSTREAM · LIVE TV", language)}${countryLabel ? ` · ${countryLabel.toLocaleUpperCase()}` : ""}`}</p><h1>{categoryLabel(selectedCategory.name)}</h1></div><ScreenNavigation onPrevious={leaveCategory} previousLabel="Categories" previousRef={previousButtonRef} onMainMenu={onMainMenu} mainMenuRef={mainMenuRef} /></header>
     <p className="hint" role="status" aria-live="polite">{status}</p>
     <div className="live-list fixed-list-viewport" ref={listViewportRef}>
       {channels.map((channel, index) => {

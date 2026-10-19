@@ -94,6 +94,7 @@ export type RemoteEditableKeyAction = "enter-edit" | "leave-edit" | "navigate" |
 export type SettingsControlKey =
   | "back"
   | "playlist"
+  | "live-countries-edit"
   | "companion-url"
   | "companion-enabled"
   | "companion-start"
@@ -142,6 +143,7 @@ export function settingsControlOrder(options: SettingsControlOrderOptions): Sett
     ...(options.liveRelayControlsVisible ? ["relay-enabled", "relay-url", "relay-allow-http", "relay-credential", "relay-mappings", "relay-offset", "relay-diagnostics", "relay-save", "relay-remove"] as const : []),
     "ui-language",
     "playlist",
+    "live-countries-edit",
     "subtitle-language",
     ...(options.apiKeyEditorOpen ? ["api-key-input", "api-key-save", "api-key-cancel"] as const : ["api-key-edit"] as const),
     ...(options.hasSubtitleKey ? ["remove-api-key"] as const : []),
@@ -182,6 +184,21 @@ export function gridNavigationTarget(key: string, currentIndex: number, itemCoun
   if (key === "ArrowRight") return currentIndex < rowEnd ? currentIndex + 1 : null;
   if (key === "ArrowUp") return currentIndex >= columnCount ? currentIndex - columnCount : null;
   if (key === "ArrowDown") return currentIndex + columnCount < itemCount ? currentIndex + columnCount : null;
+  return null;
+}
+
+/**
+ * Moves within a wrapping checkbox grid with a header action above it. Up from
+ * the first row reaches the header; Down into a shorter last row lands on its
+ * final item instead of stopping.
+ */
+export function pickerGridNavigationTarget(key: string, currentIndex: number, itemCount: number, columnCount: number): number | "header" | null {
+  const target = gridNavigationTarget(key, currentIndex, itemCount, columnCount);
+  if (target !== null) return target;
+  if (itemCount <= 0 || currentIndex < 0 || currentIndex >= itemCount || columnCount <= 0) return null;
+  if (key === "ArrowUp") return "header";
+  const lastRowStart = Math.floor((itemCount - 1) / columnCount) * columnCount;
+  if (key === "ArrowDown" && currentIndex < lastRowStart) return itemCount - 1;
   return null;
 }
 

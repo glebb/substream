@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PlaylistSizeLimitError, readPlaylistResponse, safeInspectionError, summarizePlaylist } from "./inspect-m3u-lib.ts";
+import { PlaylistSizeLimitError, readPlaylistResponse, safeInspectionError, summarizeLiveCategoryShapes, summarizePlaylist } from "./inspect-m3u-lib.ts";
 
 describe("inspect-m3u safety helpers", () => {
   it("enforces the actual streaming byte limit and cancels an oversized response", async () => {
@@ -36,6 +36,28 @@ describe("inspect-m3u safety helpers", () => {
     expect(printed).not.toContain("private.example");
     expect(printed).not.toContain("signed-secret");
     expect(printed).not.toContain("user:pass");
+  });
+
+  it("summarizes live category prefixes without printing full names or URLs", () => {
+    const secret = "https://user:pass@private.example/live/u/p/1.m3u8?token=signed-secret";
+    const live = (group: string, name: string) => `#EXTINF:-1 group-title="${group}",${name}\n${secret}\n`;
+    const summary = summarizeLiveCategoryShapes("#EXTM3U\n"
+      + live("FI | Sports Private Name", "Channel A")
+      + live("FI | Sports Private Name", "Channel B")
+      + live("SE: Kids", "Channel C")
+      + live("Finland Movies", "Channel D")
+      + live(`${secret} | x`, "Channel E"));
+    const printed = JSON.stringify(summary);
+
+    expect(summary).toMatchObject({ liveCategories: 4, liveEntries: 5, separators: { "|": 1, ":": 1, none: 2 } });
+    expect(summary.leadingTokens).toEqual([
+      { token: "FI", separator: "|", categories: 1, entries: 2 },
+      { token: "SE", separator: ":", categories: 1, entries: 1 },
+    ]);
+    expect(summary.unseparatedFirstWords.map((item) => item.token)).toEqual(["(url-like)", "Finland"]);
+    expect(printed).not.toContain("Private Name");
+    expect(printed).not.toContain("private.example");
+    expect(printed).not.toContain("signed-secret");
   });
 
   it("replaces fetch errors containing signed or redirected URLs with a fixed diagnostic", () => {

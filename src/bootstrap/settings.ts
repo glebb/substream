@@ -10,6 +10,7 @@ import * as opensubtitles from "../platform/browser/opensubtitles-config.ts";
 import * as tmdb from "../platform/browser/tmdb-config.ts";
 import * as companion from "../platform/companion/client.ts";
 import * as relay from "../platform/live-relay/config.ts";
+import * as liveCountries from "../platform/browser/live-country-config.ts";
 import { loadUiLanguage, saveUiLanguage } from "../platform/web/ui-language-config.ts";
 
 /** Binds existing preference policies to the runtime's device-owned persistence. */
@@ -54,5 +55,10 @@ export function createDeviceSettings(preferences: PreferencesRepository) {
     loadLiveRelayConfig: () => relay.loadLiveRelayConfig(storage),
     saveLiveRelayConfig: (config: Parameters<typeof relay.saveLiveRelayConfig>[0]) => relay.saveLiveRelayConfig(config, storage),
     clearLiveRelayConfig: () => relay.clearLiveRelayConfig(storage),
+    loadLiveCountries: () => liveCountries.loadLiveCountries(storage),
+    saveLiveCountries: (countries: readonly string[]) => liveCountries.saveLiveCountries(countries, storage),
+    loadLastLiveCountry: () => liveCountries.loadLastLiveCountry(storage),
+    saveLastLiveCountry: (country: string) => liveCountries.saveLastLiveCountry(country, storage),
+    clearLiveCountries: () => liveCountries.clearLiveCountries(storage),
   };
 }

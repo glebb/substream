@@ -43,6 +43,7 @@ import { CompanionPanel } from "./CompanionPanel.tsx";
 import { createBrowserSearchClient, searchSafeRecords, toVodCatalogItem, type SafeSearchRecord } from "../application/integrations/search-catalog.ts";
 import { CompanionConnectionError, getCompanionConnection, redeemCompanionCode, sendCompanionPlayback, stageLocalMedia, sendLocalCompanionPlayback, sendStopLocalCompanionPlayback, stopLocalMedia, getLocalMediaUploadStatus, getLocalMediaSubtitle, publishLocalMediaSubtitle, companionLocalMediaUrl, renewLocalMediaLease, reportLocalMediaState, isLanCompanionAddress, type BrowserCompanionConnection, type CompanionPlaybackSelection, type CompanionLocalPlayback, type CompanionLocalSubtitle, type LocalMediaUploadStatus } from "../platform/companion/client.ts";
 import { LiveRelaySettings } from "./LiveRelaySettings.tsx";
+import { LiveCountrySettings } from "./LiveCountrySettings.tsx";
 import { type NormalizedLiveRelayConfig } from "../platform/live-relay/config.ts";
 import { createAbortController } from "../platform/abort-controller.ts";
 import { LanguageContext, Localized, translate, type UiLanguage } from "./language.tsx";
@@ -156,7 +157,7 @@ export type VodAppProps = { onMainMenu(): void; onPlaylistSetup(): void; setting
 
 export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, localSource = null, onChooseLocalFile, browserCompanions, setBrowserCompanions, selectedTvDeviceId, setSelectedTvDeviceId }: VodAppProps) {
   const runtime = useRuntime();
-  const { companionDeviceLabel, companionServerUrl, saveCompanionDeviceLabel, saveCompanionServerUrl, clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl, clearSavedOpenSubtitlesSettings, loadOpenSubtitlesApiKey, saveOpenSubtitlesApiKey, clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimingOffset, clearSubtitlePreferences, loadSubtitlePreferences, saveLastSubtitleLanguage, saveSubtitleFontSize, saveSubtitleLanguagePreference, clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared, clearFavouriteGroups, hasSavedFavouriteGroupIds, loadFavouriteGroupIds, saveFavouriteGroupIds, setFavouriteGroup, clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials, clearLiveRelayConfig, loadLiveRelayConfig, saveLiveRelayConfig } = useMemo(() => createDeviceSettings(runtime.preferences), [runtime.preferences]);
+  const { companionDeviceLabel, companionServerUrl, saveCompanionDeviceLabel, saveCompanionServerUrl, clearSavedPlaylistUrl, loadPlaylistUrl, savePlaylistUrl, clearSavedOpenSubtitlesSettings, loadOpenSubtitlesApiKey, saveOpenSubtitlesApiKey, clearSubtitleTimingOffsets, loadSubtitleTimingOffset, saveSubtitleTimingOffset, clearSubtitlePreferences, loadSubtitlePreferences, saveLastSubtitleLanguage, saveSubtitleFontSize, saveSubtitleLanguagePreference, clearCatalogClearedMarker, markCatalogCleared, wasCatalogCleared, clearFavouriteGroups, hasSavedFavouriteGroupIds, loadFavouriteGroupIds, saveFavouriteGroupIds, setFavouriteGroup, clearPlaybackProgress, loadPlaybackHistory, removePlaybackProgress, savePlaybackProgress, clearSavedTmdbCredentials, loadTmdbCredentials, saveTmdbCredentials, clearLiveRelayConfig, loadLiveRelayConfig, saveLiveRelayConfig, clearLiveCountries } = useMemo(() => createDeviceSettings(runtime.preferences), [runtime.preferences]);
   const companion = useCompanion();
   const { language, setLanguage } = useContext(LanguageContext);
   const catalogue = runtime.catalogue;
@@ -3397,6 +3398,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
         runtime.preferences.remove("substream.embedded-subtitle-metadata");
         setSubtitleLanguagePreference("fi");
         clearFavouriteGroups();
+        clearLiveCountries();
         clearCatalogClearedMarker();
         setLanguage("fi");
         setPlaylistUrl("");
@@ -3675,6 +3677,7 @@ export function VodApp({ onMainMenu, onPlaylistSetup, settingsOnOpen = false, lo
             <p className="hint">Your playlist URL is stored locally and remains masked.</p>
             <button className={settingsFocusClass("playlist")} data-settings-focus="playlist" type="button" ref={(element) => registerSettingsControl("playlist", element)} onClick={changePlaylist}>Change playlist URL</button>
           </section>
+          <LiveCountrySettings key={playlistUrl} registerControl={registerSettingsControl} focusClass={settingsFocusClass} />
           {!isTvProfile && <section className="settings-section">
             <h3>TV connection</h3>
             <p className="hint">Pair each TV once, then choose the named target before sending playback. On Vite development, an empty relay address uses the local /api proxy.</p>

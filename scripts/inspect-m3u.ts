@@ -1,4 +1,4 @@
-import { readPlaylistResponse, safeInspectionError, summarizePlaylist } from "./inspect-m3u-lib.ts";
+import { readPlaylistResponse, safeInspectionError, summarizeLiveCategoryShapes, summarizePlaylist } from "./inspect-m3u-lib.ts";
 
 const DEFAULT_MAX_PLAYLIST_MB = 250;
 const requestedMaxMegabytes = Number(process.env.IPTV_M3U_MAX_MB ?? DEFAULT_MAX_PLAYLIST_MB);
@@ -17,7 +17,8 @@ if (!playlistUrl) {
     if (!response.ok) throw new Error("Playlist request failed with HTTP " + response.status);
 
     const source = await readPlaylistResponse(response, MAX_PLAYLIST_BYTES);
-    console.log(JSON.stringify(summarizePlaylist(source), null, 2));
+    const summary = process.argv.includes("--live-categories") ? summarizeLiveCategoryShapes(source) : summarizePlaylist(source);
+    console.log(JSON.stringify(summary, null, 2));
   } catch (error) {
     // Fetch errors often include the full redirected URL, including credentials or signatures.
     console.error(safeInspectionError(error));

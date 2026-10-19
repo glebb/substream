@@ -3,6 +3,7 @@ import type { PreferencesRepository, RuntimeFetch } from "../contracts/repositor
 import { BrowserTizenPlaybackPlayerFactory } from "../platform/player-factory.ts";
 import { PlaybackReleaseBarrier } from "../application/playback-release-barrier.ts";
 import { createIndexedDbCatalogRepositoryFactory } from "../platform/web/catalogue-repository.ts";
+import { removeObsoleteCaches, setPreferenceWithEviction } from "../platform/web/preference-quota.ts";
 import { isTizenAvPlayAvailable } from "../platform/tizen/avplay-player.ts";
 import { isTizenRuntime, registerTizenPlaybackKeys } from "../platform/tizen/remote.ts";
 
@@ -21,7 +22,8 @@ const localPreferences: PreferencesRepository = {
     try { return globalThis.localStorage?.getItem(key) ?? null; } catch { return null; }
   },
   set(key, value) {
-    try { globalThis.localStorage?.setItem(key, value); } catch { /* Storage may be unavailable in private contexts. */ }
+    // A full quota must not silently drop settings, so regenerable caches are cleared first.
+    try { const storage = globalThis.localStorage; if (storage) setPreferenceWithEviction(storage, key, value); } catch { /* Storage may be unavailable in private contexts. */ }
   },
   remove(key) {
     try { globalThis.localStorage?.removeItem(key); } catch { /* Storage may be unavailable in private contexts. */ }
@@ -44,6 +46,7 @@ export function createAppRuntime(overrides: AppRuntimeOverrides = {}): AppRuntim
     ? new WebOsPlaybackPlayerFactory()
     : new BrowserTizenPlaybackPlayerFactory();
   const preferences = overrides.preferences ?? localPreferences;
+  if (!overrides.preferences) { try { if (globalThis.localStorage) removeObsoleteCaches(globalThis.localStorage); } catch { /* Storage may be unavailable. */ } }
   const subtitleCache = new EmbeddedSubtitleMetadataCache({ getItem: (key) => preferences.get(key), setItem: (key, value) => preferences.set(key, value) });
   const defaults: AppRuntime = {
     platform: tizen ? "tizen" : webos ? "webos" : android ? "android" : "browser",

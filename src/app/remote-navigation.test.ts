@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, detailsControlNavigationTarget, enabledPlayerControlTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout } from "./remote-navigation.ts";
+import { actionRowNavigationTarget, browseCollectionFocusIndex, browseCollectionFocusTarget, browseGridColumnCount, dashboardControlNavigationTarget, detailsControlNavigationTarget, enabledPlayerControlTarget, focusFallback, fullscreenControlNavigationTarget, gridNavigationTarget, homeBrowseFocusTarget, isPlayerPlaybackShortcut, nestedScreenSettingsTarget, pickerGridNavigationTarget, playerTextEntryNavigationKey, recentNavigationTarget, remoteEditableKeyAction, resolveAppBackAction, screenNavigationTarget, settingsControlOrder, shouldHandleHeldTitleKeyRepeat, subtitleFocusLayout } from "./remote-navigation.ts";
 
 describe("remote dashboard navigation", () => {
   it("skips disabled size and timing buttons without changing subtitle layout indexes", () => {
@@ -27,20 +27,31 @@ describe("remote dashboard navigation", () => {
 
   it("keeps Settings navigation in DOM order as conditional editors appear", () => {
     expect(settingsControlOrder({ confirmationOpen: false, apiKeyEditorOpen: false, hasSubtitleKey: false })).toEqual([
-      "back", "companion-url", "companion-start", "ui-language", "playlist", "subtitle-language", "api-key-edit",
+      "back", "companion-url", "companion-start", "ui-language", "playlist", "live-countries-edit", "subtitle-language", "api-key-edit",
       "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
     ]);
     expect(settingsControlOrder({ confirmationOpen: false, apiKeyEditorOpen: true, hasSubtitleKey: true })).toEqual([
-      "back", "companion-url", "companion-start", "ui-language", "playlist", "subtitle-language", "api-key-input", "api-key-save", "api-key-cancel", "remove-api-key",
+      "back", "companion-url", "companion-start", "ui-language", "playlist", "live-countries-edit", "subtitle-language", "api-key-input", "api-key-save", "api-key-cancel", "remove-api-key",
       "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
     ]);
     expect(settingsControlOrder({ confirmationOpen: false, apiKeyEditorOpen: false, hasSubtitleKey: false, liveRelayControlsVisible: true })).toEqual([
       "back", "companion-url", "companion-start", "relay-enabled", "relay-url", "relay-allow-http", "relay-credential", "relay-mappings", "relay-offset", "relay-diagnostics", "relay-save", "relay-remove",
-      "ui-language", "playlist", "subtitle-language", "api-key-edit", "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
+      "ui-language", "playlist", "live-countries-edit", "subtitle-language", "api-key-edit", "tmdb-token-input", "tmdb-key-input", "tmdb-save", "tmdb-cancel", "clear-catalog", "reset-all",
     ]);
     expect(settingsControlOrder({ confirmationOpen: true, apiKeyEditorOpen: true, hasSubtitleKey: true })).toEqual([
       "confirm-cancel", "confirm-confirm",
     ]);
+  });
+
+  it("moves through the country picker grid by rows and reaches its header", () => {
+    // 10 items in 4 columns: rows 0-3, 4-7, 8-9.
+    expect(pickerGridNavigationTarget("ArrowDown", 1, 10, 4)).toBe(5);
+    expect(pickerGridNavigationTarget("ArrowRight", 3, 10, 4)).toBeNull();
+    expect(pickerGridNavigationTarget("ArrowUp", 2, 10, 4)).toBe("header");
+    expect(pickerGridNavigationTarget("ArrowDown", 7, 10, 4)).toBe(9);
+    expect(pickerGridNavigationTarget("ArrowDown", 9, 10, 4)).toBeNull();
+    expect(pickerGridNavigationTarget("ArrowUp", 9, 10, 4)).toBe(5);
+    expect(pickerGridNavigationTarget("ArrowDown", 0, 0, 4)).toBeNull();
   });
 
   it("follows selected home tiles while preserving tab-row focus", () => {

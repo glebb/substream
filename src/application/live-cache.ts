@@ -2,6 +2,8 @@ import type { EpgProgramme, LiveCategory, LiveChannel } from "../core/live/index
 import type { PreferencesRepository } from "../contracts/repository.ts";
 
 const DNA_EPG_CACHE_PREFIX = "substream.dna-epg.v1.";
+// v3 stores every provider live category; v2 held only Finland categories.
+const LIVE_CACHE_PREFIX = "substream.live.v3.";
 export const EPG_CACHE_TTL_MS = 12 * 60 * 1000;
 
 export type CachedLive = { savedAt: number; categories: LiveCategory[]; channelsByCategory: Record<string, LiveChannel[]> };
@@ -36,6 +38,11 @@ export function guideIsFresh(guide: CachedGuide, now: number): boolean {
   return now - guide.savedAt < EPG_CACHE_TTL_MS && (!programmeAtFetch || now < programmeAtFetch.endTime);
 }
 
+
+/** Saved Live TV categories and channels for one provider account. */
+export function liveCacheKey(client: { pairingFingerprint(): string }): string {
+  return LIVE_CACHE_PREFIX + client.pairingFingerprint();
+}
 
 export function safeCache(storage: PreferencesRepository, key: string): CachedLive | null {
   try {

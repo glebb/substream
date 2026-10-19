@@ -83,3 +83,66 @@ export function summarizePlaylist(source: string): SafePlaylistSummary {
       })),
   };
 }
+
+export interface LiveCategoryShapeSummary {
+  liveCategories: number;
+  liveEntries: number;
+  separators: Record<string, number>;
+  leadingTokens: Array<{ token: string; separator: string; categories: number; entries: number }>;
+  unseparatedFirstWords: Array<{ token: string; categories: number; entries: number }>;
+}
+
+const CATEGORY_SEPARATOR = /\s*([|:▸»›•/]|\s-\s|\s–\s)\s*/;
+
+/**
+ * Describes how provider live categories are prefixed without printing full category names.
+ * Only short alphanumeric leading tokens are kept, so URLs and long free-form names cannot leak.
+ */
+export function summarizeLiveCategoryShapes(source: string): LiveCategoryShapeSummary {
+  const playlist = parseM3u(source);
+  const entriesByCategory = new Map<string, number>();
+  for (const entry of playlist.entries) {
+    if (classifyM3uEntry(entry).kind !== "live") continue;
+    const category = (entry.attributes["group-title"] ?? "").trim();
+    entriesByCategory.set(category, (entriesByCategory.get(category) ?? 0) + 1);
+  }
+  const separators = new Map<string, number>();
+  const leading = new Map<string, { token: string; separator: string; categories: number; entries: number }>();
+  const unseparated = new Map<string, { token: string; categories: number; entries: number }>();
+  for (const [category, entries] of entriesByCategory) {
+    const urlLike = /:\/\/|\bwww\./i.test(category);
+    const match = urlLike ? null : CATEGORY_SEPARATOR.exec(category);
+    const head = match && match.index > 0 ? category.slice(0, match.index) : "";
+    const token = safeToken(head);
+    if (match && token) {
+      const separator = match[1]!.trim() || "-";
+      separators.set(separator, (separators.get(separator) ?? 0) + 1);
+      const key = token + "\u0000" + separator;
+      const item = leading.get(key) ?? { token, separator, categories: 0, entries: 0 };
+      item.categories += 1;
+      item.entries += entries;
+      leading.set(key, item);
+    } else {
+      separators.set("none", (separators.get("none") ?? 0) + 1);
+      const firstWord = urlLike ? "(url-like)" : safeToken(category.split(/\s+/, 1)[0] ?? "") || "(non-text)";
+      const item = unseparated.get(firstWord) ?? { token: firstWord, categories: 0, entries: 0 };
+      item.categories += 1;
+      item.entries += entries;
+      unseparated.set(firstWord, item);
+    }
+  }
+  const byCategories = <T extends { categories: number; token: string }>(left: T, right: T) =>
+    right.categories - left.categories || left.token.localeCompare(right.token);
+  return {
+    liveCategories: entriesByCategory.size,
+    liveEntries: [...entriesByCategory.values()].reduce((sum, value) => sum + value, 0),
+    separators: Object.fromEntries(separators),
+    leadingTokens: [...leading.values()].sort(byCategories),
+    unseparatedFirstWords: [...unseparated.values()].sort(byCategories),
+  };
+}
+
+function safeToken(value: string): string {
+  const cleaned = value.normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  return cleaned.length > 0 && cleaned.length <= 16 ? cleaned : "";
+}

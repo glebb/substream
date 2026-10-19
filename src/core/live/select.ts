@@ -1,42 +1,33 @@
+import { detectLiveCountry } from "./country.ts";
 import type { LiveCategory, LiveChannel, ProviderLiveStream } from "./types.ts";
 
-const FINLAND_CATEGORY_ALIASES = new Set([
-  "finland", "finnish", "suomi", "suomalaiset", "finlande", "finlandia",
-  "fi finland", "fi suomi", "finland channels", "suomi kanavat",
-]);
+export { normalizeLiveMetadata } from "./country.ts";
 
-export function normalizeLiveMetadata(value: string): string {
-  return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/g, " ").trim();
+/** Keeps provider categories whose detected country is selected, in provider order. */
+export function selectLiveCategoriesForCountries(categories: readonly LiveCategory[], countries: readonly string[]): LiveCategory[] {
+  const selected = new Set(countries);
+  return categories.filter((category) => selected.has(detectLiveCountry(category.name).country));
 }
 
-export function isFinnishLiveCategory(name: string, extraAliases: readonly string[] = []): boolean {
-  const normalized = normalizeLiveMetadata(name);
-  return FINLAND_CATEGORY_ALIASES.has(normalized)
-    || normalized.startsWith("finland ")
-    || extraAliases.some((alias) => normalizeLiveMetadata(alias) === normalized);
-}
-
-export function selectFinnishLiveCategories(categories: readonly LiveCategory[]): LiveCategory[] {
-  return categories.filter((category) => isFinnishLiveCategory(category.name));
-}
-
-export function selectFinnishChannels(
+/**
+ * Builds channels for streams in the given categories. With `countries`, streams
+ * from other countries are kept separately as `unmatched` instead of discarded.
+ */
+export function selectLiveChannels(
   categories: readonly LiveCategory[],
   streams: readonly ProviderLiveStream[],
-  extraAliases: readonly string[] = [],
+  countries: readonly string[] | null = null,
   sourceId = "provider",
 ): { channels: LiveChannel[]; unmatched: LiveChannel[] } {
-  const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
-  const finnishIds = new Set(categories.filter((category) => isFinnishLiveCategory(category.name, extraAliases)).map((category) => category.id));
+  const matches = new Map(categories.map((category) => [category.id, detectLiveCountry(category.name)]));
+  const selected = countries ? new Set(countries) : null;
   const seen = new Set<string>();
   const channels: LiveChannel[] = [];
   const unmatched: LiveChannel[] = [];
   for (const stream of streams) {
     if (seen.has(stream.streamId)) continue;
     seen.add(stream.streamId);
-    const categoryName = categoryNames.get(stream.categoryId) ?? "Unknown category";
-    const country = finnishIds.has(stream.categoryId) ? "finland" as const : "unknown" as const;
+    const match = matches.get(stream.categoryId) ?? detectLiveCountry("");
     const variant = detectVariant(stream.name);
     const channel: LiveChannel = {
       id: `xtream:${sourceId}:live:${stream.streamId}`,
@@ -47,14 +38,10 @@ export function selectFinnishChannels(
       providerOrder: stream.order,
       ...(stream.epgId ? { epgId: stream.epgId } : {}),
       ...(variant ? { variant } : {}),
-      country,
-      evidence: [{
-        kind: country === "finland" ? "category-alias" : "unmatched",
-        value: categoryName,
-        detail: country === "finland" ? "Provider category matched the configured Finland category rule" : "Provider category did not match a configured Finland category rule",
-      }],
+      country: match.country,
+      evidence: [match.evidence],
     };
-    (country === "finland" ? channels : unmatched).push(channel);
+    (!selected || selected.has(match.country) ? channels : unmatched).push(channel);
   }
   channels.sort((left, right) => left.providerOrder - right.providerOrder);
   unmatched.sort((left, right) => left.providerOrder - right.providerOrder);

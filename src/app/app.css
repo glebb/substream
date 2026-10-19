@@ -745,6 +745,17 @@ button:disabled { cursor: default; opacity: .45; }
 }
 .live-relay-settings > textarea:focus { box-shadow: 0 0 0 3px #080a10, 0 0 0 7px #ffd54a; outline: 0; }
 .live-relay-settings > label > input[type="checkbox"] { display: inline-block; margin: 0 8px 0 0; }
+.live-country-dialog { background: #111722; border: 1px solid #273349; border-radius: .85rem; box-sizing: border-box; max-width: 72rem; padding: 1.25rem; width: 94vw; }
+.live-country-dialog-header { display: -webkit-box; display: -webkit-flex; display: flex; -webkit-box-align: start; -webkit-align-items: flex-start; align-items: flex-start; -webkit-box-pack: justify; -webkit-justify-content: space-between; justify-content: space-between; }
+.live-country-dialog-header > div { -webkit-box-flex: 1; -webkit-flex: 1 1 auto; flex: 1 1 auto; margin-right: 16px; min-width: 0; }
+.live-country-dialog-header h3 { margin: 0 0 .35rem; }
+.live-country-dialog-header .hint { margin: 0; }
+.live-country-dialog-header > button { -webkit-flex-shrink: 0; flex-shrink: 0; }
+.live-country-options { display: -webkit-box; display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; margin: 12px -4px 0; }
+.live-country-options > label { border-radius: .45rem; box-sizing: border-box; display: block; margin: 4px; padding: 6px 8px; width: calc(25% - 8px); }
+.live-country-options > label.is-focused { background: #1f2a3d; }
+.live-country-options > label > input[type="checkbox"] { display: inline-block; margin: 0 8px 0 0; }
+@media (max-width: 519px) { .live-country-options > label { width: calc(50% - 8px); } }
 
 @supports (display: grid) {
   .episode-picker-options { display: grid; margin: 1rem 0 0; }

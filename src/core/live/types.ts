@@ -1,5 +1,6 @@
 export type LiveCountryEvidence = {
-  kind: "category-alias" | "unmatched";
+  /** `category-alias` appears in channel caches saved before multi-country detection. */
+  kind: "category-prefix" | "category-name" | "category-alias" | "unmatched";
   value: string;
   detail: string;
 };
@@ -21,7 +22,8 @@ export interface LiveChannel {
   providerOrder: number;
   epgId?: string;
   variant?: string;
-  country: "finland" | "unknown";
+  /** Detected country/region key such as `finland`, or `unknown`. */
+  country: string;
   evidence: LiveCountryEvidence[];
 }
 
