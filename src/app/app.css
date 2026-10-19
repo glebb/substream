@@ -80,6 +80,8 @@ body { margin: 0; overflow-x: hidden; }
 .live-buffer-status { color: #b8c4d7; font-size: .85rem; font-variant-numeric: tabular-nums; }
 @media (max-width: 700px) { .live-list { max-height: 70vh; } .live-row > * + * { margin-left: .65rem; } .live-row { padding: .6rem .7rem; } .live-logo { flex: 0 0 3.4rem; width: 3.4rem; } }
 @media (max-width: 700px) { .home-cards { align-items: center; flex-direction: column; } .home-cards > * + * { margin-left: 0; margin-top: 1.4rem; } .home-card { max-width: 90vw; min-height: 4.5rem; width: 19rem; } .home-playlist-setup { padding: 1.25rem; } }
+/* Phones: keep the brand above the stacked menu instead of behind it. */
+@media (max-width: 700px) { .home-brand { top: 7vh; -webkit-transform: translateX(-50%); transform: translateX(-50%); } .home-brand img { height: 84px; margin-bottom: 12px; width: 84px; } .home-brand strong { font-size: 34px; } .home-content { bottom: 5vh; } .home-cards > * + * { margin-top: .9rem; } .home-card { min-height: 3.6rem; padding: .7rem 1.5rem; } .home-card strong { font-size: 1.25rem; } }
 .screen { min-height: 100vh; width: 100%; max-width: 1600px; margin: 0 auto; padding: 32px 48px; }
 .eyebrow { color: #82b7ff; font-size: 12px; font-weight: 800; letter-spacing: 3px; margin: 0 0 6px; }
 h1 { font-size: 32px; letter-spacing: -0.8px; line-height: 1.05; margin: 6px 0 18px; }
@@ -309,6 +311,9 @@ button:disabled { cursor: default; opacity: .45; }
 .catalog-search-form label { display: block; margin-bottom: .4rem; }
 .catalog-search-controls { display: flex; }
 .catalog-search-controls input { background: #181c28; color: inherit; flex: 1; min-width: 0; }
+/* The input sits inside its label: stack the caption above a full-width field. */
+.catalog-search-controls > label { -webkit-box-flex: 1; -webkit-flex: 1 1 auto; flex: 1 1 auto; min-width: 0; }
+.catalog-search-controls > label > input { box-sizing: border-box; display: block; margin-top: .4rem; width: 100%; }
 .search-results { margin-top: 1rem; }
 .browse-tab { background: transparent; border-radius: .45rem; color: #bac6d8; min-width: 7.5rem; padding: .8rem 1.15rem; transition: background-color .14s ease, color .14s ease, transform .14s ease; }
 .browse-tab.selected { background: var(--panel-selected); color: var(--text); box-shadow: inset 0 -3px var(--blue); }
@@ -399,9 +404,11 @@ button:disabled { cursor: default; opacity: .45; }
   .continue-grid .tile:nth-child(odd), .continue-grid .tile:nth-child(even) { grid-column: span 1; }
   .app-header { align-items: flex-start; }
   .app-header > button { align-self: flex-end; }
-  .browse-tabs { margin-bottom: 1rem; }
-  .catalog-search-controls { align-items: stretch; flex-direction: column; }
-  .browse-tab { min-width: 0; padding-left: .7rem; padding-right: .7rem; }
+  .browse-tabs { -webkit-flex-wrap: wrap; flex-wrap: wrap; margin-bottom: 1rem; overflow-x: visible; }
+  .browse-tabs > .browse-tab { margin-bottom: .4rem; margin-right: .25rem; }
+  .catalog-search-controls { -webkit-box-orient: vertical; -webkit-flex-direction: column; align-items: stretch; flex-direction: column; }
+  .catalog-search-controls > * { margin-right: 0; }
+  .browse-tab { -webkit-flex: 1 1 auto; flex: 1 1 auto; font-size: .85rem; min-width: 0; padding-left: .3rem; padding-right: .3rem; white-space: nowrap; }
   .settings-section, .subtitles { padding: .9rem; }
   .player-controls button { flex: 1 1 auto; }
   .playback-progress { font-size: .82rem; }
@@ -636,6 +643,7 @@ button:disabled { cursor: default; opacity: .45; }
 .details-copy > p { margin-top: 0; margin-bottom: 16px; }
 .details-episode-picker { display: block; line-height: 1.4; margin-top: 20px; }
 .details-episode-picker select { display: block; margin-top: 10px; max-width: 100%; }
+.details-actions + .details-episode-picker { margin: 0 0 1.25rem; }
 .details-copy > .remote-editable-trigger { margin-top: 12px; }
 .details-actions { margin-bottom: 24px; }
 /* Host-only start position for local TV playback; flex and margins for the Chromium 47 baseline. */
@@ -692,11 +700,15 @@ button:disabled { cursor: default; opacity: .45; }
   .details-copy { display: block; }
 }
 @media (max-width: 519px) {
-  .details-poster-column { float: none; margin: 0 16px 16px 0; max-width: 110px; width: 110px; }
-  .details-layout > .details-poster-column > .details-poster { flex-basis: auto; margin: 0; min-height: 0; width: 110px; }
+  /* Title and facts sit beside the poster; longer copy flows underneath. */
+  .details-poster-column { float: left; margin: 0 16px 12px 0; max-width: 110px; width: 110px; }
+  .details-layout > .details-poster-column > .details-poster { flex-basis: auto; float: none; margin: 0; min-height: 0; width: 110px; }
   .tmdb-attribution { font-size: .58rem; margin-top: 8px; }
   .tmdb-attribution img { width: 76px; }
   .details-copy h2 { font-size: 1.8rem; }
+  .details-copy { display: block; }
+  .details-extra-sections { clear: both; }
+  .details-actions > button { -webkit-flex: 1 1 auto; flex: 1 1 auto; }
 }
 .player-controls { padding: 16px; }
 /* Leave room for remote focus rings, including when controls wrap. Keep
@@ -715,7 +727,8 @@ button:disabled { cursor: default; opacity: .45; }
 .player-screen .subtitle-timing-actions { margin-top: 12px; }
 .collection-heading { margin-bottom: 18px; }
 .collection-heading .remote-key-hint { margin-top: 8px; }
-.catalog-search-controls { align-items: stretch; }
+.catalog-search-controls { -webkit-box-align: end; -webkit-align-items: flex-end; align-items: flex-end; }
+@media (max-width: 519px) { .catalog-search-controls { -webkit-box-align: stretch; -webkit-align-items: stretch; align-items: stretch; } .catalog-search-controls > * { margin-right: 0; } }
 .catalog-search-controls input { min-height: 48px; }
 .tv-ui .settings-screen > .settings-section {
   flex-basis: calc(50% - 16px);
@@ -809,6 +822,11 @@ button:disabled { cursor: default; opacity: .45; }
 .touch-skip-buttons button { margin: 0 8px; min-height: 44px; min-width: 80px; }
 .player-screen.is-fullscreen .touch-seek-controls { background: rgba(0, 0, 0, .78); bottom: 12px; left: 5vw; padding: 0 12px 8px; position: fixed; right: 5vw; z-index: 6; }
 .player-screen.is-fullscreen .touch-seek-controls .playback-progress { background: transparent; margin: 0; padding: 0; position: static; }
+/* Phones: screen toggle first, then channel stepping side by side. */
+.player-screen.is-touch .live-controls > * { -webkit-box-ordinal-group: 6; order: 5; }
+.player-screen.is-touch .live-controls .live-control-screen { -webkit-box-ordinal-group: 3; order: 2; }
+.player-screen.is-touch .live-controls .live-control-previous { -webkit-box-ordinal-group: 4; order: 3; }
+.player-screen.is-touch .live-controls .live-control-next { -webkit-box-ordinal-group: 5; order: 4; }
 .player-screen.is-touch.is-fullscreen.has-visible-controls .player-controls { bottom: 120px; max-height: 45vh; overflow-y: auto; }
 .player-screen.is-touch.is-fullscreen.show-tools.has-visible-controls .subtitles { bottom: 12px; display: flex; flex-direction: column; left: 12px; overflow: hidden; padding: 16px; right: 12px; top: 12px; z-index: 9; }
 .player-screen.is-touch.is-fullscreen .subtitle-panel-heading { flex-shrink: 0; }

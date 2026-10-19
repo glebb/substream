@@ -5,7 +5,7 @@ import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, use
 import { attachDnaFallback, fillMissingGuideSlots, matchDnaChannel, selectCurrentAndNextProgramme, selectFinnishChannels, selectFinnishLiveCategories, type EpgProgramme, type LiveCategory, type LiveChannel } from "../core/live/index.ts";
 import { preferredEmbeddedSubtitleTrack } from "../core/subtitles/embedded.ts";
 import { preferredAudioTrackIndex } from "../core/media/audio.ts";
-import type { AudioTrack, LiveBufferWindow, MediaPlayer, PlaybackState, VideoDisplayMode } from "../platform/media-player.ts";
+import type { AudioTrack, MediaPlayer, PlaybackState, VideoDisplayMode } from "../platform/media-player.ts";
 import { resolveLiveRelayChannel } from "../application/live-relay-routing.ts";
 import { isBackKey, normalizedRemoteKey } from "../contracts/input.ts";
 import { XtreamClient } from "../platform/xtream/client.ts";
@@ -142,7 +142,6 @@ export function LiveTv({ onMainMenu }: Props) {
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [playbackState, setPlaybackState] = useState<PlaybackState>("loading");
   const [hasStartedPlayback, setHasStartedPlayback] = useState(false);
-  const [liveBufferWindow, setLiveBufferWindow] = useState<LiveBufferWindow | null>(null);
   const playbackStateRef = useRef<PlaybackState>("loading");
   const [liveSubtitleStatus, setLiveSubtitleStatus] = useState("");
   const [liveSubtitlesEnabled, setLiveSubtitlesEnabled] = useState(true);
@@ -618,7 +617,7 @@ export function LiveTv({ onMainMenu }: Props) {
         if (state === "starting" || state === "ready") setRelayPlaybackLabel("Subtitle relay · Timing test");
         if (state === "recovering") {
           playbackStateRef.current = "loading";
-          setPlaybackState("loading"); setHasStartedPlayback(false); setLiveBufferWindow(null);
+          setPlaybackState("loading"); setHasStartedPlayback(false);
           setEmbeddedSubtitleTracks([]); setAudioTracks([]); setAudioStatus(""); setLiveSubtitleStatus(""); setRelayDiagnostics("");
           setRelayPlaybackLabel("Channel connection lost · Reconnecting…");
         }
@@ -647,7 +646,6 @@ export function LiveTv({ onMainMenu }: Props) {
         }
       },
       onPlayerEvents: (active) => ({
-        onLiveBufferWindowChange: (value) => { if (!cancelled && playerRef.current === active) setLiveBufferWindow(value); },
         onEmbeddedSubtitleTracksChange: (tracks) => {
           if (cancelled || playerRef.current !== active) return;
           setEmbeddedSubtitleTracks(tracks); reconcileEmbeddedSubtitles(active, tracks);
@@ -733,7 +731,7 @@ export function LiveTv({ onMainMenu }: Props) {
     setAudioTracks([]);
     setAudioStatus("");
     showLiveHintBriefly();
-    setLiveBufferWindow(null);
+   
     setPlayerFullscreen(true);
     setShowTouchControls(false);
     if (!isTvProfile && !document.fullscreenElement) void requestPlayerFullscreen(document.documentElement);
@@ -776,7 +774,6 @@ export function LiveTv({ onMainMenu }: Props) {
     const index = Math.max(0, channels.findIndex((channel) => channel.id === selected?.id));
     exitFullscreen();
     setSelected(null); setFocusIndex(index);
-    setLiveBufferWindow(null);
     window.requestAnimationFrame(() => focusListItem(rowRefs.current[index] ?? null));
   };
   const selectNextAudioTrack = () => {
@@ -836,7 +833,7 @@ export function LiveTv({ onMainMenu }: Props) {
     setLiveSubtitleStatus("Reloading stream…");
     setLiveSubtitlesEnabled(true);
     liveSubtitlesEnabledRef.current = true;
-    setLiveBufferWindow(null);
+   
     setAudioTracks([]);
     setAudioStatus("");
     setPlaybackState("loading");
@@ -918,12 +915,8 @@ export function LiveTv({ onMainMenu }: Props) {
 
   if (selected) {
     const selectedIndex = channels.findIndex((channel) => channel.id === selected.id);
-    const bufferBehindSeconds = liveBufferWindow ? Math.max(0, liveBufferWindow.currentSeconds - liveBufferWindow.startSeconds) : 0;
-    const behindLiveSeconds = liveBufferWindow ? Math.max(0, liveBufferWindow.endSeconds - liveBufferWindow.currentSeconds) : 0;
-    const hasLiveBuffer = !!liveBufferWindow && liveBufferWindow.endSeconds - liveBufferWindow.startSeconds >= 2;
-    const atLiveEdge = behindLiveSeconds < 3;
-    return <Localized language={language}><main className={`screen player-screen live-player-screen ${playerFullscreen ? "is-fullscreen" : ""} ${!isTvProfile && showTouchControls ? "has-visible-controls" : ""}`}>
-    <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span>{!isTvProfile && <button type="button" onClick={leavePlayer}>Back to channels</button>}</header>
+    return <Localized language={language}><main className={`screen player-screen live-player-screen ${isTouchProfile ? "is-touch " : ""}${playerFullscreen ? "is-fullscreen" : ""} ${!isTvProfile && showTouchControls ? "has-visible-controls" : ""}`}>
+    <header className="app-header player-heading"><div><p className="eyebrow">LIVE TV</p><h1>{selected.name}</h1></div><span className="live-badge">LIVE</span>{!isTvProfile && <ScreenNavigation onPrevious={leavePlayer} previousLabel="Back to channels" onMainMenu={() => { exitFullscreen(); onMainMenu(); }} />}</header>
     <div className="player-stage" ref={playerStageRef} tabIndex={-1} onClick={() => { if (!isTvProfile && playerFullscreen) setShowTouchControls((visible) => !visible); else if (playerFullscreen) showControls(); }}>
       {runtime.platform === "android" ? <div ref={androidContainerRef} className="player tizen-player" aria-label="Video player" /> : runtime.capabilities.nativeVideoSurface ? <object ref={objectRef} className="player tizen-player" type="application/avplayer" /> : <video ref={videoRef} className="player tizen-player" playsInline />}
       {showStreamInfo && <StreamInfoOverlay playerRef={playerRef} />}
@@ -933,16 +926,14 @@ export function LiveTv({ onMainMenu }: Props) {
       {playerFullscreen && isTvProfile && showLiveHint && playbackState !== "error" && <span className="live-controls-hint">Press OK or Enter for controls</span>}
     </div>
     <div className="player-controls live-controls">
-      <button type="button" disabled={selectedIndex <= 0} onClick={() => changeChannel(-1)} ref={(element) => { playerControlRefs.current[0] = element; }}>Previous channel</button>
-      <button type="button" disabled={selectedIndex >= channels.length - 1} onClick={() => changeChannel(1)} ref={(element) => { playerControlRefs.current[1] = element; }}>Next channel</button>
-      <button type="button" onClick={() => { if (isTouchProfile && playerFullscreen) setShowTouchControls(false); else toggleFullscreen(); }} ref={(element) => { playerControlRefs.current[2] = element; }}>{isTouchProfile && playerFullscreen ? "Hide controls" : playerFullscreen ? "Exit full screen" : "Full screen"}</button>
+      <button type="button" className="live-control-previous" disabled={selectedIndex <= 0} onClick={() => changeChannel(-1)} ref={(element) => { playerControlRefs.current[0] = element; }}>Previous channel</button>
+      <button type="button" className="live-control-next" disabled={selectedIndex >= channels.length - 1} onClick={() => changeChannel(1)} ref={(element) => { playerControlRefs.current[1] = element; }}>Next channel</button>
+      <button type="button" className="live-control-screen" onClick={() => { if (isTouchProfile && playerFullscreen) setShowTouchControls(false); else toggleFullscreen(); }} ref={(element) => { playerControlRefs.current[2] = element; }}>{isTouchProfile && playerFullscreen ? "Hide controls" : playerFullscreen ? "Exit full screen" : "Full screen"}</button>
       {playbackState === "error" && <button type="button" onClick={() => {
         setPlaybackState("loading");
         void runtime.playbackRelease.retryRelease().then(() => setRetryCount((count) => count + 1)).catch(() => { setPlaybackState("error"); setRelayFailureMessage("The previous stream could not be stopped. Wait a minute, then select Retry."); });
       }} ref={(element) => { playerControlRefs.current[3] = element; }}>Retry</button>}
-      {hasLiveBuffer && <button type="button" disabled={bufferBehindSeconds < 1} onClick={() => playerRef.current?.seekLiveBuffer?.(liveBufferWindow!.currentSeconds - 30)} ref={(element) => { playerControlRefs.current[4] = element; }}>Rewind 30 seconds</button>}
-      {hasLiveBuffer && <button type="button" disabled={atLiveEdge} onClick={() => playerRef.current?.goLive?.()} ref={(element) => { playerControlRefs.current[5] = element; }}>Go live</button>}
-      <button type="button" onClick={leavePlayer} ref={(element) => { playerControlRefs.current[6] = element; }}>Back to channels</button>
+      {isTvProfile && <button type="button" onClick={leavePlayer} ref={(element) => { playerControlRefs.current[6] = element; }}>Back to channels</button>}
       <button type="button" onClick={selectNextAudioTrack} ref={(element) => { playerControlRefs.current[7] = element; }}>{audioTracks.length ? `Audio: ${(audioTracks.find((track) => track.selected) ?? audioTracks[0])?.label}` : "Audio: unavailable"}</button>
       <button type="button" aria-pressed={liveSubtitlesEnabled} onClick={toggleLiveSubtitles} ref={(element) => { playerControlRefs.current[8] = element; }}>{`Subtitles: ${liveSubtitlesEnabled ? "On" : "Off"}`}</button>
       {runtime.capabilities.nativeVideoSurface && !playerFullscreen && <button type="button" onClick={toggleLiveSource} ref={(element) => { playerControlRefs.current[9] = element; }}>{liveSource === "hls" ? "Try direct TS source" : "Switch back to HLS"}</button>}
@@ -951,7 +942,6 @@ export function LiveTv({ onMainMenu }: Props) {
       <button type="button" onClick={() => setVideoDisplayMode((current) => ({ auto: "fit", fit: "fill", fill: "auto" } as const)[current])} ref={(element) => { playerControlRefs.current[12] = element; }}>Aspect: {videoDisplayMode === "auto" ? "Auto" : videoDisplayMode === "fit" ? "Fit" : "Fill"}</button>
       {audioStatus && <span className="live-buffer-status" role="status">{audioStatus}</span>}
       <span className="playback-status" role="status" aria-live="polite">{relayPlaybackLabel === "Channel connection lost · Reconnecting…" ? relayPlaybackLabel : <>{relayPlaybackLabel || (liveSource === "hls" ? "HLS" : "Direct TS")}{" · "}{playbackState === "playing" || hasStartedPlayback ? liveSubtitleStatus || "Live" : playbackState === "error" ? "Error" : "Connecting"}{relayDiagnostics ? ` · ${relayDiagnostics}` : ""}</>}</span>
-      {hasLiveBuffer && <span className="live-buffer-status">{atLiveEdge ? "LIVE" : `${Math.ceil(behindLiveSeconds)}s behind live`}</span>}
     </div>
   </main></Localized>;
   }
