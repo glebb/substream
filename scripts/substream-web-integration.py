@@ -81,7 +81,13 @@ class SyntheticGuide(BaseHTTPRequestHandler):
                                     "body_length": self.headers.get("Content-Length", "")})
         body = b"synthetic public guide"
         self.send_response(200)
-        self.send_header("Content-Type", "application/gzip")
+        # Hostile upstream metadata: Nginx must replace it before the body
+        # reaches the player origin.
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Disposition", "inline")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src *")
         self.send_header("Set-Cookie", "upstream=synthetic")
         self.end_headers()
         self.wfile.write(body)
@@ -220,6 +226,7 @@ def run(args: argparse.Namespace) -> None:
             ("server_name substream.example.invalid;", "server_name localhost;"),
             ("root /opt/substream-web/current;", f"root {dist_path};"),
             ("root /var/lib/substream-access-acme;", f"root {acme_path};"),
+            ("/var/cache/substream-public-epg", str(temporary_root / "public-epg-cache")),
             ("http://127.0.0.1:8791/authorize", f"http://{bind_ip}:{auth_port}/authorize"),
             ("http://127.0.0.1:8792", f"http://{bind_ip}:{portal_port}"),
             ("https://substream.example.invalid", f"https://localhost:{https_port}"),
@@ -235,6 +242,7 @@ def run(args: argparse.Namespace) -> None:
                 "listen 443 ssl;": 1,
                 "root /opt/substream-web/current;": 1,
                 "root /var/lib/substream-access-acme;": 1,
+                "/var/cache/substream-public-epg": 1,
                 "http://127.0.0.1:8791/authorize": 1,
                 "/etc/letsencrypt/live/substream.example.invalid/fullchain.pem": 1,
                 "/etc/letsencrypt/live/substream.example.invalid/privkey.pem": 1,
@@ -319,6 +327,9 @@ def run(args: argparse.Namespace) -> None:
                 connection.request(method, path, headers=headers or {})
                 response = connection.getresponse()
                 body = response.read()
+                for name in ("Content-Type", "X-Frame-Options", "X-Content-Type-Options", "Content-Security-Policy"):
+                    if len(response.msg.get_all(name) or []) > 1:
+                        raise AssertionError(f"{path} returned duplicate {name} headers")
                 return (
                     response.status,
                     response.getheader("Content-Type", ""),
@@ -370,6 +381,12 @@ def run(args: argparse.Namespace) -> None:
                          "X-Provider-Key": "synthetic-key", "Referer": "https://private.example.invalid/"})
             if status != 200 or size != len(b"synthetic public guide") or "set-cookie" in headers:
                 raise AssertionError("public guide response failed")
+            if (headers.get("content-type") != "application/gzip"
+                    or headers.get("content-disposition") != "attachment"
+                    or headers.get("content-security-policy") != "sandbox; default-src 'none'"
+                    or headers.get("x-frame-options") != "DENY"
+                    or headers.get("x-content-type-options") != "nosniff"):
+                raise AssertionError("public guide must be served as a sandboxed download")
             upstream = SyntheticGuide.requests[-1]
             if upstream["path"] != "/epgshare01/epg_ripper_SE1.xml.gz":
                 raise AssertionError("public guide destination changed")
@@ -379,8 +396,21 @@ def run(args: argparse.Namespace) -> None:
             check("public guide rejects query", 400, "/public/nordic-epg?url=synthetic", use_https=tls)
             if request("/public/nordic-epg", use_https=tls, method="POST")[0] != 403:
                 raise AssertionError("public guide must reject request bodies")
-        print("Public guide HTTP/HTTPS routes and credential stripping passed.")
+        if len(SyntheticGuide.requests) != 1:
+            raise AssertionError("public guide must share one cached upstream copy across HTTP and HTTPS")
+        # A separate loopback source keeps this burst out of the other checks.
+        limited = [request("/public/nordic-epg", source_ip="127.0.0.3")[0] for _ in range(14)]
+        if limited.count(429) == 0 or any(status not in (200, 429) for status in limited):
+            raise AssertionError(f"public guide must rate-limit each client address, got {limited}")
+        if len(SyntheticGuide.requests) != 1:
+            raise AssertionError("public guide burst must be served from the cache")
+        print("Public guide HTTP/HTTPS routes, credential stripping, sandbox, cache and rate limit passed.")
         check("protected index", 200, f"/{TOKEN}/")
+        player_headers = request(f"/{TOKEN}/")[3]
+        if (player_headers.get("x-frame-options") != "DENY"
+                or player_headers.get("content-security-policy")
+                != "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"):
+            raise AssertionError("player must refuse framing")
         classes = (
             ("JavaScript", "assets/*.js"),
             ("CSS", "assets/*.css"),

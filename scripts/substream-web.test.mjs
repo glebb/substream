@@ -118,6 +118,22 @@ describe("deployment contract", () => {
     expect(configuration).toContain("location = /auth/google/callback");
     expect(configuration).toContain("location = /access/revoke");
     expect(configuration).toContain("location = /branding/substream-icon.png");
+    expect(configuration).toContain(`add_header Content-Security-Policy "frame-ancestors 'none'; object-src 'none'; base-uri 'none'" always;`);
+  });
+
+  it("serves the public guide as a cached, rate-limited, sandboxed download", async () => {
+    const configuration = await fs.readFile(new URL("../deploy/substream-web/nginx.conf", import.meta.url), "utf8");
+    const guideRoutes = configuration.match(/location = \/public\/nordic-epg \{[\s\S]*?\n {4}\}/g) ?? [];
+    expect(guideRoutes).toHaveLength(2);
+    for (const route of guideRoutes) {
+      expect(route).toContain("limit_req zone=substream_public_epg_rate ");
+      expect(route).toContain("proxy_cache substream_public_epg_cache;");
+      expect(route).toContain("proxy_intercept_errors on;");
+      expect(route).toContain("proxy_hide_header Content-Type;");
+      expect(route).toContain("proxy_hide_header X-Frame-Options;");
+      expect(route).toContain(`add_header Content-Security-Policy "sandbox; default-src 'none'" always;`);
+      expect(route).toContain(`add_header Content-Disposition "attachment" always;`);
+    }
   });
 
   it("runs the standalone service as a dedicated loopback-only unit with durable state", async () => {

@@ -52,14 +52,23 @@ companion requests; those connections originate in the browser. The fixed
 `/public/nordic-epg` GET/HEAD endpoint on HTTP and HTTPS serves only the public
 EPGShare Swedish XMLTV feed. It rejects query strings and non-read methods,
 strips caller headers and bodies, verifies upstream TLS, and suppresses upstream
-cookies. It never accepts provider URLs or credentials. Hosted browsers use
+cookies. It never accepts provider URLs or credentials. Because the publisher's
+body shares the player origin, Nginx replaces its content type with
+`application/gzip`, sends it as an attachment with a `sandbox` CSP, and never
+relays upstream error pages. One cached copy (five minutes, under
+`/var/cache/substream-public-epg`, created by Nginx) serves both protocols, and
+each client address is limited to 30 requests per minute with a burst of 10.
+The `limit_req_zone` and `proxy_cache_path` lines at the top of the template
+must stay in the `http{}` context that includes it. Hosted browsers use
 this same-origin endpoint; packaged TVs fetch the publisher directly. Install
 the updated Nginx template as well as the static build when enabling this route.
 
 The Nginx template protects all app files, rejects API-like paths, encoded
 traversal forms and malformed/root asset paths, disables access logging for
 this host, and sends player files with `Cache-Control: no-store` and
-`Referrer-Policy: no-referrer`. Successful public-guide responses instead use
+`Referrer-Policy: no-referrer`, and refuses framing with `X-Frame-Options: DENY`
+and `frame-ancestors 'none'`. That CSP does not restrict scripts or connections:
+provider hosts are user-defined and the legacy loader is inline. Successful public-guide responses instead use
 `Cache-Control: public, max-age=300` with no referrer. HTTPS portal responses use
 `Referrer-Policy: same-origin` so native form posts include their `Origin`
 while cross-origin navigations to Google and the HTTP player receive no
@@ -88,7 +97,9 @@ secure host-only cookies, absence of HSTS/HTTPS-upgrade directives, protected
 static delivery, denial paths, traversal and closed access when the authorizer
 is unavailable. A synthetic public-guide upstream checks HTTP/HTTPS route
 availability, the fixed destination, caller-header stripping, query/method
-rejection and suppression of upstream cookies. It does not read `.env`,
+rejection, suppression of upstream cookies and content types, the sandboxed
+download headers, the shared cache and the per-address rate limit. It also
+checks that the player refuses framing. It does not read `.env`,
 contact the public publisher or a provider, or modify the
 active Nginx service. The harness cleans up temporary files and processes on
 exit. `npm run test:web-deploy` runs it when Linux Nginx, Python and OpenSSL are

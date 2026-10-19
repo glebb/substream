@@ -27,7 +27,9 @@ already downloaded code or stop playback connecting directly to the provider.
 - Public guide: fixed `/public/nordic-epg` GET/HEAD route on HTTP and HTTPS,
   independent of player grants, requesting only the public Swedish XMLTV feed.
   Caller headers and bodies are stripped; query strings and non-read methods
-  are rejected. This route accepts no provider URL or credentials.
+  are rejected. This route accepts no provider URL or credentials. Responses
+  are cached, rate-limited per address and served as a sandboxed `application/gzip`
+  attachment so publisher content cannot run with the player's storage.
 - Private authorizer: loopback `127.0.0.1:8791/authorize`, no public proxy route.
 - State: private SQLite database under `/var/lib/substream-access`.
 - Config: private `/etc/substream-access/config.json`; OAuth credentials are

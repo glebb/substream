@@ -34,7 +34,11 @@ Keep this route separate from token-protected app files and do not turn it
 into a configurable provider proxy. A browser release using this endpoint
 also requires the updated vhost: static release archives do not install Nginx
 configuration. Validate the customized template with `nginx -t` and reload
-Nginx after installing a configuration change.
+Nginx after installing a configuration change. The template declares its own
+`limit_req_zone` and `proxy_cache_path`; include it from `http{}` and make sure
+`/var/cache` exists so Nginx can create the guide cache. After reloading, a
+guide response should show `Content-Type: application/gzip` and
+`Content-Security-Policy: sandbox; default-src 'none'`.
 
 ## Deployment and rollback
 
